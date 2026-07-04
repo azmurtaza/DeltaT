@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+publish/
+artifacts/
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+
+# Test results
+TestResults/
+*.trx
+
+# Runtime data (Kelvin stores real data in %LOCALAPPDATA%\Kelvin, but never commit local dumps)
+*.db
+*.db-shm
+*.db-wal
+sensor-dump.txt
