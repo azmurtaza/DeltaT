@@ -112,6 +112,8 @@ public sealed class RemarksEngine
 
         new Rule("record-high", TimeSpan.FromHours(6), ctx =>
         {
+            // "Hottest ever seen" is meaningless on day one — everything is a record.
+            if (ctx.LearningDay < 2 && !ctx.BaselineReady) return Enumerable.Empty<Remark>();
             if (ctx.Latest is not { } snap || ctx.AllTimeMax is null) return Enumerable.Empty<Remark>();
             var list = new List<Remark>();
             foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete })

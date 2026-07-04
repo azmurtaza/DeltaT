@@ -396,6 +396,25 @@ public sealed class TelemetryRepository
         return list;
     }
 
+    /// <summary>Hottest this component has ever been (minute aggregates cover
+    /// everything except the last, still-open minute).</summary>
+    public double? GetAllTimeMax(ComponentKind kind, string? name = null)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT MAX(m) FROM (
+                SELECT MAX(temp_max) AS m FROM agg_minute WHERE kind=$kind {(name is null ? "" : "AND name=$name")}
+                UNION ALL
+                SELECT MAX(temp_max) AS m FROM agg_hour WHERE kind=$kind {(name is null ? "" : "AND name=$name")}
+            );
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        if (name is not null) cmd.Parameters.AddWithValue("$name", name);
+        object? result = cmd.ExecuteScalar();
+        return result is DBNull or null ? null : Convert.ToDouble(result);
+    }
+
     // ---------------------------------------------------------------- baseline
 
     public void UpsertBaseline(IReadOnlyList<BaselineRow> rows)

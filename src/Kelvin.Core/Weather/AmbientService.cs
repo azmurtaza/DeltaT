@@ -109,28 +109,57 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
             _ = RefreshAsync();
     }
 
+    /// <summary>IP geolocation is flaky terrain (providers rate-limit and block),
+    /// so we walk a chain of free keyless providers until one answers. Coarse
+    /// results are fine — weather barely changes across a city.</summary>
     public async Task<GeoLocation?> TryAutoLocateAsync()
     {
-        try
+        Exception? lastError = null;
+        foreach ((string url, Func<JsonElement, GeoLocation?> parse) in LocationProviders)
         {
-            using JsonDocument doc = JsonDocument.Parse(
-                await _http.GetStringAsync("https://ipapi.co/json/").ConfigureAwait(false));
-            JsonElement root = doc.RootElement;
-            if (!root.TryGetProperty("latitude", out JsonElement lat) || lat.ValueKind != JsonValueKind.Number)
-                return null;
-            return new GeoLocation(
-                lat.GetDouble(),
-                root.GetProperty("longitude").GetDouble(),
-                root.TryGetProperty("city", out JsonElement c) ? c.GetString() ?? "Unknown" : "Unknown",
-                root.TryGetProperty("country_name", out JsonElement n) ? n.GetString() ?? "" : "",
-                "ip");
+            try
+            {
+                using JsonDocument doc = JsonDocument.Parse(await _http.GetStringAsync(url).ConfigureAwait(false));
+                if (parse(doc.RootElement) is { } location)
+                    return location;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
         }
-        catch (Exception ex)
-        {
-            Error?.Invoke("auto-locate failed", ex);
-            return null;
-        }
+        if (lastError is not null)
+            Error?.Invoke("auto-locate failed on all providers", lastError);
+        return null;
     }
+
+    private static readonly (string Url, Func<JsonElement, GeoLocation?> Parse)[] LocationProviders =
+    {
+        ("https://ipwho.is/", ParseIpWhoIs),
+        ("https://ipinfo.io/json", ParseIpInfo),
+    };
+
+    private static GeoLocation? ParseIpWhoIs(JsonElement root)
+    {
+        if (root.TryGetProperty("success", out JsonElement ok) && ok.ValueKind == JsonValueKind.False)
+            return null;
+        if (!root.TryGetProperty("latitude", out JsonElement lat) || lat.ValueKind != JsonValueKind.Number)
+            return null;
+        return new GeoLocation(lat.GetDouble(), root.GetProperty("longitude").GetDouble(),
+            StringProp(root, "city") ?? "Unknown", StringProp(root, "country") ?? "", "ip");
+    }
+
+    private static GeoLocation? ParseIpInfo(JsonElement root)
+    {
+        if (StringProp(root, "loc") is not { } loc || loc.Split(',') is not { Length: 2 } parts
+            || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double lat)
+            || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double lon))
+            return null;
+        return new GeoLocation(lat, lon, StringProp(root, "city") ?? "Unknown", StringProp(root, "country") ?? "", "ip");
+    }
+
+    private static string? StringProp(JsonElement e, string name) =>
+        e.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     public async Task<IReadOnlyList<GeoLocation>> SearchCityAsync(string query, CancellationToken ct = default)
     {

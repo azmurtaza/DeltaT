@@ -24,6 +24,9 @@ public sealed class ScoreCoordinator
     /// <summary>Set when a Compute() pass sees the baseline turn ready for the first time.</summary>
     public bool BaselineJustBecameReady { get; private set; }
 
+    /// <summary>True once any pasted component has a locked baseline.</summary>
+    public bool IsBaselineReady => _wasReady;
+
     public ScoreCoordinator(
         TelemetryRepository repo,
         SettingsStore settings,
