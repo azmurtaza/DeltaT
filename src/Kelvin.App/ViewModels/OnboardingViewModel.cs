@@ -25,6 +25,13 @@ public partial class OnboardingViewModel : ObservableObject
         MachineLine = $"Detected: {machine.Display} — {(machine.IsLaptop ? "laptop" : "desktop")}.";
         if (ambient.Location is { } loc)
             LocationStatus = $"Location: {loc.Display} ✓";
+
+        // Background auto-locate may finish after this VM is built; reflect it when it does.
+        ambient.Updated += _ => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (!Busy && _ambient.Location is { } l)
+                LocationStatus = $"Location: {l.Display} ✓ — outside temperature refreshes every 3 h.";
+        });
     }
 
     [RelayCommand]

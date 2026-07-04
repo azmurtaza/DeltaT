@@ -140,7 +140,7 @@ public sealed class HardwareSensorSource : ISensorSource
         false, null);
 
     private static ComponentReading MapBattery(IHardware hw) => new(
-        ComponentKind.Battery, hw.Name.Trim(),
+        ComponentKind.Battery, CleanName(hw.Name),
         Temp(FirstOfType(hw, SensorType.Temperature)),
         null, null, null,
         Watts(Find(hw, SensorType.Power, "Charge/Discharge Rate")),
@@ -166,6 +166,9 @@ public sealed class HardwareSensorSource : ISensorSource
     }
 
     // ------------------------------------------------------------- helpers
+
+    // Some firmware pads names with NUL bytes (observed: battery "AP21D8M\0").
+    private static string CleanName(string name) => name.Replace("\0", "").Trim();
 
     private static ISensor? Find(IHardware hw, SensorType type, string name) =>
         hw.Sensors.FirstOrDefault(s => s.SensorType == type && s.Name == name);

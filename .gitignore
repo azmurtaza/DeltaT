@@ -3,6 +3,7 @@ bin/
 obj/
 publish/
 artifacts/
+*.binlog
 
 # IDE
 .vs/
