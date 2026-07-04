@@ -24,6 +24,11 @@
                     <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,7,0,5"/>
                     <TextBlock Style="{StaticResource Text.Dim}" Text="{Binding VerdictDetail}"
                                FontSize="12.5" LineHeight="18"/>
+                    <Button Style="{StaticResource Button.Ghost}" HorizontalAlignment="Left" Margin="-10,8,0,0"
+                            Click="OnRunFingerprint" ToolTip="25 s idle + 2.5 min full CPU load — a repeatable thermal measurement">
+                        <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11.5"
+                                   Foreground="{StaticResource Brush.Accent}" Text="▸ run 3-min fingerprint test"/>
+                    </Button>
                 </StackPanel>
 
                 <controls:ScoreDial Grid.Column="1" Width="132" Height="132" Margin="6,0"
@@ -60,7 +65,8 @@
                             <controls:RingGauge Grid.Column="0" Width="116" Height="116"
                                                 VerticalAlignment="Center"
                                                 Value="{Binding Temp}" Maximum="{Binding Limit}"
-                                                HasValue="{Binding HasTemp}"
+                                                HasValue="{Binding HasTemp}" Unit="{Binding Unit}"
+                                                ColorFraction="{Binding RawFraction}"
                                                 SubText="{Binding LoadText}"/>
 
                             <Grid Grid.Column="1" Margin="16,2,0,2">

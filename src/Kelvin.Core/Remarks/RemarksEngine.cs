@@ -49,6 +49,30 @@ public sealed class RemarksEngine
         _rules = BuildRules();
     }
 
+    /// <summary>Cooldowns must survive restarts, or every launch re-fires the
+    /// daily remarks. The host persists this blob and hands it back on startup.</summary>
+    public string ExportCooldownState()
+    {
+        lock (_lastFired)
+            return System.Text.Json.JsonSerializer.Serialize(
+                _lastFired.ToDictionary(kv => kv.Key, kv => kv.Value.ToUnixTimeSeconds()));
+    }
+
+    public void ImportCooldownState(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return;
+        try
+        {
+            var state = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, long>>(json);
+            if (state is null) return;
+            lock (_lastFired)
+                foreach ((string key, long ts) in state)
+                    _lastFired[key] = DateTimeOffset.FromUnixTimeSeconds(ts);
+        }
+        catch { /* corrupted state — start fresh */ }
+    }
+
     public IReadOnlyList<Remark> Evaluate(RemarkContext ctx)
     {
         var fired = new List<Remark>();
@@ -61,9 +85,12 @@ public sealed class RemarksEngine
             foreach (Remark remark in produced)
             {
                 string key = remark.Kind is { } k ? $"{rule.Id}:{k}" : rule.Id;
-                if (_lastFired.TryGetValue(key, out DateTimeOffset last) && ctx.NowUtc - last < rule.Cooldown)
-                    continue;
-                _lastFired[key] = ctx.NowUtc;
+                lock (_lastFired)
+                {
+                    if (_lastFired.TryGetValue(key, out DateTimeOffset last) && ctx.NowUtc - last < rule.Cooldown)
+                        continue;
+                    _lastFired[key] = ctx.NowUtc;
+                }
                 fired.Add(remark);
             }
         }

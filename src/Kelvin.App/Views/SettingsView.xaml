@@ -1,0 +1,179 @@
+<UserControl x:Class="Kelvin.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+            <Setter Property="Margin" Value="2,0,0,10"/>
+        </Style>
+        <Style x:Key="SettingRow" TargetType="Grid">
+            <Setter Property="Margin" Value="0,0,0,14"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="22,14,22,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- ================= left column -->
+                <StackPanel Grid.Column="0" Margin="0,0,8,0">
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="LOCATION &amp; WEATHER"/>
+                            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="{Binding LocationText}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,4,0,10"
+                                       Text="Looked up once, then cached. The outside temperature refreshes every 3 hours."/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Style="{StaticResource Button.Primary}" Content="Auto-detect"
+                                        Command="{Binding AutoDetectCommand}"/>
+                                <TextBox Style="{StaticResource Input}" Width="180" Margin="8,0"
+                                         Text="{Binding CityQuery, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="OnCityKeyDown"
+                                         ToolTip="Type a city, press Enter"/>
+                                <Button Style="{StaticResource Button.Ghost}" Content="Search"
+                                        Command="{Binding SearchCityCommand}"/>
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding CityResults}" Margin="0,8,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource Button.Ghost}" HorizontalAlignment="Left"
+                                                Command="{Binding DataContext.PickCityCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock FontSize="12" Foreground="{StaticResource Brush.Accent}"
+                                                       Text="{Binding Display}"/>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Grid Style="{StaticResource SettingRow}" Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Indoor offset"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="Room warmer/cooler than outside (AC, heating). Display only — scoring self-corrects."/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Slider Style="{StaticResource KSlider}" Width="120" Minimum="-10" Maximum="8"
+                                            TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                            Value="{Binding IndoorOffset}"/>
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="12.5" Width="44"
+                                               Margin="10,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
+                                               Text="{Binding IndoorOffset, StringFormat='{}{0:+0.#;-0.#;0}°'}"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="BEHAVIOR"/>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                           Text="Show temperatures in Fahrenheit"/>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right"
+                                          IsChecked="{Binding Fahrenheit}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                           Text="Close button hides to tray (monitoring continues)"/>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right"
+                                          IsChecked="{Binding CloseToTray}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                           Text="Notify on warnings (throttling, degradation)"/>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right"
+                                          IsChecked="{Binding NotificationsEnabled}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5"
+                                               Text="Start with Windows"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11"
+                                               Text="Task Scheduler, elevated, no UAC prompt at logon"/>
+                                </StackPanel>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          IsChecked="{Binding AutostartEnabled}" IsEnabled="{Binding AutostartAvailable}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}" Margin="0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Sampling interval"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Text="Applies on next launch"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <RadioButton x:Name="Int1" Style="{StaticResource PillMini}" Content="1s" GroupName="ival" Checked="OnInterval1"/>
+                                    <RadioButton x:Name="Int2" Style="{StaticResource PillMini}" Content="2s" GroupName="ival" Checked="OnInterval2" Margin="4,0,0,0"/>
+                                    <RadioButton x:Name="Int3" Style="{StaticResource PillMini}" Content="3s" GroupName="ival" Checked="OnInterval3" Margin="4,0,0,0"/>
+                                    <RadioButton x:Name="Int5" Style="{StaticResource PillMini}" Content="5s" GroupName="ival" Checked="OnInterval5" Margin="4,0,0,0"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- ================= right column -->
+                <StackPanel Grid.Column="1" Margin="8,0,0,0">
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="THIS MACHINE"/>
+                            <TextBlock Style="{StaticResource Text.Body}" FontSize="12" LineHeight="19"
+                                       FontFamily="{StaticResource Font.Mono}" Text="{Binding MachineText}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" Margin="0,10,0,0"
+                                       Text="{Binding ProfileNotes}" TextWrapping="Wrap"/>
+                            <TextBlock Style="{StaticResource Text.Body}" FontSize="12" Margin="0,10,0,0"
+                                       FontFamily="{StaticResource Font.Mono}" Foreground="{StaticResource Brush.Accent}"
+                                       Text="{Binding LimitsText}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="PASTE LIFECYCLE"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,10"
+                                       Text="Just repasted? Tell Kelvin. The baseline resets, and once the new one locks you get a before/after verdict — weather-corrected."/>
+                            <Button Style="{StaticResource Button.Primary}" Content="I repasted this machine"
+                                    HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="DATA"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5"
+                                       FontFamily="{StaticResource Font.Mono}" Text="{Binding DbText}"/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="Export history as CSV"
+                                    HorizontalAlignment="Left" Margin="0,10,0,0"
+                                    Command="{Binding ExportCsvCommand}"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <Border Grid.Row="1" Margin="0,10,0,0" Padding="14,9">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding StatusText}" Value="">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Text="{Binding StatusText}"/>
+        </Border>
+    </Grid>
+</UserControl>

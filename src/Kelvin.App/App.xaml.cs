@@ -7,9 +7,11 @@ using System.Windows.Threading;
 using Kelvin.App.Services;
 using Kelvin.App.ViewModels;
 using Kelvin.App.Views;
+using Kelvin.Core.Diagnostics;
 using Kelvin.Core.Knowledge;
 using Kelvin.Core.Machine;
 using Kelvin.Core.Monitoring;
+using Kelvin.Core.Remarks;
 using Kelvin.Core.Scoring;
 using Kelvin.Core.Storage;
 using Kelvin.Core.Weather;
@@ -132,9 +134,26 @@ public partial class App : Application
         _scores = new ScoreCoordinator(_repo, _settings, profile, () => _monitor.Latest, FormatTemp);
         _remarks = new RemarksCoordinator(_monitor, _ambient, _repo, _scores, _settings);
 
-        _vm = new MainViewModel(machine, profile, _monitor, _ambient, _scores) { Simulated = simulate };
-        _remarks.RemarkRaised += r => _vm.OnRemark(r);
+        var trends = new TrendsViewModel(_repo);
+        var remarksFeed = new RemarksViewModel(_repo);
+        var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
+            () => _monitor.Latest, simulate);
+        var onboarding = new OnboardingViewModel(_settings, _ambient, machine);
+
+        _vm = new MainViewModel(machine, profile, _monitor, _ambient, _scores, _settings,
+            trends, remarksFeed, settingsVm, onboarding) { Simulated = simulate };
         _tray = new TrayManager(_monitor, ShowMainWindow, Quit);
+
+        _remarks.RemarkRaised += r =>
+        {
+            _vm.OnRemark(r);
+            if (r.Severity >= RemarkSeverity.Warning
+                && _settings.GetBool(SettingsKeys.NotificationsEnabled, true)
+                && _window?.IsVisible != true)
+            {
+                _tray.ShowRemarkToast(r);
+            }
+        };
 
         _monitor.Start();
         _ = _ambient.StartAsync();
@@ -209,6 +228,17 @@ public partial class App : Application
             _trayHintShown = true;
             _tray?.ShowFirstTrayHint();
         }
+    }
+
+    public void OpenFingerprintWindow()
+    {
+        if (_monitor is null || _ambient is null || _repo is null)
+            return;
+        var vm = new FingerprintViewModel(
+            new FingerprintTest(_monitor, _ambient),
+            _repo,
+            onBattery: _monitor.Latest is { OnAcPower: false });
+        new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();
     }
 
     public void Quit()

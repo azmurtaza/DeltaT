@@ -36,6 +36,7 @@ public sealed class RemarksCoordinator : IDisposable
         _scores = scores;
         _settings = settings;
         _dispatcher = System.Windows.Application.Current.Dispatcher;
+        _engine.ImportCooldownState(_settings.Get("remarks.cooldowns"));
 
         // Quick first pass (so "hello" lands ~20 s after first launch), then steady 60 s.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
@@ -88,7 +89,8 @@ public sealed class RemarksCoordinator : IDisposable
             CalibrationProgress: scores.Count > 0 ? scores.Values.Max(s => s.CalibrationProgress) : 0,
             LearningDay: Math.Max(1, (int)(now - _scores.EpochStart).TotalDays + 1));
 
-        foreach (Remark remark in _engine.Evaluate(ctx))
+        IReadOnlyList<Remark> fired = _engine.Evaluate(ctx);
+        foreach (Remark remark in fired)
         {
             _repo.InsertEvent(nowTs, "remark", remark.Kind?.ToString(), null, (int)remark.Severity, remark.Text,
                 JsonSerializer.Serialize(new { rule = remark.RuleId }));
@@ -97,6 +99,8 @@ public sealed class RemarksCoordinator : IDisposable
             Remark r = remark;
             _dispatcher.BeginInvoke(() => RemarkRaised?.Invoke(r));
         }
+        if (fired.Count > 0)
+            _settings.Set("remarks.cooldowns", _engine.ExportCooldownState());
     }
 
     private IReadOnlyDictionary<ComponentKind, (double, double, bool)>? BuildShortTrend()

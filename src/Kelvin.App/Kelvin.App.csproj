@@ -17,7 +17,6 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.*" />
-    <PackageReference Include="ScottPlot.WPF" Version="5.*" />
   </ItemGroup>
 
   <ItemGroup>

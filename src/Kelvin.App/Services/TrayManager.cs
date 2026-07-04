@@ -63,6 +63,14 @@ public sealed class TrayManager : IDisposable
             BalloonIcon.Info);
     }
 
+    public void ShowRemarkToast(Kelvin.Core.Remarks.Remark remark)
+    {
+        _tray.ShowBalloonTip(
+            remark.Severity == Kelvin.Core.Remarks.RemarkSeverity.Alert ? "Kelvin — needs attention" : "Kelvin noticed",
+            remark.Text,
+            remark.Severity == Kelvin.Core.Remarks.RemarkSeverity.Alert ? BalloonIcon.Error : BalloonIcon.Warning);
+    }
+
     private void OnSnapshot(SensorSnapshot snap)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

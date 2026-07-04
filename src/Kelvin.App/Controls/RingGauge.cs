@@ -30,6 +30,12 @@ public sealed class RingGauge : FrameworkElement
         nameof(HasValue), typeof(bool), typeof(RingGauge),
         new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    /// <summary>Optional color override, 0..1. Lets the thermal color stay tied to
+    /// the °C ratio even when the displayed unit is °F (whose ratio would skew).</summary>
+    public static readonly DependencyProperty ColorFractionProperty = DependencyProperty.Register(
+        nameof(ColorFraction), typeof(double), typeof(RingGauge),
+        new FrameworkPropertyMetadata(double.NaN, FrameworkPropertyMetadataOptions.AffectsRender));
+
     private static readonly DependencyProperty RenderValueProperty = DependencyProperty.Register(
         nameof(RenderValue), typeof(double), typeof(RingGauge),
         new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -39,6 +45,7 @@ public sealed class RingGauge : FrameworkElement
     public string Unit { get => (string)GetValue(UnitProperty); set => SetValue(UnitProperty, value); }
     public string SubText { get => (string)GetValue(SubTextProperty); set => SetValue(SubTextProperty, value); }
     public bool HasValue { get => (bool)GetValue(HasValueProperty); set => SetValue(HasValueProperty, value); }
+    public double ColorFraction { get => (double)GetValue(ColorFractionProperty); set => SetValue(ColorFractionProperty, value); }
     private double RenderValue => (double)GetValue(RenderValueProperty);
 
     private static readonly FontFamily Mono = new("Cascadia Code, Cascadia Mono, Consolas");
@@ -74,7 +81,8 @@ public sealed class RingGauge : FrameworkElement
 
         if (HasValue && fraction > 0.005)
         {
-            Color color = ThermalPalette.ColorFromFraction(fraction);
+            double colorFraction = double.IsNaN(ColorFraction) ? fraction : Math.Clamp(ColorFraction, 0, 1);
+            Color color = ThermalPalette.ColorFromFraction(colorFraction);
             var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(56, color.R, color.G, color.B)), thickness * 2.1)
             { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
             glowPen.Freeze();

@@ -8,6 +8,7 @@ using Kelvin.Core.Machine;
 using Kelvin.Core.Monitoring;
 using Kelvin.Core.Remarks;
 using Kelvin.Core.Scoring;
+using Kelvin.Core.Storage;
 using Kelvin.Core.Weather;
 
 namespace Kelvin.App.ViewModels;
@@ -22,6 +23,7 @@ public partial class MainViewModel : ObservableObject
     private readonly Dispatcher _dispatcher;
     private readonly AmbientService _ambient;
     private readonly ScoreCoordinator _scores;
+    private readonly SettingsStore _settings;
     private readonly Dictionary<string, ComponentCardViewModel> _cardsById = new();
 
     public string MachineName { get; }
@@ -29,6 +31,12 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<ComponentCardViewModel> Cards { get; } = new();
     public ScoreViewModel CpuScore { get; } = new("CPU");
     public ScoreViewModel GpuScore { get; } = new("GPU");
+
+    public TrendsViewModel Trends { get; }
+    public RemarksViewModel RemarksFeed { get; }
+    public SettingsViewModel Settings { get; }
+    public OnboardingViewModel Onboarding { get; }
+    public bool IsFirstRun { get; }
 
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
     [ObservableProperty] private string _verdictDetail = "Kelvin watches temperature rise over the weather outside and compares this machine against itself. First verdict lands after about a week of normal use.";
@@ -48,13 +56,24 @@ public partial class MainViewModel : ObservableObject
         ThermalProfile profile,
         MonitoringService monitor,
         AmbientService ambient,
-        ScoreCoordinator scores)
+        ScoreCoordinator scores,
+        SettingsStore settings,
+        TrendsViewModel trends,
+        RemarksViewModel remarksFeed,
+        SettingsViewModel settingsVm,
+        OnboardingViewModel onboarding)
     {
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _ambient = ambient;
         _scores = scores;
+        _settings = settings;
         MachineName = machine.Display;
         ProfileName = profile.DisplayName;
+        Trends = trends;
+        RemarksFeed = remarksFeed;
+        Settings = settingsVm;
+        Onboarding = onboarding;
+        IsFirstRun = !settings.GetBool(SettingsKeys.FirstRunDone, false);
 
         monitor.SnapshotCaptured += snap =>
         {
@@ -71,6 +90,9 @@ public partial class MainViewModel : ObservableObject
     private void OnSnapshot(SensorSnapshot snap)
     {
         double? ambient = _ambient.CurrentAmbientC;
+        bool fahrenheit = _settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
+        double roomOffset = _settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
+
         foreach (ComponentKind kind in CardOrder)
         {
             foreach (ComponentReading reading in snap.Components.Where(c => c.Kind == kind))
@@ -81,7 +103,7 @@ public partial class MainViewModel : ObservableObject
                     _cardsById[reading.Id] = card;
                     Cards.Add(card);
                 }
-                card.Update(reading, ambient);
+                card.Update(reading, ambient, roomOffset, fahrenheit);
             }
         }
     }
@@ -94,14 +116,16 @@ public partial class MainViewModel : ObservableObject
             WeatherText = _ambient.Location is null ? "location unknown" : "weather offline";
             WeatherTooltip = _ambient.Location is null
                 ? "Couldn't resolve a location automatically — set one in Settings."
-                : "Weather service unreachable; deltas pause until it's back.";
+                : "Weather service unreachable; using the last known value once it exists.";
             WeatherStale = true;
             return;
         }
-        WeatherText = $"{reading.OutsideC:0.#}°  ·  {reading.Location.City}";
+        bool fahrenheit = _settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
+        double shown = fahrenheit ? reading.OutsideC * 9 / 5 + 32 : reading.OutsideC;
+        WeatherText = $"{shown:0.#}°  ·  {reading.Location.City}";
         WeatherStale = _ambient.IsStale;
-        string age = (DateTimeOffset.UtcNow - reading.FetchedUtc).TotalMinutes is var m and > 90
-            ? $"{m / 60:0.#} h ago" : $"{Math.Max(1, (DateTimeOffset.UtcNow - reading.FetchedUtc).TotalMinutes):0} min ago";
+        double minutes = Math.Max(1, (DateTimeOffset.UtcNow - reading.FetchedUtc).TotalMinutes);
+        string age = minutes > 90 ? $"{minutes / 60:0.#} h ago" : $"{minutes:0} min ago";
         WeatherTooltip = $"Outside temperature in {reading.Location.Display} — fetched {age}. Refreshes every 3 h.";
     }
 
@@ -121,7 +145,7 @@ public partial class MainViewModel : ObservableObject
             double progress = all.Max(s => s.CalibrationProgress);
             int day = Math.Max(1, (int)(DateTimeOffset.UtcNow - _scores.EpochStart).TotalDays + 1);
             VerdictTitle = $"Learning your machine — day {day}";
-            VerdictDetail = $"Baseline {progress * 100:0}% assembled. Use the laptop normally; games and heavy work teach Kelvin fastest. Hard limits are enforced from day one.";
+            VerdictDetail = $"Baseline {progress * 100:0}% assembled. Use the machine normally; games and heavy work teach Kelvin fastest. Hard limits are enforced from day one.";
             return;
         }
 
@@ -150,5 +174,6 @@ public partial class MainViewModel : ObservableObject
             _ => ThermalPalette.TextDim,
         };
         RemarkDot = new SolidColorBrush(c);
+        RemarksFeed.Prepend(remark);
     }
 }

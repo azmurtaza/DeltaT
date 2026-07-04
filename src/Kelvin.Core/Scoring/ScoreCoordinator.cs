@@ -77,9 +77,48 @@ public sealed class ScoreCoordinator
         BaselineJustBecameReady = anyReady && !_wasReady;
         _wasReady = anyReady;
 
+        if (BaselineJustBecameReady && Epoch > 0)
+            ReportRepasteOutcome(nowUtc);
+
         lock (_gate) _latest = results;
         ScoresUpdated?.Invoke(results);
         return results;
+    }
+
+    /// <summary>The payoff moment: the post-repaste baseline just locked, so we
+    /// can tell the user exactly what the fresh paste bought them.</summary>
+    private void ReportRepasteOutcome(DateTimeOffset nowUtc)
+    {
+        IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1);
+        IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch);
+        var gains = new List<string>();
+
+        foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete })
+        {
+            // Compare the heaviest bucket both epochs know, same ambient band.
+            var pair = (
+                from b in before
+                from a in after
+                where b.Kind == kind && a.Kind == kind
+                      && b.Bucket == a.Bucket && b.Band == a.Band
+                      && b.Bucket >= LoadBucket.Medium
+                orderby a.Bucket descending, Math.Min(a.Minutes, b.Minutes) descending
+                select (Before: b, After: a)).FirstOrDefault();
+            if (pair.Before is null || pair.After is null)
+                continue;
+            double gain = pair.Before.DeltaAvg - pair.After.DeltaAvg;
+            gains.Add($"{kind.Label()} {(gain >= 0 ? "−" : "+")}{Math.Abs(gain):0.#}°");
+        }
+
+        if (gains.Count == 0)
+            return;
+        string summary = string.Join(", ", gains);
+        bool improved = gains.Any(g => g.Contains('−'));
+        _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
+            improved
+                ? $"Repaste verdict is in: {summary} under load versus the old paste, weather-corrected. Money well spent."
+                : $"Repaste verdict: {summary} under load versus the old paste. It barely moved — either the old paste was fine, or the mount deserves a second look.",
+            null);
     }
 
     private ComponentScore ScoreComponent(

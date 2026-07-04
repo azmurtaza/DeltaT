@@ -90,21 +90,19 @@
                 <!-- nav rail -->
                 <Border Grid.Column="0" Background="#0D1218" BorderBrush="{StaticResource Brush.StrokeSoft}"
                         BorderThickness="0,0,1,0">
-                    <StackPanel Margin="0,10,0,0">
+                    <StackPanel x:Name="NavPanel" Margin="0,10,0,0">
                         <RadioButton x:Name="NavDashboard" Style="{StaticResource Button.Nav}" Content="&#xE80F;"
-                                     Tag="Dashboard" IsChecked="True" GroupName="nav"/>
+                                     Tag="Dashboard" IsChecked="True" GroupName="nav" Checked="OnNavDashboard"/>
                         <RadioButton x:Name="NavTrends" Style="{StaticResource Button.Nav}" Content="&#xE81C;"
-                                     Tag="Trends" GroupName="nav" IsEnabled="False"/>
+                                     Tag="Trends" GroupName="nav" Checked="OnNavTrends"/>
                         <RadioButton x:Name="NavRemarks" Style="{StaticResource Button.Nav}" Content="&#xE8BD;"
-                                     Tag="Remarks" GroupName="nav" IsEnabled="False"/>
+                                     Tag="Remarks" GroupName="nav" Checked="OnNavRemarks"/>
                         <RadioButton x:Name="NavSettings" Style="{StaticResource Button.Nav}" Content="&#xE713;"
-                                     Tag="Settings" GroupName="nav" IsEnabled="False"/>
+                                     Tag="Settings" GroupName="nav" Checked="OnNavSettings"/>
                     </StackPanel>
                 </Border>
 
-                <ContentControl x:Name="ContentHost" Grid.Column="1">
-                    <views:DashboardView/>
-                </ContentControl>
+                <ContentControl x:Name="ContentHost" Grid.Column="1"/>
             </Grid>
         </Grid>
     </Grid>
