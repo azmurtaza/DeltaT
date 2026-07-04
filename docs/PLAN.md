@@ -1,10 +1,10 @@
-# Kelvin — your machine's thermal conscience
+# DeltaT — your machine's thermal conscience
 
 A lightweight Windows background app that learns your machine's thermal fingerprint, corrects for the weather outside, and tells you — with evidence — when it's time to repaste your CPU/GPU.
 
 ## Context
 
-Thermal paste degrades silently over 1–3 years. Absolute temperatures can't tell you paste health because ambient temperature dominates (a 45°C summer day makes healthy paste look dead; an air-conditioned room hides dying paste). The correct signal is **temperature rise over ambient, at a given load, compared against this specific machine's own healthy baseline**. No mainstream tool does this. Kelvin will.
+Thermal paste degrades silently over 1–3 years. Absolute temperatures can't tell you paste health because ambient temperature dominates (a 45°C summer day makes healthy paste look dead; an air-conditioned room hides dying paste). The correct signal is **temperature rise over ambient, at a given load, compared against this specific machine's own healthy baseline**. No mainstream tool does this. DeltaT will.
 
 Verified environment: **Acer Nitro V 15 (ANV15-51)** — i5-13420H, RTX 3050 6GB Laptop + Intel UHD iGPU, battery present (laptop auto-detected via WMI). Empty project folder, `git` + `winget` available, .NET runtime present but **no SDK** (will install). Windows 11 Home.
 
@@ -23,8 +23,8 @@ Verified environment: **Acer Nitro V 15 (ANV15-51)** — i5-13420H, RTX 3050 6GB
 ## Architecture
 
 ```
-Kelvin.sln
-├─ src/Kelvin.Core/          # no UI deps — fully unit-testable
+DeltaT.sln
+├─ src/DeltaT.Core/          # no UI deps — fully unit-testable
 │   Monitoring/              # LHM wrapper, snapshot loop, load buckets, throttle detection
 │   Storage/                 # SQLite repo, downsampling, retention
 │   Weather/                 # ambient service: locate once, refresh temp every 3h, cache
@@ -32,15 +32,15 @@ Kelvin.sln
 │   Knowledge/               # embedded thermal profile DB (JSON)
 │   Scoring/                 # baseline learning, paste health score, trends
 │   Remarks/                 # rule engine with personality + cooldowns
-├─ src/Kelvin.App/           # WPF: Views, ViewModels, custom Controls, dark theme, tray
-└─ tests/Kelvin.Core.Tests/  # scoring + aggregation unit tests
+├─ src/DeltaT.App/           # WPF: Views, ViewModels, custom Controls, dark theme, tray
+└─ tests/DeltaT.Core.Tests/  # scoring + aggregation unit tests
 ```
 
 **Data flow**: sensor snapshot every 2s → ring buffer (last hour, in memory) → batched to SQLite → aggregator downsamples (raw kept 48h → per-minute kept 90 days → per-hour kept forever) → scoring engine → dashboard/remarks via events.
 
 **Load-bucketed stats** (your "CPU temp under 100% usage" idea, generalized): every sample is tagged idle (<10%), light (10–40%), medium (40–70%), heavy (70–100%) per component. All stats (avg/min/max/delta) are tracked per bucket.
 
-## The brain — how Kelvin decides
+## The brain — how DeltaT decides
 
 1. **Baseline learning (first ~7 days)**: records delta-over-ambient per component per load bucket, heat-soak rate (how fast temp spikes when load hits), fan speeds (if exposed), throttle events. Score shows "calibrating" until confident; absolute-limit warnings work from day 1.
 2. **Ambient correction**: location resolved once (auto by IP, or typed manually) and cached — exactly as you specified, no continuous polling. The outside *temperature* refreshes every 3h (cheap single GET; weather changes even when location doesn't). Offline → last cached value with staleness note. Optional "indoor offset" setting for heavily air-conditioned rooms. Baselines are bucketed by ambient band (<15 / 15–25 / 25–35 / >35°C) so summer-vs-winter comparisons stay fair.
@@ -50,19 +50,19 @@ Kelvin.sln
    - **One honest change from your brief**: no *runtime* web-scraping of per-model benchmarks in v1 — there is no reliable free API for it, and scrapers break constantly. Instead **I do the benchmark research at build time** (published Nitro V 15 review thermals etc.) and bake it into the profile DB. Your fallback chain still works exactly as described; it just runs offline and never breaks. A hook stays in place for a future online profile DB.
 4. **Paste Health Score, 0–100, per component** — CPU and GPU get paste scores; SSD/battery/board get thermal-health readouts only (no paste in them). Score inputs: current vs baseline delta (same ambient band + load bucket), throttle-event frequency, heat-soak rate change, fan-speed creep, distance to TjMax, multi-week trend slope. Every score **explains itself**: "+6°C over baseline at heavy load in similar weather, 3 throttle events this week."
    - **85–100 Fresh** · **70–84 Good** · **50–69 Aging — watch it** · **30–49 Degraded — plan a repaste** · **<30 Repaste now**
-5. **Dust-vs-paste insight**: degraded paste shows fast heat-soak + throttle spikes; dust/blocked airflow shows high steady-state + elevated fans at normal soak rate. Kelvin says which pattern it sees, so you don't repaste when you just need compressed air.
-6. **Repaste log**: tell Kelvin you repasted → baseline resets → after a few days it shows your before/after gains ("−8°C at heavy load. Money well spent.").
-7. **Thermal fingerprint test (on-demand)**: guided ~5-minute check — built-in CPU load generator (with big stop button + duration cap), guided GPU load (run any game/benchmark; Kelvin detects it) — producing a repeatable score you can rerun monthly instead of waiting on passive data.
+5. **Dust-vs-paste insight**: degraded paste shows fast heat-soak + throttle spikes; dust/blocked airflow shows high steady-state + elevated fans at normal soak rate. DeltaT says which pattern it sees, so you don't repaste when you just need compressed air.
+6. **Repaste log**: tell DeltaT you repasted → baseline resets → after a few days it shows your before/after gains ("−8°C at heavy load. Money well spent.").
+7. **Thermal fingerprint test (on-demand)**: guided ~5-minute check — built-in CPU load generator (with big stop button + duration cap), guided GPU load (run any game/benchmark; DeltaT detects it) — producing a repeatable score you can rerun monthly instead of waiting on passive data.
 
 ## UI/UX
 
-**Design language**: dark engineering-console aesthetic — near-black blue-grey, one thermal gradient used semantically everywhere (cyan = cool → amber → red = hot), Cascadia Code for numerals (ships with Win11), custom ring gauges and score dials with subtle glow, smooth 60fps micro-animations, zero stock-framework styling. Remarks written in Kelvin's voice — dry, precise, occasionally funny — every temp range has bespoke copy. The details that make it feel hand-built: per-component iconography, °C/°F toggle, weather chip showing your city + outside temp, "calibrating" progress ring during learning week.
+**Design language**: dark engineering-console aesthetic — near-black blue-grey, one thermal gradient used semantically everywhere (cyan = cool → amber → red = hot), Cascadia Code for numerals (ships with Win11), custom ring gauges and score dials with subtle glow, smooth 60fps micro-animations, zero stock-framework styling. Remarks written in DeltaT's voice — dry, precise, occasionally funny — every temp range has bespoke copy. The details that make it feel hand-built: per-component iconography, °C/°F toggle, weather chip showing your city + outside temp, "calibrating" progress ring during learning week.
 
 **Screens**:
 1. **Dashboard** — hero paste-health verdict, live per-component cards (current temp + load + 10-min sparkline + mini score), ambient/weather chip, live remarks ticker.
 2. **Component detail** — real-time dual-axis chart (temp + load), avg/min/max by timeframe, delta-over-ambient, score breakdown ("why this number").
 3. **Trends** — 24h / 7d / 30d / all, ambient overlay, month-vs-month comparison, throttle-event markers, repaste markers.
-4. **Remarks feed** — timeline of everything Kelvin noticed.
+4. **Remarks feed** — timeline of everything DeltaT noticed.
 5. **Settings** — location, units, sampling interval, autostart, notifications, indoor offset, data retention, machine info panel, CSV export.
 6. **First-run onboarding** — detects your machine, asks location once, explains the learning week.
 
@@ -89,7 +89,7 @@ Kelvin.sln
 ## Verification
 
 - **Unit tests**: scoring engine against synthetic scenarios (e.g. +8°C delta at heavy load in same ambient band must drop score below 50; hot-summer-day scenario must *not*).
-- **Sensor truth**: cross-check Kelvin's GPU temp vs `nvidia-smi`, CPU behavior under a real load spike.
+- **Sensor truth**: cross-check DeltaT's GPU temp vs `nvidia-smi`, CPU behavior under a real load spike.
 - **Perf budget**: measure working set + CPU% over 10 minutes minimized.
 - **Ambient**: fetched temp vs actual weather for your city; offline mode by disabling Wi-Fi.
 - **Demo mode**: simulated sensor source flag to preview degraded/healthy states in the UI without waiting a week.

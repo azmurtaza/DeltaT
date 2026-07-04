@@ -1,0 +1,82 @@
+<UserControl x:Class="DeltaT.App.Views.TrendsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DeltaT.App.Controls">
+
+    <Grid Margin="28,16,28,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- selector row -->
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal">
+                <RadioButton Style="{StaticResource Seg}" Content="CPU" GroupName="kind" IsChecked="True" Checked="OnKind0"/>
+                <RadioButton Style="{StaticResource Seg}" Content="GPU" GroupName="kind" Checked="OnKind1"/>
+                <RadioButton Style="{StaticResource Seg}" Content="SSD" GroupName="kind" Checked="OnKind2"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <RadioButton Style="{StaticResource Seg}" Content="24H" GroupName="range" IsChecked="True"
+                             Command="{Binding SetRangeCommand}" CommandParameter="24h"/>
+                <RadioButton Style="{StaticResource Seg}" Content="7D" GroupName="range"
+                             Command="{Binding SetRangeCommand}" CommandParameter="7d"/>
+                <RadioButton Style="{StaticResource Seg}" Content="30D" GroupName="range"
+                             Command="{Binding SetRangeCommand}" CommandParameter="30d"/>
+                <RadioButton Style="{StaticResource Seg}" Content="ALL" GroupName="range"
+                             Command="{Binding SetRangeCommand}" CommandParameter="all"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- chart -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14,12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" Margin="4,0,0,8">
+                    <Rectangle Width="14" Height="2" Fill="{StaticResource Brush.Accent}" VerticalAlignment="Center"/>
+                    <TextBlock Style="{StaticResource Text.Caption}" Text="COMPONENT" Margin="6,0,16,0"/>
+                    <Rectangle Width="14" Height="2" VerticalAlignment="Center">
+                        <Rectangle.Fill>
+                            <DrawingBrush TileMode="Tile" Viewport="0,0,6,2" ViewportUnits="Absolute">
+                                <DrawingBrush.Drawing>
+                                    <GeometryDrawing Brush="#6A6152" Geometry="M0,0 H3 V2 H0Z"/>
+                                </DrawingBrush.Drawing>
+                            </DrawingBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                    <TextBlock Style="{StaticResource Text.Caption}" Text="OUTSIDE" Margin="6,0,16,0"/>
+                    <TextBlock Style="{StaticResource Text.Caption}" Text="R REPASTE · F FINGERPRINT · T THROTTLE"/>
+                </StackPanel>
+                <controls:TimeSeriesChart Grid.Row="1"
+                                          Points="{Binding Points}"
+                                          AmbientPoints="{Binding AmbientPoints}"
+                                          Markers="{Binding Markers}"/>
+            </Grid>
+        </Border>
+
+        <!-- stats rail -->
+        <ItemsControl Grid.Row="2" ItemsSource="{Binding Stats}" Margin="0,14,0,0">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <UniformGrid Rows="1"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
+                            Padding="14,2,0,2">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Label}"/>
+                            <TextBlock Style="{StaticResource Text.Numeral}" FontSize="19" FontWeight="Light"
+                                       Margin="0,5,0,0" Text="{Binding Value}"/>
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </Grid>
+</UserControl>

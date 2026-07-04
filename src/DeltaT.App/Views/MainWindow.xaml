@@ -1,0 +1,112 @@
+<Window x:Class="DeltaT.App.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="DeltaT" Width="1000" Height="720" MinWidth="800" MinHeight="600"
+        Icon="pack://application:,,,/Assets/deltat.ico"
+        Background="{StaticResource Brush.Bg}"
+        Foreground="{StaticResource Brush.Text}"
+        FontFamily="{StaticResource Font.Ui}"
+        WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42" ResizeBorderThickness="6"
+                            GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="42"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============================ title bar -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
+            <Grid Margin="20,0,6,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
+                               Foreground="{StaticResource Brush.TextFaint}" VerticalAlignment="Center">
+                        <Run Text="{Binding MachineName, Mode=OneWay}"/>
+                        <Run Text="  ·  "/>
+                        <Run Text="{Binding ProfileName, Mode=OneWay}"/>
+                    </TextBlock>
+                    <Border Style="{StaticResource Chip}" Margin="12,0,0,0" VerticalAlignment="Center"
+                            Background="{StaticResource Brush.AccentDim}" BorderBrush="#4A3A1A"
+                            Visibility="{Binding Simulated, Converter={StaticResource BoolToVis}}">
+                        <TextBlock FontSize="9.5" FontFamily="{StaticResource Font.Mono}"
+                                   Foreground="{StaticResource Brush.Accent}" Text="SIMULATED"/>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0"
+                                ToolTip="{Binding WeatherTooltip}" Background="Transparent"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Rectangle Width="6" Height="6" RadiusX="1" RadiusY="1" VerticalAlignment="Center" Margin="0,1,7,0">
+                            <Rectangle.Style>
+                                <Style TargetType="Rectangle">
+                                    <Setter Property="Fill" Value="{StaticResource Brush.Cool}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding WeatherStale}" Value="True">
+                                            <Setter Property="Fill" Value="{StaticResource Brush.HotWarn}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Rectangle.Style>
+                        </Rectangle>
+                        <TextBlock FontSize="11" FontFamily="{StaticResource Font.Mono}"
+                                   Foreground="{StaticResource Brush.TextDim}"
+                                   Text="{Binding WeatherText}"/>
+                    </StackPanel>
+
+                    <Button Style="{StaticResource Button.Caption}" Content="&#xE921;"
+                            Click="OnMinimize" ToolTip="Minimize"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                    <Button Style="{StaticResource Button.Caption}" Content="&#xE8BB;"
+                            Click="OnClose" ToolTip="Close to tray"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============================ body -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="104"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- nav rail -->
+            <Border Grid.Column="0" Background="{StaticResource Brush.Rail}"
+                    BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <!-- wordmark -->
+                    <StackPanel DockPanel.Dock="Top" Margin="18,22,0,18">
+                        <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="21" FontWeight="SemiBold">
+                            <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
+                        </TextBlock>
+                        <TextBlock Style="{StaticResource Text.Caption}" FontSize="8.5" Text="DELTA-T" Margin="1,3,0,0"/>
+                    </StackPanel>
+
+                    <TextBlock DockPanel.Dock="Bottom" Style="{StaticResource Text.Caption}"
+                               Text="V1.0" Margin="18,0,0,16"/>
+
+                    <StackPanel x:Name="NavPanel" VerticalAlignment="Top">
+                        <RadioButton x:Name="NavDashboard" Style="{StaticResource Button.Nav}" Content="DASHBOARD"
+                                     IsChecked="True" GroupName="nav" Checked="OnNavDashboard"/>
+                        <RadioButton x:Name="NavTrends" Style="{StaticResource Button.Nav}" Content="TRENDS"
+                                     GroupName="nav" Checked="OnNavTrends"/>
+                        <RadioButton x:Name="NavRemarks" Style="{StaticResource Button.Nav}" Content="REMARKS"
+                                     GroupName="nav" Checked="OnNavRemarks"/>
+                        <RadioButton x:Name="NavSettings" Style="{StaticResource Button.Nav}" Content="SETTINGS"
+                                     GroupName="nav" Checked="OnNavSettings"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <ContentControl x:Name="ContentHost" Grid.Column="1"/>
+        </Grid>
+    </Grid>
+</Window>

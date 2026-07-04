@@ -1,0 +1,132 @@
+<UserControl x:Class="DeltaT.App.Views.DashboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DeltaT.App.Controls">
+
+    <Grid Margin="28,20,28,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ================= hero: verdict + paste dials -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1"
+                Padding="0,0,0,20">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,26,0">
+                    <TextBlock Style="{StaticResource Text.Caption}" Text="PASTE VERDICT"/>
+                    <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,7,0,6"/>
+                    <TextBlock Style="{StaticResource Text.Dim}" Text="{Binding VerdictDetail}"
+                               FontSize="12.5" LineHeight="19"/>
+                    <Button Style="{StaticResource Button.Link}" HorizontalAlignment="Left" Margin="-2,10,0,0"
+                            Click="OnRunFingerprint"
+                            ToolTip="25 s idle + 2.5 min full CPU load — a repeatable thermal measurement">
+                        <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11"
+                                   Text="▸ RUN 3-MINUTE FINGERPRINT"/>
+                    </Button>
+                </StackPanel>
+
+                <controls:ScoreDial Grid.Column="1" Width="126" Height="126" Margin="8,0"
+                                    Score="{Binding CpuScore.Value}"
+                                    Calibrating="{Binding CpuScore.Calibrating}"
+                                    Progress="{Binding CpuScore.Progress}"
+                                    Label="CPU"
+                                    ToolTip="{Binding CpuScore.TopReason}"/>
+                <controls:ScoreDial Grid.Column="2" Width="126" Height="126" Margin="8,0,0,0"
+                                    Score="{Binding GpuScore.Value}"
+                                    Calibrating="{Binding GpuScore.Calibrating}"
+                                    Progress="{Binding GpuScore.Progress}"
+                                    Label="GPU"
+                                    ToolTip="{Binding GpuScore.TopReason}"/>
+            </Grid>
+        </Border>
+
+        <!-- ================= component ledger -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,2,0,0">
+            <ItemsControl ItemsSource="{Binding Cards}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1"
+                                Padding="0,14,0,13">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="152"/>
+                                    <ColumnDefinition Width="132"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="164"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- identity -->
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="13"
+                                               FontWeight="SemiBold" Foreground="{StaticResource Brush.Text}"
+                                               Text="{Binding Badge}"/>
+                                    <TextBlock Style="{StaticResource Text.Caption}" Margin="0,4,6,0"
+                                               Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <!-- load -->
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,22,0">
+                                    <ProgressBar Style="{StaticResource LoadBar}"
+                                                 Minimum="0" Maximum="100" Value="{Binding Load, Mode=OneWay}"/>
+                                    <TextBlock Style="{StaticResource Text.Caption}" Margin="0,7,0,0"
+                                               Text="{Binding LoadText}"/>
+                                </StackPanel>
+
+                                <!-- trace -->
+                                <Grid Grid.Column="2" Margin="0,0,22,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <controls:Sparkline Grid.Row="0" Height="36" VerticalAlignment="Bottom"
+                                                        Values="{Binding Spark}"/>
+                                    <TextBlock Grid.Row="1" Style="{StaticResource Text.Caption}" Margin="0,7,0,0"
+                                               Text="{Binding MetaText}" TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+
+                                <!-- reading -->
+                                <StackPanel Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                    <TextBlock TextAlignment="Right"
+                                               Foreground="{Binding RawFraction, Converter={StaticResource FracToBrush}}"
+                                               Visibility="{Binding HasTemp, Converter={StaticResource BoolToVis}}">
+                                        <Run FontFamily="{StaticResource Font.Mono}" FontSize="27" FontWeight="Light"
+                                             Text="{Binding Temp, Mode=OneWay, StringFormat='{}{0:0.0}'}"/><Run
+                                             FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                                             Foreground="{StaticResource Brush.TextDim}"
+                                             Text="{Binding Unit, Mode=OneWay}"/>
+                                    </TextBlock>
+                                    <TextBlock TextAlignment="Right" FontFamily="{StaticResource Font.Mono}"
+                                               FontSize="27" FontWeight="Light"
+                                               Foreground="{StaticResource Brush.TextFaint}" Text="—"
+                                               Visibility="{Binding HasTemp, Converter={StaticResource InvBoolToVis}}"/>
+                                    <TextBlock TextAlignment="Right" FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
+                                               Foreground="{StaticResource Brush.Accent}" Margin="0,5,0,0"
+                                               Text="{Binding DeltaText}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- ================= remarks ticker -->
+        <DockPanel Grid.Row="2" Margin="0,14,0,0">
+            <Rectangle DockPanel.Dock="Left" Width="7" Height="7" RadiusX="1" RadiusY="1"
+                       VerticalAlignment="Center" Fill="{Binding RemarkDot}"/>
+            <TextBlock DockPanel.Dock="Right" Margin="14,0,0,0" VerticalAlignment="Center"
+                       Style="{StaticResource Text.Caption}" Text="{Binding LatestRemarkTime}"/>
+            <TextBlock Margin="12,0,0,0" VerticalAlignment="Center"
+                       Style="{StaticResource Text.Dim}" FontSize="12.5"
+                       Text="{Binding LatestRemark}" TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+    </Grid>
+</UserControl>

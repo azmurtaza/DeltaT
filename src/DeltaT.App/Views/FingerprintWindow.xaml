@@ -1,0 +1,89 @@
+<Window x:Class="DeltaT.App.Views.FingerprintWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DeltaT.App.Controls"
+        Title="DeltaT — thermal fingerprint" Width="520" Height="560"
+        Icon="pack://application:,,,/Assets/deltat.ico"
+        Background="{StaticResource Brush.Bg}" Foreground="{StaticResource Brush.Text}"
+        FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" UseLayoutRounding="True">
+    <Grid Margin="30,24">
+
+        <!-- ============ intro ============ -->
+        <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=intro}">
+            <TextBlock Style="{StaticResource Text.Caption}" Text="THERMAL FINGERPRINT"/>
+            <TextBlock Style="{StaticResource Text.H1}" Text="A 3-minute honest look" Margin="0,8,0,10"/>
+            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap">
+                DeltaT idles for 25 seconds, then loads every CPU core for 2½ minutes and watches:
+                how fast the heat soaks in, where it settles, and whether the silicon has to throttle.
+                Same test, same numbers — run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
+            </TextBlock>
+            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="18" Margin="0,14,0,0" TextWrapping="Wrap">
+                ▪ Plug in the charger — battery runs aren't comparable.<LineBreak/>
+                ▪ Close heavy apps so the idle phase is actually idle.<LineBreak/>
+                ▪ Fans will spin up. That's the point.
+            </TextBlock>
+            <Border Background="{StaticResource Brush.AccentDim}" BorderBrush="{StaticResource Brush.Warm}"
+                    BorderThickness="2,0,0,0" CornerRadius="2"
+                    Padding="12,9" Margin="0,16,0,0"
+                    Visibility="{Binding OnBattery, Converter={StaticResource BoolToVis}}">
+                <TextBlock FontSize="12" Foreground="{StaticResource Brush.Warm}"
+                           Text="You're on battery right now — results will be recorded but flagged."/>
+            </Border>
+            <Button Style="{StaticResource Button.Primary}" Content="START THE TEST" Padding="20,10"
+                    HorizontalAlignment="Left" Margin="0,22,0,0"
+                    Command="{Binding StartCommand}"/>
+        </StackPanel>
+
+        <!-- ============ running ============ -->
+        <Grid Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=running}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0">
+                <TextBlock Style="{StaticResource Text.Caption}" Text="FINGERPRINT IN PROGRESS"/>
+                <TextBlock Style="{StaticResource Text.H1}" FontSize="18" Text="{Binding Phase}" Margin="0,8,0,0"/>
+                <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,4,0,0"
+                           Text="{Binding SecondsLeft, StringFormat='{}{0:0} s remaining in this phase'}"/>
+            </StackPanel>
+            <controls:RingGauge Grid.Row="1" Width="210" Height="210"
+                                Value="{Binding CurrentTemp}" Maximum="100"
+                                HasValue="{Binding HasCurrentTemp}" Unit="°C" SubText="CPU"/>
+            <Button Grid.Row="2" Style="{StaticResource Button.Ghost}" Content="STOP THE TEST"
+                    HorizontalAlignment="Center" Foreground="{StaticResource Brush.Hot}"
+                    Command="{Binding StopCommand}"/>
+        </Grid>
+
+        <!-- ============ done ============ -->
+        <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=done}">
+            <TextBlock Style="{StaticResource Text.Caption}" Text="FINGERPRINT RESULT"/>
+            <ItemsControl ItemsSource="{Binding ResultCells}" Margin="0,16,0,0">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="3"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
+                                Padding="12,4,0,10" Margin="0,0,0,6">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Label}"/>
+                                <TextBlock Style="{StaticResource Text.Numeral}" FontSize="18" FontWeight="Light"
+                                           Margin="0,5,0,0" Text="{Binding Value}"/>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="16,13">
+                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19"
+                           Text="{Binding VerdictText}" TextWrapping="Wrap"/>
+            </Border>
+            <Button Style="{StaticResource Button.Primary}" Content="DONE" Padding="22,9"
+                    HorizontalAlignment="Left" Margin="0,18,0,0" Click="OnDone"/>
+        </StackPanel>
+    </Grid>
+</Window>

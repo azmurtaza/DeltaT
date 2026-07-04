@@ -1,12 +1,12 @@
-# Kelvin
+# DeltaT
 
 **Your machine's thermal conscience.**
 
-Kelvin runs quietly in the system tray, watches your CPU / GPU / SSD temperatures against the weather outside, learns what *healthy* looks like for your specific machine, and tells you — with evidence — when it's time to change your thermal paste.
+DeltaT runs quietly in the system tray, watches your CPU / GPU / SSD temperatures against the weather outside, learns what *healthy* looks like for your specific machine, and tells you — with evidence — when it's time to change your thermal paste.
 
 ## Why it's different
 
-Raw temperatures lie. A 45 °C summer afternoon makes healthy paste look dead; an air-conditioned room hides paste that's drying out. Kelvin scores paste health on **temperature rise over outside ambient, at a given load, compared to your machine's own learned baseline** — the signal that actually tracks paste degradation.
+Raw temperatures lie. A 45 °C summer afternoon makes healthy paste look dead; an air-conditioned room hides paste that's drying out. DeltaT scores paste health on **temperature rise over outside ambient, at a given load, compared to your machine's own learned baseline** — the signal that actually tracks paste degradation.
 
 - **Load-bucketed stats** — idle / light / medium / heavy tracked separately per component
 - **Paste Health Score 0–100** for CPU and GPU, with plain-language reasons ("+6 °C over baseline at heavy load in similar weather")
@@ -24,7 +24,7 @@ Raw temperatures lie. A 45 °C summer afternoon makes healthy paste look dead; a
 ## Build
 
 ```
-dotnet build Kelvin.sln
-dotnet run --project src/Kelvin.App     # the app (run elevated)
-dotnet run --project src/Kelvin.Spike   # raw sensor dump for diagnostics
+dotnet build DeltaT.sln
+dotnet run --project src/DeltaT.App     # the app (run elevated)
+dotnet run --project src/DeltaT.Spike   # raw sensor dump for diagnostics
 ```

@@ -15,7 +15,7 @@ artifacts/
 TestResults/
 *.trx
 
-# Runtime data (Kelvin stores real data in %LOCALAPPDATA%\Kelvin, but never commit local dumps)
+# Runtime data (DeltaT stores real data in %LOCALAPPDATA%\DeltaT, but never commit local dumps)
 *.db
 *.db-shm
 *.db-wal
