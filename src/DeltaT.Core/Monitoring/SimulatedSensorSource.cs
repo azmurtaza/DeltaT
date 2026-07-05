@@ -18,6 +18,7 @@ public sealed class SimulatedSensorSource : ISensorSource
     private readonly Random _rng;
     private readonly Func<double> _ambient;
     private readonly TimeSpan _step;
+    private readonly bool _warmDemo;
     private DateTimeOffset _now;
 
     private double _cpuTemp;
@@ -40,17 +41,35 @@ public sealed class SimulatedSensorSource : ISensorSource
         Func<double>? ambient = null,
         DateTimeOffset? startUtc = null,
         TimeSpan? step = null,
-        int seed = 1337)
+        int seed = 1337,
+        bool warmDemo = false)
     {
         Scenario = scenario;
         _ambient = ambient ?? (() => fixedAmbientC ?? 32.0);
         _now = startUtc ?? DateTimeOffset.UtcNow;
         _step = step ?? TimeSpan.FromSeconds(2);
         _rng = new Random(seed);
+        _warmDemo = warmDemo;
         double a = _ambient();
-        _cpuTemp = a + 18;
-        _gpuTemp = a + 12;
-        _ssdTemp = a + 20;
+        // Screenshot mode: start already deep in a gaming session so the very first
+        // captured frame reads as a machine under load, not a cold idle boot.
+        if (warmDemo)
+        {
+            _phase = Phase.Gaming;
+            _phaseSecondsLeft = int.MaxValue;
+            _cpuLoad = 68;
+            _gpuLoad = 95;
+            _cpuTemp = a + 46;
+            _gpuTemp = a + 44;
+            _ssdTemp = a + 24;
+            _fanRpm = 4200;
+        }
+        else
+        {
+            _cpuTemp = a + 18;
+            _gpuTemp = a + 12;
+            _ssdTemp = a + 20;
+        }
     }
 
     private enum Phase { Idle, Light, Gaming, Burst }
@@ -106,6 +125,16 @@ public sealed class SimulatedSensorSource : ISensorSource
 
     private void AdvanceWorkload(double dt)
     {
+        // Screenshot mode holds a steady gaming load — never fall back to idle.
+        if (_warmDemo)
+        {
+            double gCpu = 62 + _rng.NextDouble() * 16;
+            double gGpu = 90 + _rng.NextDouble() * 9;
+            _cpuLoad = Clamp(_cpuLoad + (gCpu - _cpuLoad) * Math.Min(1, dt / 6) + Noise(2), 0, 100);
+            _gpuLoad = Clamp(_gpuLoad + (gGpu - _gpuLoad) * Math.Min(1, dt / 6) + Noise(1.5), 0, 100);
+            return;
+        }
+
         _phaseSecondsLeft -= (int)dt;
         if (_phaseSecondsLeft <= 0)
         {

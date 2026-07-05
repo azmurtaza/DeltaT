@@ -14,18 +14,18 @@
         <!-- selector row -->
         <Grid Grid.Row="0" Margin="2,0,2,12">
             <StackPanel Orientation="Horizontal">
-                <RadioButton Style="{StaticResource Seg}" Content="CPU" GroupName="kind" IsChecked="True" Checked="OnKind0"/>
-                <RadioButton Style="{StaticResource Seg}" Content="GPU" GroupName="kind" Checked="OnKind1"/>
-                <RadioButton Style="{StaticResource Seg}" Content="SSD" GroupName="kind" Checked="OnKind2"/>
+                <RadioButton x:Name="KindCpu" Style="{StaticResource Seg}" Content="CPU" GroupName="kind" IsChecked="True" Checked="OnKind0"/>
+                <RadioButton x:Name="KindGpu" Style="{StaticResource Seg}" Content="GPU" GroupName="kind" Checked="OnKind1"/>
+                <RadioButton x:Name="KindSsd" Style="{StaticResource Seg}" Content="SSD" GroupName="kind" Checked="OnKind2"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <RadioButton Style="{StaticResource Seg}" Content="24H" GroupName="range" IsChecked="True"
+                <RadioButton x:Name="Range24h" Style="{StaticResource Seg}" Content="24H" GroupName="range" IsChecked="True"
                              Command="{Binding SetRangeCommand}" CommandParameter="24h"/>
-                <RadioButton Style="{StaticResource Seg}" Content="7D" GroupName="range"
+                <RadioButton x:Name="Range7d" Style="{StaticResource Seg}" Content="7D" GroupName="range"
                              Command="{Binding SetRangeCommand}" CommandParameter="7d"/>
-                <RadioButton Style="{StaticResource Seg}" Content="30D" GroupName="range"
+                <RadioButton x:Name="Range30d" Style="{StaticResource Seg}" Content="30D" GroupName="range"
                              Command="{Binding SetRangeCommand}" CommandParameter="30d"/>
-                <RadioButton Style="{StaticResource Seg}" Content="ALL" GroupName="range"
+                <RadioButton x:Name="RangeAll" Style="{StaticResource Seg}" Content="ALL" GroupName="range"
                              Command="{Binding SetRangeCommand}" CommandParameter="all"/>
             </StackPanel>
         </Grid>

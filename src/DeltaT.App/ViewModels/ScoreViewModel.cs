@@ -11,6 +11,7 @@ public partial class ScoreViewModel : ObservableObject
     [ObservableProperty] private bool _calibrating = true;
     [ObservableProperty] private double _progress;
     [ObservableProperty] private string _verdictLabel = "learning";
+    [ObservableProperty] private string _verdictShort = "learning";
     [ObservableProperty] private string _topReason = "";
 
     public ScoreViewModel(string label) => Label = label;
@@ -21,6 +22,7 @@ public partial class ScoreViewModel : ObservableObject
         Calibrating = score.Calibrating;
         Progress = score.CalibrationProgress;
         VerdictLabel = score.Verdict.Label();
+        VerdictShort = score.Verdict.ShortLabel();
         TopReason = score.Reasons.Count > 0 ? score.Reasons[0].Text : "";
     }
 }

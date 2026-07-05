@@ -94,4 +94,17 @@ public static class Verdicts
         Verdict.Degraded => "Degraded — plan a repaste",
         _ => "Repaste now",
     };
+
+    /// <summary>The bare verdict word, for tight spots like the score dial where
+    /// the full "— plan a repaste" qualifier won't fit. The qualifier still shows
+    /// in the hero title/detail, which has room to wrap.</summary>
+    public static string ShortLabel(this Verdict verdict) => verdict switch
+    {
+        Verdict.Calibrating => "Calibrating",
+        Verdict.Fresh => "Fresh",
+        Verdict.Good => "Good",
+        Verdict.Aging => "Aging",
+        Verdict.Degraded => "Degraded",
+        _ => "Repaste now",
+    };
 }

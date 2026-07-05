@@ -153,9 +153,20 @@ public sealed class ScoreDial : FrameworkElement
         dc.DrawText(numeral, new Point(center.X - numeral.Width / 2, center.Y - numeral.Height * 0.60));
 
         if (string.IsNullOrEmpty(small)) return;
+        var subBrush = new SolidColorBrush(sub);
+        double em = size * 0.068;
         var word = new FormattedText(Track(small), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             new Typeface(Din, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-            size * 0.068, new SolidColorBrush(sub), dip);
+            em, subBrush, dip);
+        // Never let the verdict word spill past the dial into its neighbour: shrink
+        // to fit the face if a long label (e.g. "Repaste now") would overflow.
+        double maxWidth = size * 0.86;
+        if (word.Width > maxWidth)
+        {
+            word = new FormattedText(Track(small), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                new Typeface(Din, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                em * maxWidth / word.Width, subBrush, dip);
+        }
         dc.DrawText(word, new Point(center.X - word.Width / 2, center.Y + numeral.Height * 0.44));
     }
 

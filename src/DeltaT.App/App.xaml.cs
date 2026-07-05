@@ -57,10 +57,12 @@ public partial class App : Application
         _uishotDir = e.Args.FirstOrDefault(a => a.StartsWith("--uishot=", StringComparison.OrdinalIgnoreCase))?[9..];
         IsSimulated = simulate;
 
-        // One DeltaT at a time; a second launch just surfaces the first.
+        // One DeltaT at a time; a second launch just surfaces the first. The
+        // screenshot harness is exempt — it runs against a throwaway sim db and
+        // must be able to capture alongside a live tray instance.
         _mutex = new Mutex(true, @"Local\DeltaT.App.Singleton", out bool isFirst);
         _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DeltaT.App.Show");
-        if (!isFirst)
+        if (!isFirst && _uishotDir is null)
         {
             _showSignal.Set();
             Shutdown();
@@ -127,13 +129,15 @@ public partial class App : Application
             Directory.CreateDirectory(dir);
             await Task.Delay(TimeSpan.FromSeconds(8)); // sim sensors + sparklines need a few samples
 
+            // 2× supersample so the vector UI is crisp enough to post full-size.
+            const double scale = 2.0;
             async Task Shot(FrameworkElement visual, string name)
             {
                 await Dispatcher.Yield(DispatcherPriority.Render);
-                await Task.Delay(400);
+                await Task.Delay(450);
                 var bmp = new RenderTargetBitmap(
-                    (int)Math.Ceiling(visual.ActualWidth), (int)Math.Ceiling(visual.ActualHeight),
-                    96, 96, PixelFormats.Pbgra32);
+                    (int)Math.Ceiling(visual.ActualWidth * scale), (int)Math.Ceiling(visual.ActualHeight * scale),
+                    96 * scale, 96 * scale, PixelFormats.Pbgra32);
                 bmp.Render(visual);
                 var enc = new PngBitmapEncoder();
                 enc.Frames.Add(BitmapFrame.Create(bmp));
@@ -142,9 +146,42 @@ public partial class App : Application
             }
 
             MainWindow win = _window!;
-            foreach (string page in new[] { "dashboard", "trends", "device", "remarks", "settings" })
+
+            // Score the seeded history so the dashboard shows a real verdict (the
+            // periodic score timer wouldn't fire before we capture), and surface the
+            // freshest seeded remark on the dashboard ticker.
+            try { _scores?.Compute(DateTimeOffset.UtcNow); } catch (Exception ex) { Log("uishot-score", ex); }
+            await Task.Delay(500);
+            try
+            {
+                if (_repo!.GetEvents("remark", 0, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 1) is [{ } ev, ..])
+                    _vm!.OnRemark(new Remark("seed", DateTimeOffset.FromUnixTimeSeconds(ev.Ts),
+                        (RemarkSeverity)Math.Clamp(ev.Severity, 0, 3), ev.Message, null));
+            }
+            catch (Exception ex) { Log("uishot-remark", ex); }
+
+            win.NavigateTo("dashboard");
+            await Shot(win, "dashboard");
+
+            // Trends: several kinds/ranges to show the graph's range on one machine.
+            async Task ShotTrends(int kind, string range, string name)
+            {
+                win.SelectTrends(kind, range);
+                for (int i = 0; i < 40 && _vm!.Trends.Loading; i++)
+                    await Task.Delay(50);
+                await _vm!.Trends.RefreshAsync();
+                await Task.Delay(500);
+                await Shot(win, name);
+            }
+            await ShotTrends(0, "24h", "trends_cpu_24h");
+            await ShotTrends(1, "7d", "trends_gpu_7d");
+            await ShotTrends(0, "30d", "trends_cpu_30d");
+            await ShotTrends(2, "24h", "trends_ssd_24h");
+
+            foreach (string page in new[] { "device", "remarks", "settings" })
             {
                 win.NavigateTo(page);
+                if (page == "remarks") await _vm!.RemarksFeed.RefreshAsync();
                 await Shot(win, page);
             }
 
@@ -160,7 +197,7 @@ public partial class App : Application
             await Shot(onboarding, "onboarding");
 
             var fpVm = new FingerprintViewModel(
-                new FingerprintTest(_monitor!, _ambient!), _repo!, onBattery: true);
+                new FingerprintTest(_monitor!, _ambient!), _repo!, onBattery: false);
             var fp = new FingerprintWindow { DataContext = fpVm };
             fp.Show();
             await Shot(fp, "fingerprint");
@@ -183,6 +220,10 @@ public partial class App : Application
         if (_uishotDir is not null)
             _settings.SetBool(SettingsKeys.FirstRunDone, true); // uishot wants the real screens, not onboarding
         _repo = new TelemetryRepository(_db);
+        // Dev/demo screenshots (`--seed=healthy|repaste`): lay down a realistic
+        // multi-week history before anything else reads the store.
+        if (ParseSeed(args) is { } degraded)
+            DemoSeeder.Seed(_db, _repo, _settings, degraded, DateTimeOffset.UtcNow);
         _ambient = new AmbientService(_settings);
 
         MachineIdentity machine = MachineIdentityProvider.Detect();
@@ -198,7 +239,8 @@ public partial class App : Application
         ISensorSource source;
         if (simulate)
         {
-            source = new SimulatedSensorSource(ParseScenario(args), ambient: () => _ambient.CurrentAmbientC ?? 32);
+            source = new SimulatedSensorSource(ParseScenario(args), ambient: () => _ambient.CurrentAmbientC ?? 32,
+                warmDemo: _uishotDir is not null);
         }
         else
         {
@@ -246,7 +288,10 @@ public partial class App : Application
         };
 
         _monitor.Start();
-        _ = _ambient.StartAsync();
+        // Screenshot runs keep the seeded weather; a live fetch would overwrite it
+        // (and possibly shift the ambient band) mid-capture.
+        if (_uishotDir is null)
+            _ = _ambient.StartAsync();
 
         // Scores: one early pass (so the dashboard fills in), then every 5 minutes.
         _scoreTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -276,6 +321,18 @@ public partial class App : Application
             "dusty" => SimScenario.DustyAirflow,
             _ => SimScenario.Healthy,
         };
+    }
+
+    /// <summary>`--seed=healthy|fresh` or `--seed=repaste|degraded` fills the sim db
+    /// with demo history for screenshots. Returns null when absent, true for the
+    /// degraded/repaste story, false for the healthy one.</summary>
+    private static bool? ParseSeed(string[] args)
+    {
+        string? arg = args.FirstOrDefault(a => a.StartsWith("--seed", StringComparison.OrdinalIgnoreCase));
+        if (arg is null)
+            return null;
+        string value = arg.Contains('=') ? arg[(arg.IndexOf('=') + 1)..].ToLowerInvariant() : "healthy";
+        return value is "repaste" or "degraded" or "aging";
     }
 
     /// <summary>Simulation runs against a separate db so fake telemetry never

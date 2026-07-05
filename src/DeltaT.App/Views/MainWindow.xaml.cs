@@ -56,6 +56,13 @@ public partial class MainWindow : Window
         target.IsChecked = true;
     }
 
+    /// <summary>Show the Trends page on a specific kind/range (--uishot harness).</summary>
+    public void SelectTrends(int kind, string range)
+    {
+        NavTrends.IsChecked = true; // creates + presents the view on first call
+        _trends?.Select(kind, range);
+    }
+
     /// <summary>Views crossfade in over 140 ms — the one transition in the app.</summary>
     private void Present(FrameworkElement view)
     {

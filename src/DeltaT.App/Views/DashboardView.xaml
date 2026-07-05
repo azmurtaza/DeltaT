@@ -39,14 +39,14 @@
                                     Score="{Binding CpuScore.Value}"
                                     Calibrating="{Binding CpuScore.Calibrating}"
                                     Progress="{Binding CpuScore.Progress}"
-                                    Verdict="{Binding CpuScore.VerdictLabel}"
+                                    Verdict="{Binding CpuScore.VerdictShort}"
                                     Label="CPU"
                                     ToolTip="{Binding CpuScore.TopReason}"/>
                 <controls:ScoreDial Grid.Column="2" Width="150" Height="150" Margin="10,2,0,2"
                                     Score="{Binding GpuScore.Value}"
                                     Calibrating="{Binding GpuScore.Calibrating}"
                                     Progress="{Binding GpuScore.Progress}"
-                                    Verdict="{Binding GpuScore.VerdictLabel}"
+                                    Verdict="{Binding GpuScore.VerdictShort}"
                                     Label="GPU"
                                     ToolTip="{Binding GpuScore.TopReason}"/>
             </Grid>
