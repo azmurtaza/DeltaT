@@ -19,4 +19,6 @@ public partial class FingerprintWindow : Window
     }
 
     private void OnDone(object sender, RoutedEventArgs e) => Close();
+
+    private void OnCloseChrome(object sender, RoutedEventArgs e) => Close();
 }

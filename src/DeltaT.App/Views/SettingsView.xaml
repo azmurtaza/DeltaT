@@ -7,7 +7,7 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid Margin="28,18,28,16">
+    <Grid Margin="22,18,22,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -21,9 +21,9 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- ================= left column -->
-                <StackPanel Grid.Column="0" Margin="0,0,9,0">
+                <StackPanel Grid.Column="0" Margin="0,0,7,0">
 
-                    <HeaderedContentControl Style="{StaticResource Fieldset}" Header="LOCATION &amp; WEATHER"
+                    <HeaderedContentControl Style="{StaticResource Module}" Header="Location &amp; weather"
                                             Margin="0,0,0,14">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="{Binding LocationText}"/>
@@ -72,7 +72,7 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Fieldset}" Header="BEHAVIOR">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Behavior">
                         <StackPanel>
                             <Grid Style="{StaticResource SettingRow}">
                                 <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
@@ -119,22 +119,9 @@
                 </StackPanel>
 
                 <!-- ================= right column -->
-                <StackPanel Grid.Column="1" Margin="9,0,0,0">
+                <StackPanel Grid.Column="1" Margin="7,0,0,0">
 
-                    <HeaderedContentControl Style="{StaticResource Fieldset}" Header="THIS MACHINE"
-                                            Margin="0,0,0,14">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource Text.Body}" FontSize="11.5" LineHeight="19"
-                                       FontFamily="{StaticResource Font.Mono}" Text="{Binding MachineText}"/>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" Margin="0,10,0,0"
-                                       Text="{Binding ProfileNotes}" TextWrapping="Wrap"/>
-                            <TextBlock Style="{StaticResource Text.Body}" FontSize="11.5" Margin="0,10,0,0"
-                                       FontFamily="{StaticResource Font.Mono}" Foreground="{StaticResource Brush.Accent}"
-                                       Text="{Binding LimitsText}"/>
-                        </StackPanel>
-                    </HeaderedContentControl>
-
-                    <HeaderedContentControl Style="{StaticResource Fieldset}" Header="PASTE LIFECYCLE"
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Paste lifecycle"
                                             Margin="0,0,0,14">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12"
@@ -144,13 +131,13 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Fieldset}" Header="DATA">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Data">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11"
                                        FontFamily="{StaticResource Font.Mono}" Text="{Binding DbText}"
                                        TextWrapping="Wrap"/>
                             <Button Style="{StaticResource Button.Ghost}" Content="EXPORT HISTORY AS CSV"
-                                    HorizontalAlignment="Left" Margin="-2,10,0,0"
+                                    HorizontalAlignment="Left" Margin="0,10,0,0"
                                     Command="{Binding ExportCsvCommand}"/>
                         </StackPanel>
                     </HeaderedContentControl>

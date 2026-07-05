@@ -42,6 +42,8 @@ public sealed class MonitoringService : IAsyncDisposable
         _interval = interval ?? TimeSpan.FromSeconds(2);
     }
 
+    public TimeSpan Interval => _interval;
+
     public bool IsPaused { get; set; }
 
     public SensorSnapshot? Latest
@@ -55,7 +57,16 @@ public sealed class MonitoringService : IAsyncDisposable
         {
             if (_window.Count == 0) return Array.Empty<SensorSnapshot>();
             DateTimeOffset cutoff = _window[^1].TimestampUtc - span;
-            return _window.Where(s => s.TimestampUtc >= cutoff).ToList();
+            // Timestamps are appended in order, so find the first in-range index
+            // instead of filtering the whole hour.
+            int lo = 0, hi = _window.Count;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) / 2;
+                if (_window[mid].TimestampUtc < cutoff) lo = mid + 1;
+                else hi = mid;
+            }
+            return _window.GetRange(lo, _window.Count - lo);
         }
     }
 

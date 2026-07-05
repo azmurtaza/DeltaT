@@ -1,0 +1,167 @@
+<UserControl x:Class="DeltaT.App.Views.DeviceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DeltaT.App.Controls"
+             xmlns:vm="clr-namespace:DeltaT.App.ViewModels"
+             xmlns:ui="clr-namespace:DeltaT.App.Ui">
+
+    <UserControl.Resources>
+        <Style x:Key="SpecLabel" TargetType="TextBlock" BasedOn="{StaticResource Text.Dim}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SpecValue" TargetType="TextBlock" BasedOn="{StaticResource Text.Numeral}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- expected-vs-measured block, shared by CPU and GPU -->
+        <DataTemplate x:Key="IntelBlock" DataType="{x:Type vm:ComponentIntelViewModel}">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource SpecLabel}"
+                               Text="Typical idle rise" Margin="0,0,14,8"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource SpecValue}"
+                               Text="{Binding IdleDeltaText}" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource SpecLabel}"
+                               Text="Typical heavy-load rise" Margin="0,0,14,8"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource SpecValue}"
+                               Text="{Binding HeavyDeltaText}" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource SpecLabel}"
+                               Text="Sustained norm (healthy)" Margin="0,0,14,8"/>
+                    <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource SpecValue}"
+                               Text="{Binding SustainedText}" Margin="0,0,0,8"/>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource SpecLabel}"
+                               Text="Concern threshold" Margin="0,0,14,0"/>
+                    <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource SpecValue}"
+                               Text="{Binding ConcernText}"/>
+                </Grid>
+
+                <controls:RangeStrip Height="36" Margin="0,12,0,2"
+                                     Value="{Binding StripValue}"
+                                     Minimum="{Binding StripMin}"
+                                     Norm="{Binding StripNorm}"
+                                     Concern="{Binding StripConcern}"
+                                     Maximum="{Binding StripMax}"
+                                     ColorFraction="{Binding ColorFraction}"
+                                     HasValue="{Binding HasReading}"/>
+
+                <DockPanel Margin="0,6,0,0">
+                    <Rectangle DockPanel.Dock="Left" Width="6" Height="6" RadiusX="1" RadiusY="1"
+                               VerticalAlignment="Center"
+                               Fill="{Binding ColorFraction, Converter={StaticResource FracToBrush}}"/>
+                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" Margin="9,0,0,0"
+                               Foreground="{StaticResource Brush.TextDim}"
+                               Text="{Binding NowText}" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="22,18,22,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- page header -->
+            <Grid Grid.Row="0" Margin="2,0,2,14">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Device intelligence"/>
+                    <TextBlock Style="{StaticResource Text.H1}" FontSize="19" Margin="0,7,0,0"
+                               Text="{Binding ModelName}"/>
+                </StackPanel>
+                <TextBlock Style="{StaticResource Text.Caption}" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                           Text="{Binding AmbientText}"/>
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="10*"/>
+                    <ColumnDefinition Width="11*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- ================= identity column -->
+                <StackPanel Grid.Column="0" Margin="0,0,7,0">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Identity" Margin="0,0,0,14">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="96"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="PROCESSOR" Margin="0,2,0,9"/>
+                                <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5"
+                                           Text="{Binding CpuName}" TextWrapping="Wrap" Margin="0,0,0,9"/>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="GRAPHICS" Margin="0,2,0,9"/>
+                                <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5"
+                                           Text="{Binding GpuText}" TextWrapping="Wrap" LineHeight="17" Margin="0,0,0,9"/>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="CHASSIS" Margin="0,2,0,9"/>
+                                <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5" Margin="0,0,0,9">
+                                    <Run Text="{Binding FormFactor, Mode=OneWay}"/><Run Text="  ·  " Foreground="{StaticResource Brush.TextFaint}"/><Run Text="{Binding ProfileClass, Mode=OneWay}"/>
+                                </TextBlock>
+                                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="PROFILE" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5"
+                                               Text="{Binding ProfileName}" VerticalAlignment="Center"/>
+                                    <Border Style="{StaticResource Chip}" Margin="9,0,0,0" Padding="6,2"
+                                            Background="{StaticResource Brush.AccentDim}" BorderBrush="{StaticResource Brush.AccentEdge}">
+                                        <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="9"
+                                                   Foreground="{StaticResource Brush.Accent}"
+                                                   Text="{Binding ProfileMatchLabel}"/>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                            <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,1,0,0"
+                                    Padding="0,10,0,0"
+                                    Visibility="{Binding HasNotes, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17"
+                                           Text="{Binding ProfileNotes}"/>
+                            </Border>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Silicon limits">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="19"
+                                       Text="{Binding LimitsText}" TextWrapping="Wrap"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,9,0,0" TextWrapping="Wrap"
+                                       Text="throttle points come from the hardware, not the profile"/>
+                        </StackPanel>
+                    </HeaderedContentControl>
+                </StackPanel>
+
+                <!-- ================= expected vs measured column -->
+                <StackPanel Grid.Column="1" Margin="7,0,0,0">
+                    <HeaderedContentControl Style="{StaticResource Module}" Header="CPU · expected vs measured"
+                                            Margin="0,0,0,14">
+                        <ContentControl Content="{Binding CpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
+                    </HeaderedContentControl>
+                    <HeaderedContentControl Style="{StaticResource Module}" Header="GPU · expected vs measured">
+                        <ContentControl Content="{Binding GpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
+                    </HeaderedContentControl>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

@@ -5,10 +5,13 @@ using System.Windows.Media.Animation;
 
 namespace DeltaT.App.Controls;
 
-/// <summary>Custom-drawn 270° temperature gauge: hairline track with scale
-/// ticks, a flat-capped value arc in the thermal color, monospaced numeral in
-/// the middle. Value changes ease in over 400 ms so readings breathe instead
-/// of ticking.</summary>
+/// <summary>Custom-drawn 270° temperature gauge in the ember-console dialect:
+/// hairline track, outer scale ticks (the last 15% tinted red — the danger
+/// zone), and a chunky value arc that sweeps as a thermal gradient — steel at
+/// the start, the current heat color at the tip (gaming-gauge flair,
+/// but the gradient is data). Bold condensed DIN numeral in the middle.
+/// Value changes ease in over 400 ms so readings breathe instead of
+/// ticking.</summary>
 public sealed class RingGauge : FrameworkElement
 {
     public static readonly DependencyProperty ValueProperty = DependencyProperty.Register(
@@ -49,10 +52,20 @@ public sealed class RingGauge : FrameworkElement
     public double ColorFraction { get => (double)GetValue(ColorFractionProperty); set => SetValue(ColorFractionProperty, value); }
     private double RenderValue => (double)GetValue(RenderValueProperty);
 
+    private static readonly FontFamily Din = new("Bahnschrift, Segoe UI");
+    private static readonly FontFamily DinCond = new("Bahnschrift Condensed, Bahnschrift, Segoe UI");
     private static readonly FontFamily Mono = new("Cascadia Mono, Consolas");
 
+    private const double StartAngle = 135;
+    private const double SweepAngle = 270;
+    private const double DangerFrom = 0.85;  // scale ticks past here tint red
+    private const int ArcSegments = 56;      // gradient sweep resolution
+
     private static readonly Pen TrackPen = MakeFrozenPen(ThermalPalette.Track, 1.2);
-    private static readonly Pen TickMarkPen = MakeFrozenPen(ThermalPalette.Stroke, 1.0);
+    private static readonly Pen MinorTickPen = MakeFrozenPen(ThermalPalette.Track, 1.0);
+    private static readonly Pen MajorTickPen = MakeFrozenPen(Color.FromRgb(0x3C, 0x2B, 0x1C), 1.2);
+    private static readonly Pen DangerTickPen = MakeFrozenPen(Color.FromArgb(120,
+        ThermalPalette.Hot.R, ThermalPalette.Hot.G, ThermalPalette.Hot.B), 1.0);
 
     private static Pen MakeFrozenPen(Color c, double w)
     {
@@ -78,54 +91,74 @@ public sealed class RingGauge : FrameworkElement
         if (size < 20) return;
 
         var center = new Point(ActualWidth / 2, ActualHeight / 2);
-        double thickness = Math.Max(2.5, size * 0.028);
-        double radius = size / 2 - thickness - 3;
+        double thickness = Math.Max(3.5, size * 0.05);
+        double radius = size / 2 - thickness - size * 0.055;
 
-        const double startAngle = 135;
-        const double sweep = 270;
+        // Hairline track.
+        DrawArc(dc, TrackPen, center, radius, StartAngle, StartAngle + SweepAngle);
 
-        // Hairline track + scale ticks (every eighth of the sweep).
-        DrawArc(dc, TrackPen, center, radius, startAngle, startAngle + sweep);
-        for (int i = 0; i <= 8; i++)
+        // Outer scale: minor tick each 1/40 of the sweep, major each 1/8;
+        // ticks in the danger zone are tinted.
+        for (int i = 0; i <= 40; i++)
         {
-            double a = (startAngle + sweep * i / 8) * Math.PI / 180.0;
-            var p1 = new Point(center.X + (radius - 4) * Math.Cos(a), center.Y + (radius - 4) * Math.Sin(a));
-            var p2 = new Point(center.X + (radius + 4) * Math.Cos(a), center.Y + (radius + 4) * Math.Sin(a));
-            dc.DrawLine(TickMarkPen, p1, p2);
+            double f = i / 40.0;
+            bool major = i % 5 == 0;
+            double a = (StartAngle + SweepAngle * f) * Math.PI / 180.0;
+            double r1 = radius + thickness + 2;
+            double r2 = r1 + (major ? size * 0.038 : size * 0.02);
+            Pen pen = f >= DangerFrom ? DangerTickPen : major ? MajorTickPen : MinorTickPen;
+            dc.DrawLine(pen,
+                new Point(center.X + r1 * Math.Cos(a), center.Y + r1 * Math.Sin(a)),
+                new Point(center.X + r2 * Math.Cos(a), center.Y + r2 * Math.Sin(a)));
         }
 
         double fraction = Maximum > 0 ? Math.Clamp(RenderValue / Maximum, 0, 1) : 0;
 
         if (HasValue && fraction > 0.005)
         {
+            // The arc is a gradient sweep: steel at the start of the scale,
+            // the current thermal color at the tip. Drawn as short flat-capped
+            // segments with a hair of overlap so no seams show.
             double colorFraction = double.IsNaN(ColorFraction) ? fraction : Math.Clamp(ColorFraction, 0, 1);
-            var valuePen = new Pen(ThermalPalette.BrushFromFraction(colorFraction), thickness)
-            { StartLineCap = PenLineCap.Flat, EndLineCap = PenLineCap.Flat };
-            valuePen.Freeze();
-            DrawArc(dc, valuePen, center, radius, startAngle, startAngle + sweep * fraction);
+            int segments = Math.Max(2, (int)(ArcSegments * fraction));
+            double sweepEnd = StartAngle + SweepAngle * fraction;
+            double segSweep = (sweepEnd - StartAngle) / segments;
+            for (int i = 0; i < segments; i++)
+            {
+                double t = (i + 1) / (double)segments;
+                var segPen = new Pen(ThermalPalette.BrushFromFraction(t * colorFraction), thickness)
+                { StartLineCap = PenLineCap.Flat, EndLineCap = PenLineCap.Flat };
+                segPen.Freeze();
+                double a0 = StartAngle + segSweep * i;
+                double a1 = Math.Min(sweepEnd, a0 + segSweep + 0.6);
+                DrawArc(dc, segPen, center, radius, a0, a1);
+            }
         }
 
         // Center numerals.
         double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         string mainText = HasValue ? Math.Round(RenderValue).ToString(CultureInfo.InvariantCulture) : "—";
         var main = new FormattedText(mainText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            new Typeface(Mono, FontStyles.Normal, FontWeights.Light, FontStretches.Normal),
-            size * 0.27, new SolidColorBrush(ThermalPalette.Text), dip);
-        dc.DrawText(main, new Point(center.X - main.Width / 2, center.Y - main.Height * 0.68));
+            new Typeface(DinCond, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal),
+            size * 0.30, new SolidColorBrush(ThermalPalette.Text), dip);
+        dc.DrawText(main, new Point(center.X - main.Width / 2, center.Y - main.Height * 0.66));
 
         var unit = new FormattedText(HasValue ? Unit : "no sensor", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             new Typeface(Mono, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-            size * 0.085, new SolidColorBrush(ThermalPalette.TextDim), dip);
-        dc.DrawText(unit, new Point(center.X - unit.Width / 2, center.Y + main.Height * 0.36));
+            size * 0.082, new SolidColorBrush(ThermalPalette.TextDim), dip);
+        dc.DrawText(unit, new Point(center.X - unit.Width / 2, center.Y + main.Height * 0.38));
 
         if (!string.IsNullOrEmpty(SubText))
         {
-            var sub = new FormattedText(SubText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                new Typeface(Mono, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
-                size * 0.075, new SolidColorBrush(ThermalPalette.TextFaint), dip);
-            dc.DrawText(sub, new Point(center.X - sub.Width / 2, center.Y + radius - sub.Height * 0.4));
+            var sub = new FormattedText(Track(SubText), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                new Typeface(Din, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal),
+                size * 0.07, new SolidColorBrush(ThermalPalette.TextFaint), dip);
+            dc.DrawText(sub, new Point(center.X - sub.Width / 2, center.Y + radius - sub.Height * 0.55));
         }
     }
+
+    private static string Track(string s) =>
+        string.Join(((char)0x200A).ToString(), s.ToUpperInvariant().ToCharArray());
 
     internal static void DrawArc(DrawingContext dc, Pen pen, Point center, double radius, double startDeg, double endDeg)
     {

@@ -1,44 +1,48 @@
 <UserControl x:Class="DeltaT.App.Views.OnboardingView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="clr-namespace:DeltaT.App.Ui">
     <Grid>
         <StackPanel MaxWidth="620" VerticalAlignment="Center" Margin="48,24">
 
             <StackPanel Orientation="Horizontal">
-                <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="42" FontWeight="SemiBold"
+                <TextBlock FontFamily="{StaticResource Font.Display}" FontSize="44" FontWeight="Bold"
                            VerticalAlignment="Center">
                     <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
                 </TextBlock>
-                <StackPanel VerticalAlignment="Center" Margin="16,4,0,0">
-                    <TextBlock Style="{StaticResource Text.H1}" FontSize="16" Text="DeltaT"/>
-                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,2,0,0"
-                               Text="Your machine's thermal conscience."/>
+                <StackPanel VerticalAlignment="Center" Margin="18,4,0,0">
+                    <TextBlock Style="{StaticResource Text.H2}" Text="DeltaT"/>
+                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,3,0,0"
+                               Text="A meter for thermal-paste health."/>
                 </StackPanel>
             </StackPanel>
 
-            <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}" Margin="0,20,0,22"/>
+            <DockPanel Margin="0,20,0,22">
+                <Rectangle DockPanel.Dock="Left" Width="42" Height="7" Fill="{StaticResource Brush.Hazard}"
+                           VerticalAlignment="Center"/>
+                <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+            </DockPanel>
 
-            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,0,0,14" TextWrapping="Wrap">
-                <Run Foreground="{StaticResource Brush.Accent}" Text="What it does — "/>
-                <Run Text="DeltaT watches CPU/GPU/SSD temperatures against the weather outside, learns what healthy looks like for this exact machine, and tells you — with evidence — when the thermal paste is due."/>
-            </TextBlock>
-            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,0,0,14" TextWrapping="Wrap">
-                <Run Foreground="{StaticResource Brush.Accent}" Text="Privacy — "/>
-                <Run Text="your location is looked up once (or typed by you), then cached. Weather comes from Open-Meteo, keyless. Everything else stays on this machine."/>
-            </TextBlock>
-            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,0,0,20" TextWrapping="Wrap">
-                <Run Foreground="{StaticResource Brush.Accent}" Text="The learning week — "/>
-                <Run Text="for about 7 days DeltaT quietly builds a baseline. Use the machine normally; games and heavy work teach it fastest. Hard safety limits are enforced from minute one."/>
-            </TextBlock>
+            <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="WHAT IT DOES"/>
+            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,5,0,15" TextWrapping="Wrap"
+                       Text="DeltaT watches CPU, GPU and SSD temperatures against the weather outside, learns what healthy looks like for this exact machine, and tells you, with evidence, when the thermal paste is due."/>
+
+            <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="PRIVACY"/>
+            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,5,0,15" TextWrapping="Wrap"
+                       Text="Your location is looked up once (or typed by you), then cached. Weather comes from Open-Meteo, keyless. Everything else stays on this machine."/>
+
+            <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="THE LEARNING WEEK"/>
+            <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" Margin="0,5,0,20" TextWrapping="Wrap"
+                       Text="For about 7 days DeltaT quietly builds a baseline. Use the machine normally; games and heavy work teach it fastest. Hard safety limits are enforced from minute one."/>
 
             <TextBlock Style="{StaticResource Text.Caption}" FontSize="10.5"
                        Text="{Binding MachineLine}" Margin="1,0,0,18"/>
 
-            <HeaderedContentControl Style="{StaticResource Fieldset}" Header="LOCATION" Margin="0,0,0,22">
+            <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Location" Margin="0,0,0,22">
                 <StackPanel>
                     <TextBlock Style="{StaticResource Text.Body}" FontSize="12" Text="{Binding LocationStatus}" TextWrapping="Wrap"/>
                     <Button Style="{StaticResource Button.Ghost}" Content="AUTO-DETECT MY CITY"
-                            HorizontalAlignment="Left" Margin="-2,8,0,0"
+                            HorizontalAlignment="Left" Margin="0,10,0,0"
                             Command="{Binding DetectCommand}" IsEnabled="{Binding Busy, Converter={StaticResource InvertBool}}"/>
                 </StackPanel>
             </HeaderedContentControl>

@@ -142,7 +142,7 @@ public partial class App : Application
             }
 
             MainWindow win = _window!;
-            foreach (string page in new[] { "dashboard", "trends", "remarks", "settings" })
+            foreach (string page in new[] { "dashboard", "trends", "device", "remarks", "settings" })
             {
                 win.NavigateTo(page);
                 await Shot(win, page);
@@ -195,9 +195,24 @@ public partial class App : Application
             || n.Contains("arc", StringComparison.OrdinalIgnoreCase));
         ThermalProfile profile = ThermalProfileProvider.Resolve(machine, hasDiscreteGpu);
 
-        ISensorSource source = simulate
-            ? new SimulatedSensorSource(ParseScenario(args), ambient: () => _ambient.CurrentAmbientC ?? 32)
-            : new HardwareSensorSource();
+        ISensorSource source;
+        if (simulate)
+        {
+            source = new SimulatedSensorSource(ParseScenario(args), ambient: () => _ambient.CurrentAmbientC ?? 32);
+        }
+        else
+        {
+            var hardware = new HardwareSensorSource();
+            // Watchdog notes (sensor stalls, engine reopens) go to the log and the
+            // events feed — a self-healed anomaly should leave a visible trace.
+            hardware.Diagnostic += msg =>
+            {
+                Log("sensors", new InvalidOperationException(msg));
+                try { _repo?.InsertEvent(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), "system", null, null, 1, $"Sensor engine: {msg}"); }
+                catch { }
+            };
+            source = hardware;
+        }
 
         int intervalSeconds = Math.Clamp(_settings.GetInt(SettingsKeys.SampleIntervalSeconds) ?? 2, 1, 10);
         _monitor = new MonitoringService(source, TimeSpan.FromSeconds(intervalSeconds));
@@ -209,10 +224,14 @@ public partial class App : Application
         var remarksFeed = new RemarksViewModel(_repo);
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
             () => _monitor.Latest, simulate);
+        var deviceVm = new DeviceViewModel(machine, profile, () => _monitor.Latest, _ambient, _settings);
         var onboarding = new OnboardingViewModel(_settings, _ambient, machine);
 
         _vm = new MainViewModel(machine, profile, _monitor, _ambient, _scores, _settings,
-            trends, remarksFeed, settingsVm, onboarding) { Simulated = simulate };
+            trends, remarksFeed, settingsVm, deviceVm, onboarding)
+        { Simulated = simulate, Elevated = simulate || IsElevated() };
+        if (args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
+            _vm.UiVisible = false; // tray start: no window yet, skip card churn
         _tray = new TrayManager(_monitor, ShowMainWindow, Quit);
 
         _remarks.RemarkRaised += r =>

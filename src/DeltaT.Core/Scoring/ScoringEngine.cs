@@ -8,7 +8,14 @@ namespace DeltaT.Core.Scoring;
 /// The philosophy: absolute temperatures are weather; *changes against this
 /// machine's own ambient-corrected baseline* are paste. A CPU that always ran
 /// 93 °C under heavy load in hot weather is healthy; one that used to run 85 °C
-/// in the same weather and now runs 93 °C is drying out.</summary>
+/// in the same weather and now runs 93 °C is drying out.
+///
+/// Fan speed is the third variable: airflow well above the learned baseline
+/// suppresses the measured rise (cranked fans can make dying paste look fresh),
+/// and airflow below it inflates the rise (quiet mode isn't paste failure).
+/// Compared cells are normalized by (rpm now / rpm baseline)^0.5 — the
+/// conservative end of forced-convection scaling — so the score reflects the
+/// paste, not the fan dial.</summary>
 public static class ScoringEngine
 {
     // --- tunables, in one place -------------------------------------------
@@ -24,6 +31,18 @@ public static class ScoringEngine
     public const double ThrottlePointsPerDailyEvent = 12;
     public const double MaxSoakPenalty = 15;
     public const double MaxAbsolutePenalty = 12;
+
+    /// <summary>Fan speed within ±10% of baseline is normal EC wobble — no correction.</summary>
+    public const double FanRatioDeadband = 0.10;
+
+    /// <summary>ΔT scales roughly with airflow^-0.5..-0.8; use the conservative end.</summary>
+    public const double FanNormalizationExponent = 0.5;
+
+    /// <summary>Cap on how far a cell's delta may be shifted by fan normalization.</summary>
+    public const double MaxFanCorrectionC = 8;
+
+    /// <summary>Below this rpm a "fan reading" is noise or a stopped fan, not airflow data.</summary>
+    public const double MinMeaningfulFanRpm = 300;
 
     /// <summary>Minimum minutes of recent data in a bucket before it may judge.</summary>
     public static int MinMinutes(LoadBucket b) => b switch
@@ -60,8 +79,9 @@ public static class ScoringEngine
 
         double penalty = 0;
 
-        // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket.
-        (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand)
+        // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
+        //    fan-normalized so airflow overrides can't masquerade as paste health.
+        (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
             = ComputeExcess(input);
 
         if (weightedExcess is { } excess)
@@ -82,6 +102,14 @@ public static class ScoringEngine
             else
             {
                 reasons.Add(new ScoreReason("delta-on-baseline", "Temperatures sit on baseline at comparable load and weather.", 0));
+            }
+
+            if (fanNorm is { } fn)
+            {
+                reasons.Add(new ScoreReason("fan-normalized", fn.CorrectionC > 0
+                    ? $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline — the extra airflow flatters the readings, so the comparison was corrected by +{fn.CorrectionC:0.#} °C."
+                    : $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline — quieter fans inflate the readings, so the comparison was corrected by {fn.CorrectionC:0.#} °C.",
+                    0));
             }
         }
         else
@@ -124,12 +152,16 @@ public static class ScoringEngine
         return new ComponentScore(input.Kind, input.Name, score, Verdicts.FromScore(score), false, 1.0, reasons, hint);
     }
 
-    private static (double? Weighted, double? Heavy, double? Idle, bool Broad, bool Adjacent) ComputeExcess(ScoreInput input)
+    /// <summary>Weighted rpm context behind a fan-normalized comparison, for the reason line.</summary>
+    public sealed record FanNormalization(double RecentRpm, double BaselineRpm, double CorrectionC);
+
+    private static (double? Weighted, double? Heavy, double? Idle, bool Broad, bool Adjacent, FanNormalization? Fan) ComputeExcess(ScoreInput input)
     {
         double sumWeighted = 0, sumWeights = 0;
         double? heavyExcess = null, idleExcess = null;
         int bucketsInExcess = 0, bucketsCompared = 0;
         bool usedAdjacent = false;
+        double fanCorrWeighted = 0, fanRecentWeighted = 0, fanBaseWeighted = 0, fanWeights = 0;
 
         foreach (LoadBucket bucket in new[] { LoadBucket.Heavy, LoadBucket.Medium, LoadBucket.Light, LoadBucket.Idle })
         {
@@ -155,7 +187,26 @@ public static class ScoringEngine
                 usedAdjacent |= adjacent;
                 double w = Weight(bucket) * (adjacent ? AdjacentBandWeightFactor : 1.0)
                          * Math.Min(1.0, r.Minutes / 60.0 + 0.5); // thin data counts a bit less
-                double excess = r.DeltaAvg!.Value - baseline.DeltaAvg;
+
+                double delta = r.DeltaAvg!.Value;
+                double correction = 0;
+                if (delta > 0
+                    && r.FanAvg is { } recentFan && baseline.FanAvg is { } baseFan
+                    && recentFan >= MinMeaningfulFanRpm && baseFan >= MinMeaningfulFanRpm)
+                {
+                    double ratio = recentFan / baseFan;
+                    if (Math.Abs(ratio - 1) >= FanRatioDeadband)
+                    {
+                        double normalized = delta * Math.Pow(ratio, FanNormalizationExponent);
+                        correction = Math.Clamp(normalized - delta, -MaxFanCorrectionC, MaxFanCorrectionC);
+                    }
+                    fanRecentWeighted += recentFan * w;
+                    fanBaseWeighted += baseFan * w;
+                    fanWeights += w;
+                }
+
+                double excess = delta + correction - baseline.DeltaAvg;
+                fanCorrWeighted += correction * w;
 
                 sumWeighted += excess * w;
                 sumWeights += w;
@@ -170,10 +221,15 @@ public static class ScoringEngine
         }
 
         if (sumWeights <= 0)
-            return (null, heavyExcess, idleExcess, false, usedAdjacent);
+            return (null, heavyExcess, idleExcess, false, usedAdjacent, null);
+
+        FanNormalization? fan = null;
+        double corr = fanCorrWeighted / sumWeights;
+        if (fanWeights > 0 && Math.Abs(corr) >= 1.0)
+            fan = new FanNormalization(fanRecentWeighted / fanWeights, fanBaseWeighted / fanWeights, Math.Round(corr, 1));
 
         bool broad = bucketsCompared >= 3 && bucketsInExcess >= 3;
-        return (sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent);
+        return (sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent, fan);
     }
 
     private static double AddAbsoluteObservations(ScoreInput input, List<ScoreReason> reasons, Func<double, string> fmtTemp, bool calibrating)

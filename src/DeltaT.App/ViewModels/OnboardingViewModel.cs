@@ -22,15 +22,15 @@ public partial class OnboardingViewModel : ObservableObject
     {
         _settings = settings;
         _ambient = ambient;
-        MachineLine = $"Detected: {machine.Display} — {(machine.IsLaptop ? "laptop" : "desktop")}.";
+        MachineLine = $"Detected: {machine.Display} · {(machine.IsLaptop ? "laptop" : "desktop")}";
         if (ambient.Location is { } loc)
-            LocationStatus = $"Location: {loc.Display} ✓";
+            LocationStatus = $"Location set: {loc.Display}.";
 
         // Background auto-locate may finish after this VM is built; reflect it when it does.
         ambient.Updated += _ => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
         {
             if (!Busy && _ambient.Location is { } l)
-                LocationStatus = $"Location: {l.Display} ✓ — outside temperature refreshes every 3 h.";
+                LocationStatus = $"Location set: {l.Display}. Outside temperature refreshes every 3 hours.";
         });
     }
 
@@ -43,11 +43,11 @@ public partial class OnboardingViewModel : ObservableObject
         if (loc is not null)
         {
             _ambient.SetLocation(loc);
-            LocationStatus = $"Location: {loc.Display} ✓ — outside temperature will refresh every 3 h.";
+            LocationStatus = $"Location set: {loc.Display}. Outside temperature will refresh every 3 hours.";
         }
         else
         {
-            LocationStatus = "Couldn't auto-detect. You can set your city later in Settings — DeltaT works without it, just less weather-smart.";
+            LocationStatus = "Couldn't auto-detect. You can set a city later in Settings; DeltaT works without one, just less weather-aware.";
         }
         Busy = false;
     }

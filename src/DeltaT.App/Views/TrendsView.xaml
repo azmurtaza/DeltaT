@@ -1,9 +1,10 @@
 <UserControl x:Class="DeltaT.App.Views.TrendsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:controls="clr-namespace:DeltaT.App.Controls">
+             xmlns:controls="clr-namespace:DeltaT.App.Controls"
+             xmlns:ui="clr-namespace:DeltaT.App.Ui">
 
-    <Grid Margin="28,16,28,16">
+    <Grid Margin="22,16,22,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -11,7 +12,7 @@
         </Grid.RowDefinitions>
 
         <!-- selector row -->
-        <Grid Grid.Row="0" Margin="0,0,0,12">
+        <Grid Grid.Row="0" Margin="2,0,2,12">
             <StackPanel Orientation="Horizontal">
                 <RadioButton Style="{StaticResource Seg}" Content="CPU" GroupName="kind" IsChecked="True" Checked="OnKind0"/>
                 <RadioButton Style="{StaticResource Seg}" Content="GPU" GroupName="kind" Checked="OnKind1"/>
@@ -30,20 +31,20 @@
         </Grid>
 
         <!-- chart -->
-        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14,12">
+        <HeaderedContentControl Grid.Row="1" Style="{StaticResource Module}" Header="Thermal history">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <StackPanel Orientation="Horizontal" Margin="4,0,0,8">
+                <StackPanel Orientation="Horizontal" Margin="2,0,0,6">
                     <Rectangle Width="14" Height="2" Fill="{StaticResource Brush.Accent}" VerticalAlignment="Center"/>
                     <TextBlock Style="{StaticResource Text.Caption}" Text="COMPONENT" Margin="6,0,16,0"/>
                     <Rectangle Width="14" Height="2" VerticalAlignment="Center">
                         <Rectangle.Fill>
                             <DrawingBrush TileMode="Tile" Viewport="0,0,6,2" ViewportUnits="Absolute">
                                 <DrawingBrush.Drawing>
-                                    <GeometryDrawing Brush="#6A6152" Geometry="M0,0 H3 V2 H0Z"/>
+                                    <GeometryDrawing Brush="#6E5C4B" Geometry="M0,0 H3 V2 H0Z"/>
                                 </DrawingBrush.Drawing>
                             </DrawingBrush>
                         </Rectangle.Fill>
@@ -56,7 +57,7 @@
                                           AmbientPoints="{Binding AmbientPoints}"
                                           Markers="{Binding Markers}"/>
             </Grid>
-        </Border>
+        </HeaderedContentControl>
 
         <!-- stats rail -->
         <ItemsControl Grid.Row="2" ItemsSource="{Binding Stats}" Margin="0,14,0,0">
@@ -71,7 +72,7 @@
                             Padding="14,2,0,2">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Label}"/>
-                            <TextBlock Style="{StaticResource Text.Numeral}" FontSize="19" FontWeight="Light"
+                            <TextBlock Style="{StaticResource Text.Display}" FontSize="21"
                                        Margin="0,5,0,0" Text="{Binding Value}"/>
                         </StackPanel>
                     </Border>

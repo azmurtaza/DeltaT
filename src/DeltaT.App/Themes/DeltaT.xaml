@@ -1,60 +1,121 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:ui="clr-namespace:DeltaT.App.Ui">
+                    xmlns:po="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
+                    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                    xmlns:ui="clr-namespace:DeltaT.App.Ui"
+                    xmlns:controls="clr-namespace:DeltaT.App.Controls"
+                    mc:Ignorable="po">
 
     <!-- ================================================================
-         DeltaT design language: bench instrument, not dashboard.
-         Warm soot neutrals, hairline rules, one amber signal color.
-         Numerals are monospaced (Cascadia), flat caps, no glow anywhere.
-         Thermal semantics: steel (cool) → amber (warm) → burnt orange →
-         vermilion (limit). Sage green only ever means "verdict: healthy".
+         DeltaT design language: "ember console" (docs/DESIGN.md).
+         Gaming-console instrument dialect: warm soot
+         surfaces with a faint ember glow, one signal color (ember orange),
+         chamfered plates with corner brackets, hazard-stripe ribbons.
+         Bahnschrift (DIN) for identity and bold condensed numerals,
+         Cascadia Mono for live data, Segoe UI for sentences.
+         Thermal semantics: steel (cool) -> amber (warm) -> orange -> red
+         (limit). Green only ever means "verdict: healthy".
+         One loud element per screen; the rest is soot.
          ================================================================ -->
 
     <!-- Surfaces -->
-    <Color x:Key="Col.Bg">#131110</Color>
-    <Color x:Key="Col.Rail">#100E0C</Color>
-    <Color x:Key="Col.Panel">#1A1714</Color>
-    <Color x:Key="Col.PanelHigh">#211D18</Color>
-    <Color x:Key="Col.InputBg">#0E0C0A</Color>
-    <Color x:Key="Col.Stroke">#2B2620</Color>
-    <Color x:Key="Col.StrokeSoft">#221E19</Color>
+    <Color x:Key="Col.Bg">#0E0A07</Color>
+    <Color x:Key="Col.Rail">#060403</Color>
+    <Color x:Key="Col.Panel">#17100A</Color>
+    <Color x:Key="Col.PanelHigh">#211711</Color>
+    <Color x:Key="Col.InputBg">#080504</Color>
+    <Color x:Key="Col.Stroke">#332418</Color>
+    <Color x:Key="Col.StrokeSoft">#251A11</Color>
 
     <!-- Text -->
-    <Color x:Key="Col.Text">#E9E1D2</Color>
-    <Color x:Key="Col.TextDim">#9A9081</Color>
-    <Color x:Key="Col.TextFaint">#6A6152</Color>
+    <Color x:Key="Col.Text">#F2E8DC</Color>
+    <Color x:Key="Col.TextDim">#AE9884</Color>
+    <Color x:Key="Col.TextFaint">#6E5C4B</Color>
 
     <!-- Thermal semantics -->
-    <Color x:Key="Col.Cool">#7FA9B8</Color>
-    <Color x:Key="Col.Warm">#E2A144</Color>
-    <Color x:Key="Col.HotWarn">#D2693B</Color>
-    <Color x:Key="Col.Hot">#D64B33</Color>
-    <Color x:Key="Col.Good">#A4B36A</Color>
+    <Color x:Key="Col.Cool">#7FA2B8</Color>
+    <Color x:Key="Col.Warm">#ECAF3A</Color>
+    <Color x:Key="Col.HotWarn">#F4741F</Color>
+    <Color x:Key="Col.Hot">#E93A2B</Color>
+    <Color x:Key="Col.Good">#57C465</Color>
 
     <!-- Signal -->
-    <Color x:Key="Col.Accent">#E2A144</Color>
-    <Color x:Key="Col.AccentBright">#F2B65C</Color>
-    <Color x:Key="Col.AccentDim">#2A2113</Color>
+    <Color x:Key="Col.Accent">#F26A1B</Color>
+    <Color x:Key="Col.AccentBright">#FF9247</Color>
+    <Color x:Key="Col.AccentDim">#38200E</Color>
+    <Color x:Key="Col.AccentEdge">#7A4218</Color>
+    <Color x:Key="Col.Bracket">#8CF26A1B</Color>
 
-    <SolidColorBrush x:Key="Brush.Bg" Color="{StaticResource Col.Bg}"/>
-    <SolidColorBrush x:Key="Brush.Rail" Color="{StaticResource Col.Rail}"/>
-    <SolidColorBrush x:Key="Brush.Panel" Color="{StaticResource Col.Panel}"/>
-    <SolidColorBrush x:Key="Brush.PanelHigh" Color="{StaticResource Col.PanelHigh}"/>
-    <SolidColorBrush x:Key="Brush.InputBg" Color="{StaticResource Col.InputBg}"/>
-    <SolidColorBrush x:Key="Brush.Stroke" Color="{StaticResource Col.Stroke}"/>
-    <SolidColorBrush x:Key="Brush.StrokeSoft" Color="{StaticResource Col.StrokeSoft}"/>
-    <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Col.Text}"/>
-    <SolidColorBrush x:Key="Brush.TextDim" Color="{StaticResource Col.TextDim}"/>
-    <SolidColorBrush x:Key="Brush.TextFaint" Color="{StaticResource Col.TextFaint}"/>
-    <SolidColorBrush x:Key="Brush.Cool" Color="{StaticResource Col.Cool}"/>
-    <SolidColorBrush x:Key="Brush.Warm" Color="{StaticResource Col.Warm}"/>
-    <SolidColorBrush x:Key="Brush.HotWarn" Color="{StaticResource Col.HotWarn}"/>
-    <SolidColorBrush x:Key="Brush.Hot" Color="{StaticResource Col.Hot}"/>
-    <SolidColorBrush x:Key="Brush.Good" Color="{StaticResource Col.Good}"/>
-    <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Col.Accent}"/>
-    <SolidColorBrush x:Key="Brush.AccentBright" Color="{StaticResource Col.AccentBright}"/>
-    <SolidColorBrush x:Key="Brush.AccentDim" Color="{StaticResource Col.AccentDim}"/>
+    <SolidColorBrush x:Key="Brush.Bg" Color="{StaticResource Col.Bg}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Rail" Color="{StaticResource Col.Rail}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Panel" Color="{StaticResource Col.Panel}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.PanelHigh" Color="{StaticResource Col.PanelHigh}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.InputBg" Color="{StaticResource Col.InputBg}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Stroke" Color="{StaticResource Col.Stroke}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.StrokeSoft" Color="{StaticResource Col.StrokeSoft}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Text" Color="{StaticResource Col.Text}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.TextDim" Color="{StaticResource Col.TextDim}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.TextFaint" Color="{StaticResource Col.TextFaint}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Cool" Color="{StaticResource Col.Cool}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Warm" Color="{StaticResource Col.Warm}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.HotWarn" Color="{StaticResource Col.HotWarn}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Hot" Color="{StaticResource Col.Hot}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Good" Color="{StaticResource Col.Good}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Accent" Color="{StaticResource Col.Accent}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.AccentBright" Color="{StaticResource Col.AccentBright}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.AccentDim" Color="{StaticResource Col.AccentDim}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.AccentEdge" Color="{StaticResource Col.AccentEdge}" po:Freeze="True"/>
+    <SolidColorBrush x:Key="Brush.Bracket" Color="{StaticResource Col.Bracket}" po:Freeze="True"/>
 
+    <!-- Window base: soot with a low ember glow rising from the bottom right —
+         the console mood without shipping a bitmap. Windows use this as
+         Background and lay Brush.BgDots on top. -->
+    <RadialGradientBrush x:Key="Brush.BgGlow" GradientOrigin="0.72,1.42" Center="0.72,1.42"
+                         RadiusX="1.6" RadiusY="1.25" po:Freeze="True">
+        <GradientStop Color="#241209" Offset="0"/>
+        <GradientStop Color="#150D08" Offset="0.6"/>
+        <GradientStop Color="#0E0A07" Offset="1"/>
+    </RadialGradientBrush>
+
+    <!-- 22px-pitch dot grid, warm-white at ~4%: graph paper, visible only if
+         you look for it. Transparent tile — overlay it on Brush.BgGlow. -->
+    <DrawingBrush x:Key="Brush.BgDots" TileMode="Tile" Viewport="0,0,22,22" ViewportUnits="Absolute"
+                  po:Freeze="True">
+        <DrawingBrush.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#00000000">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="0,0,22,22"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#0BF2E8DC">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="10.5,10.5,1.2,1.2"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
+
+    <!-- Hazard ribbon: the ///// stripe motif that ends every module header
+         (and the dim variant for quieter chrome). -->
+    <DrawingBrush x:Key="Brush.Hazard" TileMode="Tile" Viewport="0,0,8,7" ViewportUnits="Absolute"
+                  po:Freeze="True">
+        <DrawingBrush.Drawing>
+            <GeometryDrawing Brush="#96F26A1B" Geometry="M 0,7 L 3.5,0 L 6,0 L 2.5,7 Z"/>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
+    <DrawingBrush x:Key="Brush.HazardDim" TileMode="Tile" Viewport="0,0,8,7" ViewportUnits="Absolute"
+                  po:Freeze="True">
+        <DrawingBrush.Drawing>
+            <GeometryDrawing Brush="#52322114" Geometry="M 0,7 L 3.5,0 L 6,0 L 2.5,7 Z"/>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
+
+    <!-- Three voices: DIN for identity, bold condensed DIN for numerals,
+         mono for live data, Segoe for sentences. -->
+    <FontFamily x:Key="Font.Display">Bahnschrift, Segoe UI</FontFamily>
+    <FontFamily x:Key="Font.DisplayCond">Bahnschrift Condensed, Bahnschrift, Segoe UI</FontFamily>
     <FontFamily x:Key="Font.Mono">Cascadia Mono, Consolas</FontFamily>
     <FontFamily x:Key="Font.Ui">Segoe UI Variable Text, Segoe UI</FontFamily>
 
@@ -79,6 +140,21 @@
         <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
     </Style>
 
+    <!-- Tracked DIN caps in the signal color — section labels read like panel
+         silkscreen. Pair with ui:Tracking.Text. -->
+    <Style x:Key="Text.Overline" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Display}"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
+        <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+    </Style>
+
+    <Style x:Key="Text.OverlineFaint" TargetType="TextBlock" BasedOn="{StaticResource Text.Overline}">
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.TextFaint}"/>
+    </Style>
+
     <Style x:Key="Text.Body" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Font.Ui}"/>
         <Setter Property="FontSize" Value="13"/>
@@ -90,6 +166,7 @@
         <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
     </Style>
 
+    <!-- Mono data readout (timestamps, deltas, table values). -->
     <Style x:Key="Text.Numeral" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Font.Mono}"/>
         <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
@@ -97,11 +174,22 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
     </Style>
 
+    <!-- Bold condensed DIN for the big readings — the gauge voice. -->
+    <Style x:Key="Text.Display" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Font.DisplayCond}"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+    </Style>
+
     <Style x:Key="Text.H1" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}"/>
-        <Setter Property="FontSize" Value="20"/>
+        <Setter Property="FontFamily" Value="{StaticResource Font.Display}"/>
+        <Setter Property="FontSize" Value="22"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+    </Style>
+
+    <Style x:Key="Text.H2" TargetType="TextBlock" BasedOn="{StaticResource Text.H1}">
+        <Setter Property="FontSize" Value="15"/>
     </Style>
 
     <!-- ============================== panels -->
@@ -110,7 +198,7 @@
         <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
         <Setter Property="BorderBrush" Value="{StaticResource Brush.Stroke}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="CornerRadius" Value="3"/>
+        <Setter Property="CornerRadius" Value="0"/>
         <Setter Property="Padding" Value="16,14"/>
     </Style>
 
@@ -118,31 +206,79 @@
         <Setter Property="Background" Value="{StaticResource Brush.PanelHigh}"/>
         <Setter Property="BorderBrush" Value="{StaticResource Brush.Stroke}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="CornerRadius" Value="2"/>
+        <Setter Property="CornerRadius" Value="0"/>
         <Setter Property="Padding" Value="8,3"/>
     </Style>
 
-    <!-- Instrument fieldset: the section label sits ON the border line. -->
-    <Style x:Key="Fieldset" TargetType="HeaderedContentControl">
+    <!-- Kept for ad-hoc header rules (2px-high grid). -->
+    <Style x:Key="IndexRule" TargetType="Grid">
+        <Setter Property="Height" Value="2"/>
+    </Style>
+
+    <!-- Module: the lead section container — ember overline + hairline rule +
+         hazard ribbon, chamfered top-right corner, L-brackets. ONE lead module
+         (or one matched pair) per screen; everything else uses Module.Quiet. -->
+    <Style x:Key="Module" TargetType="HeaderedContentControl">
         <Setter Property="Focusable" Value="False"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="HeaderedContentControl">
-                    <Grid>
-                        <Border Margin="0,7,0,0"
-                                Background="{StaticResource Brush.Panel}"
-                                BorderBrush="{StaticResource Brush.Stroke}"
-                                BorderThickness="1" CornerRadius="3"
-                                Padding="16,20,16,15">
-                            <ContentPresenter/>
-                        </Border>
-                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
-                                Margin="12,0,0,0" Background="{StaticResource Brush.Bg}" Padding="5,0">
-                            <TextBlock Text="{TemplateBinding Header}"
-                                       FontFamily="{StaticResource Font.Mono}" FontSize="10"
-                                       Foreground="{StaticResource Brush.TextDim}"/>
-                        </Border>
-                    </Grid>
+                    <controls:TechBorder Background="{StaticResource Brush.Panel}"
+                                         BorderBrush="{StaticResource Brush.Stroke}"
+                                         BorderThickness="1" CutTopRight="12"
+                                         Brackets="True" BracketBrush="{StaticResource Brush.Bracket}" BracketLength="13"
+                                         Padding="16,12,16,15">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" Margin="0,0,0,13">
+                                <TextBlock DockPanel.Dock="Left" Style="{StaticResource Text.Overline}"
+                                           ui:Tracking.Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}"
+                                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Rectangle DockPanel.Dock="Right" Width="42" Height="7"
+                                           Fill="{StaticResource Brush.Hazard}" VerticalAlignment="Center"
+                                           Margin="10,0,14,0"/>
+                                <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <ContentPresenter Grid.Row="1"/>
+                        </Grid>
+                    </controls:TechBorder>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Module.Quiet: supporting sections. Same plate, but the title is quiet,
+         the rule is bare, and there are no brackets or ribbon — hierarchy comes
+         from withholding the signature, not repeating it. -->
+    <Style x:Key="Module.Quiet" TargetType="HeaderedContentControl">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="HeaderedContentControl">
+                    <controls:TechBorder Background="{StaticResource Brush.Panel}"
+                                         BorderBrush="{StaticResource Brush.Stroke}"
+                                         BorderThickness="1" CutTopRight="12"
+                                         Padding="16,12,16,15">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" Margin="0,0,0,13">
+                                <TextBlock DockPanel.Dock="Left" Style="{StaticResource Text.Overline}"
+                                           Foreground="{StaticResource Brush.TextDim}"
+                                           ui:Tracking.Text="{Binding Header, RelativeSource={RelativeSource TemplatedParent}}"
+                                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}"
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <ContentPresenter Grid.Row="1"/>
+                        </Grid>
+                    </controls:TechBorder>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -150,10 +286,11 @@
 
     <!-- ============================== buttons -->
 
+    <!-- Ghost: outlined instrument button, mono caps; hover lights the edge ember. -->
     <Style x:Key="ButtonBase" TargetType="Button">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
-        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Brush.Stroke}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="FontFamily" Value="{StaticResource Font.Mono}"/>
         <Setter Property="FontSize" Value="11"/>
@@ -163,15 +300,16 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="bg" Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="2" Padding="{TemplateBinding Padding}">
+                    <controls:TechBorder x:Name="bg" Background="{TemplateBinding Background}"
+                                         BorderBrush="{TemplateBinding BorderBrush}"
+                                         BorderThickness="{TemplateBinding BorderThickness}"
+                                         CutTopRight="7" Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    </controls:TechBorder>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="bg" Property="Background" Value="{StaticResource Brush.PanelHigh}"/>
+                            <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource Brush.AccentEdge}"/>
                             <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
@@ -186,26 +324,26 @@
         </Setter>
     </Style>
 
-    <!-- Amber outline — the one loud button per screen. -->
+    <!-- Filled ember plate — the one loud button per screen (the
+         selected-plate language). -->
     <Style x:Key="Button.Primary" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
-        <Setter Property="BorderBrush" Value="{StaticResource Brush.Accent}"/>
-        <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
+        <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+        <Setter Property="Foreground" Value="#FFF7EF"/>
+        <Setter Property="FontWeight" Value="Bold"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="bg" Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                            CornerRadius="2" Padding="{TemplateBinding Padding}">
+                    <controls:TechBorder x:Name="bg" Background="{TemplateBinding Background}"
+                                         BorderThickness="0" CutTopRight="8"
+                                         Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    </controls:TechBorder>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="bg" Property="Background" Value="{StaticResource Brush.AccentDim}"/>
-                            <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource Brush.AccentBright}"/>
-                            <Setter Property="Foreground" Value="{StaticResource Brush.AccentBright}"/>
+                            <Setter TargetName="bg" Property="Background" Value="#FF7E2E"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="bg" Property="Background" Value="#1F1A10"/>
+                            <Setter TargetName="bg" Property="Background" Value="#C9520F"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.35"/>
@@ -218,7 +356,7 @@
 
     <Style x:Key="Button.Ghost" TargetType="Button" BasedOn="{StaticResource ButtonBase}"/>
 
-    <!-- Bare amber text action (inline links). -->
+    <!-- Bare ember text action (inline links). -->
     <Style x:Key="Button.Link" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
         <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
         <Setter Property="Padding" Value="2,4"/>
@@ -246,25 +384,46 @@
         <Setter Property="Width" Value="40"/>
         <Setter Property="Height" Value="30"/>
         <Setter Property="Padding" Value="0"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
         <Setter Property="FontSize" Value="9.5"/>
         <Setter Property="Foreground" Value="{StaticResource Brush.TextFaint}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bg" Background="Transparent">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bg" Property="Background" Value="{StaticResource Brush.PanelHigh}"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="bg" Property="Background" Value="{StaticResource Brush.AccentDim}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
-    <!-- Left rail navigation: plain words, a 2 px amber bar for the active one. -->
+    <!-- Top tab navigation: tracked DIN caps, ember underline when active
+         (the console header tab). -->
     <Style x:Key="Button.Nav" TargetType="RadioButton">
         <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="RadioButton">
-                    <Grid Height="34" Background="Transparent">
-                        <Rectangle x:Name="bar" Width="2" Fill="{StaticResource Brush.Accent}"
-                                   HorizontalAlignment="Left" Margin="0,8" Opacity="0"/>
-                        <TextBlock Text="{TemplateBinding Content}"
-                                   FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
+                    <Grid Background="Transparent" SnapsToDevicePixels="True">
+                        <TextBlock ui:Tracking.Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"
+                                   FontFamily="{StaticResource Font.Display}" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{TemplateBinding Foreground}"
-                                   VerticalAlignment="Center" Margin="18,0,0,0"/>
+                                   VerticalAlignment="Center" Margin="15,0"/>
+                        <Rectangle x:Name="bar" Height="2.5" Fill="{StaticResource Brush.Accent}"
+                                   VerticalAlignment="Bottom" Margin="12,0" Opacity="0"/>
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -272,7 +431,7 @@
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="bar" Property="Opacity" Value="1"/>
-                            <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.3"/>
@@ -283,7 +442,7 @@
         </Setter>
     </Style>
 
-    <!-- Segmented selector: mono caps, amber underline on the active segment. -->
+    <!-- Segmented selector: mono caps, ember underline on the active segment. -->
     <Style x:Key="Seg" TargetType="RadioButton">
         <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
         <Setter Property="Cursor" Value="Hand"/>
@@ -304,7 +463,7 @@
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="line" Property="Opacity" Value="1"/>
-                            <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
+                            <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -326,7 +485,7 @@
                                 <Thumb>
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Border Background="#332D25" CornerRadius="3" Margin="1"/>
+                                            <Border Background="#3B2A1D" CornerRadius="2" Margin="1"/>
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
@@ -356,10 +515,10 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">
-                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="1" CornerRadius="2" Padding="{TemplateBinding Padding}">
+                    <controls:TechBorder Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                         BorderThickness="1" CutTopRight="7" Padding="{TemplateBinding Padding}">
                         <ContentPresenter/>
-                    </Border>
+                    </controls:TechBorder>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -373,10 +532,10 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
-                    <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="1" CornerRadius="3" Padding="5">
+                    <controls:TechBorder Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                         BorderThickness="1" CutTopRight="8" Padding="5">
                         <StackPanel IsItemsHost="True"/>
-                    </Border>
+                    </controls:TechBorder>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -388,12 +547,12 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
-                    <Border x:Name="bg" CornerRadius="2" Padding="11,7" Background="Transparent">
+                    <Border x:Name="bg" Padding="11,7" Background="Transparent">
                         <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
-                            <Setter TargetName="bg" Property="Background" Value="#2A251E"/>
+                            <Setter TargetName="bg" Property="Background" Value="{StaticResource Brush.AccentDim}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -413,6 +572,7 @@
         <Setter Property="Background" Value="{StaticResource Brush.InputBg}"/>
         <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
         <Setter Property="CaretBrush" Value="{StaticResource Brush.Accent}"/>
+        <Setter Property="SelectionBrush" Value="{StaticResource Brush.Accent}"/>
         <Setter Property="BorderBrush" Value="{StaticResource Brush.Stroke}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="9,5"/>
@@ -424,7 +584,7 @@
                 <ControlTemplate TargetType="TextBox">
                     <Border x:Name="bg" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="2">
+                            CornerRadius="0">
                         <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
                                       VerticalAlignment="Center"/>
                     </Border>
@@ -446,7 +606,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
                     <StackPanel Orientation="Horizontal" Background="Transparent">
-                        <Border x:Name="box" Width="15" Height="15" CornerRadius="2"
+                        <Border x:Name="box" Width="15" Height="15"
                                 Background="{StaticResource Brush.InputBg}"
                                 BorderBrush="{StaticResource Brush.Stroke}" BorderThickness="1"
                                 VerticalAlignment="Center">
@@ -478,11 +638,11 @@
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
                     <StackPanel Orientation="Horizontal" Background="Transparent">
-                        <Border x:Name="track" Width="34" Height="18" CornerRadius="2"
+                        <Border x:Name="track" Width="34" Height="18"
                                 Background="{StaticResource Brush.InputBg}"
                                 BorderBrush="{StaticResource Brush.Stroke}" BorderThickness="1"
                                 VerticalAlignment="Center">
-                            <Rectangle x:Name="thumb" Width="12" Height="12" RadiusX="1" RadiusY="1"
+                            <Rectangle x:Name="thumb" Width="12" Height="12"
                                        Fill="{StaticResource Brush.TextFaint}"
                                        HorizontalAlignment="Left" Margin="2,0"/>
                         </Border>
@@ -511,13 +671,13 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Slider">
                     <Grid>
-                        <Border Height="3" CornerRadius="1" Background="{StaticResource Brush.PanelHigh}" VerticalAlignment="Center"/>
+                        <Border Height="3" Background="{StaticResource Brush.PanelHigh}" VerticalAlignment="Center"/>
                         <Track x:Name="PART_Track">
                             <Track.DecreaseRepeatButton>
                                 <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
                                     <RepeatButton.Template>
                                         <ControlTemplate TargetType="RepeatButton">
-                                            <Border Height="3" CornerRadius="1" Background="{StaticResource Brush.Accent}"
+                                            <Border Height="3" Background="{StaticResource Brush.Accent}"
                                                     VerticalAlignment="Center"/>
                                         </ControlTemplate>
                                     </RepeatButton.Template>
@@ -536,7 +696,7 @@
                                 <Thumb Width="6" Height="16">
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
-                                            <Rectangle Fill="{StaticResource Brush.Accent}" RadiusX="1" RadiusY="1"/>
+                                            <Rectangle Fill="{StaticResource Brush.Accent}"/>
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
@@ -550,17 +710,19 @@
 
     <!-- ============================== progress bar (thin load bar) -->
 
+    <!-- Load is effort, not heat and not interaction — it reads bronze, so the
+         thermal colors and the ember accent keep their meaning. -->
     <Style x:Key="LoadBar" TargetType="ProgressBar">
         <Setter Property="Height" Value="3"/>
         <Setter Property="Background" Value="{StaticResource Brush.PanelHigh}"/>
-        <Setter Property="Foreground" Value="#8A8071"/>
+        <Setter Property="Foreground" Value="#8A5A2C"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ProgressBar">
                     <Grid>
-                        <Border Background="{TemplateBinding Background}" CornerRadius="1.5"/>
-                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="1.5"
+                        <Border Background="{TemplateBinding Background}"/>
+                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}"
                                 HorizontalAlignment="Left"/>
                         <Border x:Name="PART_Track"/>
                     </Grid>

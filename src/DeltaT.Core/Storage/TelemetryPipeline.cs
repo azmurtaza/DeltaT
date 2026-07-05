@@ -47,12 +47,25 @@ public sealed class TelemetryPipeline : IDisposable
             long hour = ts / 3600 * 3600;
             long day = ts / 86400;
 
+            // Chassis fan proxy: laptops rarely expose the CPU fan directly, but
+            // the fans they do expose (GPU, board) share the heatsink assembly
+            // and ramp together — including manual overrides. Paste components
+            // without their own fan sensor aggregate under this proxy so scoring
+            // can tell "genuinely cooler" from "fans cranked".
+            double? chassisFan = null;
             foreach (ComponentReading c in snap.Components)
             {
+                if (c.FanRpm is { } f && (chassisFan is not { } cf || f > cf))
+                    chassisFan = f;
+            }
+
+            foreach (ComponentReading c in snap.Components)
+            {
+                // Raw rows stay honest per-sensor (null = hardware doesn't expose it).
                 _rawBatch.Add(new RawSampleRow(
                     ts, c.Kind, c.Name, c.TemperatureC, c.HotspotC, c.LoadPercent,
                     c.FanRpm, c.PowerW, c.IsThrottling, ambient, snap.OnAcPower));
-                Accumulate(minute, c, ambient, snap.OnAcPower);
+                Accumulate(minute, c, ambient, snap.OnAcPower, chassisFan);
             }
 
             // Minute rolled over → everything accumulated for earlier minutes is final.
@@ -84,7 +97,7 @@ public sealed class TelemetryPipeline : IDisposable
         }
     }
 
-    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc)
+    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan)
     {
         if (c.TemperatureC is not { } temp)
             return;
@@ -111,7 +124,7 @@ public sealed class TelemetryPipeline : IDisposable
             acc.DeltaSum += temp - amb;
             acc.DeltaN++;
         }
-        if (c.FanRpm is { } fan)
+        if ((c.FanRpm ?? (c.Kind.HasPaste() ? chassisFan : null)) is { } fan)
         {
             acc.FanSum += fan;
             acc.FanN++;

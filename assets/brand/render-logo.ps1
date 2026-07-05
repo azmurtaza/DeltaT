@@ -1,6 +1,7 @@
-# DeltaT brand renderer -- "Signal and Soot"
-# Draws the mark (amber delta raised above an off-white datum line) natively at
+# DeltaT brand renderer -- "Signal and Soot", ember edition
+# Draws the mark (ember delta raised above an off-white datum line) natively at
 # every size: 1024 master PNG, specimen plate PNG, and a multi-size .ico.
+# Palette matches the ember-console UI theme (Themes/DeltaT.xaml).
 Add-Type -AssemblyName System.Drawing
 
 # Paths derive from this script's location (assets/brand/) so it runs anywhere.
@@ -8,11 +9,13 @@ $brand  = $PSScriptRoot
 $repo   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $appres = Join-Path $repo "src\DeltaT.App\Assets"
 
-$soot      = [System.Drawing.Color]::FromArgb(255, 0x13, 0x11, 0x10)
-$amber     = [System.Drawing.Color]::FromArgb(255, 0xE2, 0xA1, 0x44)
-$paper     = [System.Drawing.Color]::FromArgb(255, 0xE9, 0xE1, 0xD2)
-$faint     = [System.Drawing.Color]::FromArgb(255, 0x6A, 0x61, 0x52)
-$hairline  = [System.Drawing.Color]::FromArgb(255, 0x3A, 0x34, 0x2C)
+$soot      = [System.Drawing.Color]::FromArgb(255, 0x10, 0x0A, 0x06)
+$emberHi   = [System.Drawing.Color]::FromArgb(255, 0xFF, 0x8A, 0x2E)   # delta gradient, apex
+$emberLo   = [System.Drawing.Color]::FromArgb(255, 0xE9, 0x3A, 0x2B)   # delta gradient, base
+$ember     = [System.Drawing.Color]::FromArgb(255, 0xF2, 0x6A, 0x1B)   # solid signal (text accents)
+$paper     = [System.Drawing.Color]::FromArgb(255, 0xF2, 0xE8, 0xDC)
+$faint     = [System.Drawing.Color]::FromArgb(255, 0x6E, 0x5C, 0x4B)
+$hairline  = [System.Drawing.Color]::FromArgb(255, 0x42, 0x2F, 0x1F)
 
 # Non-ASCII glyphs built from code points so the source file stays pure ASCII
 # (Windows PowerShell 5.1 reads .ps1 as ANSI and would otherwise mangle them).
@@ -40,6 +43,8 @@ function Get-RoundRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
 }
 
 # The mark: outlined delta over a datum bar. Geometry scales with box size.
+# The delta carries the ember gradient (bright apex, red-hot base) -- the one
+# concession to flair; everything else stays flat.
 function Draw-Mark($g, [float]$cx, [float]$top, [float]$W) {
     $s   = [Math]::Max(2.0, $W * 0.17)     # stroke weight
     $H   = $W * 0.866                      # equilateral height
@@ -49,7 +54,11 @@ function Draw-Mark($g, [float]$cx, [float]$top, [float]$W) {
     $bl   = New-Object System.Drawing.PointF(($cx - $W / 2), ($top + $H))
     $br   = New-Object System.Drawing.PointF(($cx + $W / 2), ($top + $H))
 
-    $amberBrush = New-Object System.Drawing.SolidBrush($script:amber)
+    # Pad the gradient rect a hair so antialiased edge pixels can't wrap the gradient.
+    $gradRect = New-Object System.Drawing.RectangleF(($cx - $W / 2 - 2), ($top - 2), ($W + 4), ($H + 4))
+    $amberBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+        $gradRect, $script:emberHi, $script:emberLo,
+        [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
     $paperBrush = New-Object System.Drawing.SolidBrush($script:paper)
 
     # Outer triangle, then carve the inner hole (uniform inset) unless too small.
@@ -155,7 +164,7 @@ $g.DrawLine($dimPen, ($dimX - 7.0), $datumY, ($dimX + 7.0), $datumY)
 $fontS = Get-MonoFont 17 ([System.Drawing.FontStyle]::Regular)
 $fontD = Get-MonoFont 24 ([System.Drawing.FontStyle]::Bold)
 $faintBrush = New-Object System.Drawing.SolidBrush($faint)
-$amberBrush = New-Object System.Drawing.SolidBrush($amber)
+$amberBrush = New-Object System.Drawing.SolidBrush($ember)
 
 $sfC = New-Object System.Drawing.StringFormat
 $sfC.Alignment = [System.Drawing.StringAlignment]::Center

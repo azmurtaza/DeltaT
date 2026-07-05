@@ -4,8 +4,8 @@ using System.Windows.Media;
 namespace DeltaT.App.Controls;
 
 /// <summary>Minimal line trace for the last ~10 minutes of one metric: a single
-/// hairline with a dot on the newest point. No fill, no gradient — the shape is
-/// the information.</summary>
+/// warm-slate hairline with an ember dot on the newest point — the "live"
+/// cursor. No fill — the shape is the information.</summary>
 public sealed class Sparkline : FrameworkElement
 {
     public static readonly DependencyProperty ValuesProperty = DependencyProperty.Register(
@@ -14,10 +14,33 @@ public sealed class Sparkline : FrameworkElement
 
     public static readonly DependencyProperty LineColorProperty = DependencyProperty.Register(
         nameof(LineColor), typeof(Color), typeof(Sparkline),
-        new FrameworkPropertyMetadata(Color.FromRgb(0x8A, 0x80, 0x71), FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(Color.FromRgb(0x5C, 0x4A, 0x3A), FrameworkPropertyMetadataOptions.AffectsRender));
 
     public IReadOnlyList<double>? Values { get => (IReadOnlyList<double>?)GetValue(ValuesProperty); set => SetValue(ValuesProperty, value); }
     public Color LineColor { get => (Color)GetValue(LineColorProperty); set => SetValue(LineColorProperty, value); }
+
+    private static readonly SolidColorBrush DotBrush = MakeFrozen(ThermalPalette.Accent);
+
+    // One pen per color across all sparklines (they redraw every sample tick).
+    private static readonly Dictionary<Color, Pen> PenCache = new();
+
+    private static SolidColorBrush MakeFrozen(Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+
+    private static Pen LinePen(Color c)
+    {
+        if (!PenCache.TryGetValue(c, out Pen? pen))
+        {
+            pen = new Pen(MakeFrozen(c), 1.3) { LineJoin = PenLineJoin.Round };
+            pen.Freeze();
+            PenCache[c] = pen;
+        }
+        return pen;
+    }
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -48,13 +71,8 @@ public sealed class Sparkline : FrameworkElement
         }
         line.Freeze();
 
-        Color c = LineColor;
-        var pen = new Pen(new SolidColorBrush(c), 1.3) { LineJoin = PenLineJoin.Round };
-        pen.Freeze();
-        dc.DrawGeometry(null, pen, line);
+        dc.DrawGeometry(null, LinePen(LineColor), line);
 
-        var dotBrush = new SolidColorBrush(c);
-        dotBrush.Freeze();
-        dc.DrawEllipse(dotBrush, null, points[^1], 2.0, 2.0);
+        dc.DrawEllipse(DotBrush, null, points[^1], 2.0, 2.0);
     }
 }

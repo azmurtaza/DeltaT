@@ -5,6 +5,9 @@ publish/
 artifacts/
 *.binlog
 
+# Installer build output (compiled setup .exe)
+installer/out/
+
 # IDE
 .vs/
 .idea/

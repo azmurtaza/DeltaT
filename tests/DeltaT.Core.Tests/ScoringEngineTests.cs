@@ -28,11 +28,11 @@ public class ScoringEngineTests
             recentHours, throttleEvents, soakRecent, soakBaseline,
             LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress);
 
-    private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92) =>
-        new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, null, 0);
+    private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
+        new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
 
-    private static BaselineBucket HeavyBase(double delta, int band = Warm) =>
-        new(LoadBucket.Heavy, band, delta, delta + 3, null, 200);
+    private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null) =>
+        new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200);
 
     // ------------------------------------------------------------------ core behaviours
 
@@ -107,6 +107,61 @@ public class ScoringEngineTests
             baseline: new[] { HeavyBase(delta: 60) }), Fmt);
 
         Assert.Contains(score.Reasons, r => r.Code == "delta-no-data");
+    }
+
+    // ------------------------------------------------------------------ fan normalization
+
+    [Fact]
+    public void CrankedFans_CannotFlatterTheScore()
+    {
+        // Fans manually forced ~43% above their learned speed. The measured delta
+        // sits exactly on baseline — but only because of the extra airflow, so
+        // the comparison must be corrected upward and the score must drop.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60, fan: 6000) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 4200) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "fan-normalized" && r.Text.Contains("6000 rpm"));
+        Assert.Contains(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value < 85, $"fan-assisted run must not score Fresh, got {score.Value}");
+    }
+
+    [Fact]
+    public void QuietFans_DoNotFalseAlarm()
+    {
+        // Silent fan profile: fans ~29% below baseline, temps a few degrees up
+        // purely from reduced airflow. Normalization forgives it.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 63.5, fan: 3000) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 4200) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "fan-normalized");
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value >= 85, $"quiet-fan run should stay Fresh, got {score.Value}");
+    }
+
+    [Fact]
+    public void FanWobbleInsideDeadband_LeavesComparisonUntouched()
+    {
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60.2, fan: 4400) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 4200) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "fan-normalized");
+        Assert.True(score.Value >= 85);
+    }
+
+    [Fact]
+    public void FanCorrection_IsCapped()
+    {
+        // Absurd ratio (stopped baseline data vs full blast) must not swing the
+        // comparison by more than the cap.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60, fan: 12000) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 3000) }), Fmt);
+
+        // Correction capped at +8 °C → excess 8 → penalty ≈ 32 points, not more.
+        Assert.InRange(score.Value, 55, 75);
     }
 
     // ------------------------------------------------------------------ calibration

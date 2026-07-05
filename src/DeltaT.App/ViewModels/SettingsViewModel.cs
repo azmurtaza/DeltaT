@@ -19,10 +19,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly AmbientService _ambient;
     private readonly ScoreCoordinator _scores;
     private readonly DeltaTDb _db;
-    private readonly Func<SensorSnapshot?> _latest;
 
-    public string MachineText { get; }
-    public string ProfileNotes { get; }
     public bool AutostartAvailable { get; }
 
     [ObservableProperty] private string _locationText = "";
@@ -36,7 +33,6 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _autostartEnabled;
     [ObservableProperty] private string _dbText = "";
     [ObservableProperty] private string _statusText = "";
-    [ObservableProperty] private string _limitsText = "";
 
     public ObservableCollection<GeoLocation> CityResults { get; } = new();
 
@@ -49,11 +45,7 @@ public partial class SettingsViewModel : ObservableObject
         _ambient = ambient;
         _scores = scores;
         _db = db;
-        _latest = latest;
 
-        MachineText = $"{machine.Display}\n{machine.CpuName}\n{string.Join("\n", machine.GpuNames)}\n"
-                    + $"{(machine.IsLaptop ? "Laptop" : "Desktop")} · profile: {profile.DisplayName}";
-        ProfileNotes = profile.Notes ?? "";
         AutostartAvailable = !simulated;
 
         _fahrenheit = settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
@@ -79,14 +71,6 @@ public partial class SettingsViewModel : ObservableObject
             DbText = info.Exists ? $"{_db.DbPath}\n{info.Length / 1024.0 / 1024.0:0.##} MB" : _db.DbPath;
         }
         catch { DbText = _db.DbPath; }
-
-        SensorSnapshot? snap = _latest();
-        var limits = new List<string>();
-        if (snap?.Find(ComponentKind.Cpu)?.ThrottleLimitC is { } cpuLimit)
-            limits.Add($"CPU TjMax {cpuLimit:0}° (read from the silicon)");
-        if (snap?.Find(ComponentKind.GpuDiscrete)?.ThrottleLimitC is { } gpuLimit)
-            limits.Add($"GPU throttle point {gpuLimit:0}°");
-        LimitsText = string.Join("\n", limits);
     }
 
     partial void OnFahrenheitChanged(bool value) => _settings.SetBool(SettingsKeys.UnitsFahrenheit, value);

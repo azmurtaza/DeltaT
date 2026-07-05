@@ -62,7 +62,7 @@ public partial class ComponentCardViewModel : ObservableObject
             _history.Enqueue(t);
             while (_history.Count > SparkCapacity)
                 _history.Dequeue();
-            Spark = _history.ToList();
+            Spark = _history.ToArray();
         }
 
         Load = r.LoadPercent ?? 0;
@@ -80,8 +80,10 @@ public partial class ComponentCardViewModel : ObservableObject
         {
             double deltaC = temp - (amb + roomOffsetC);
             double shown = fahrenheit ? deltaC * 9 / 5 : deltaC;
-            string reference = Math.Abs(roomOffsetC) > 0.05 ? "room (est)" : "outside";
-            DeltaText = $"Δ {shown:+0.#;-0.#}° vs {reference}";
+            // The reference is stated once in the ledger caption; rows only
+            // flag the exception (indoor offset shifts it to room).
+            string suffix = Math.Abs(roomOffsetC) > 0.05 ? " vs room" : "";
+            DeltaText = $"Δ {shown:+0.#;-0.#}°{suffix}";
         }
         else
         {

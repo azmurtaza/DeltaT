@@ -24,7 +24,11 @@ public partial class MainViewModel : ObservableObject
     private readonly AmbientService _ambient;
     private readonly ScoreCoordinator _scores;
     private readonly SettingsStore _settings;
+    private readonly MonitoringService _monitor;
     private readonly Dictionary<string, ComponentCardViewModel> _cardsById = new();
+    private SensorSnapshot? _pendingSnapshot;
+    private DispatcherTimer? _healthTimer;
+    private bool _needsAdmin;
 
     public string MachineName { get; }
     public string ProfileName { get; }
@@ -35,6 +39,7 @@ public partial class MainViewModel : ObservableObject
     public TrendsViewModel Trends { get; }
     public RemarksViewModel RemarksFeed { get; }
     public SettingsViewModel Settings { get; }
+    public DeviceViewModel Device { get; }
     public OnboardingViewModel Onboarding { get; }
     public bool IsFirstRun { get; }
 
@@ -48,8 +53,48 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private Brush _remarkDot = new SolidColorBrush(ThermalPalette.Accent);
     [ObservableProperty] private bool _simulated;
 
-    /// <summary>UI updates pause entirely while the window is hidden (perf budget).</summary>
-    public bool UiVisible { get; set; } = true;
+    /// <summary>Non-empty when the readings can't be trusted right now
+    /// (monitoring paused, sensors stalled, CPU sensor locked behind elevation).
+    /// The dashboard shows it as a warning strip — stale data must never pass
+    /// silently as live data.</summary>
+    [ObservableProperty] private string _sensorNotice = "";
+
+    /// <summary>Whether the process holds admin rights (CPU temps need the kernel driver).</summary>
+    public bool Elevated { get; init; } = true;
+
+    private bool _uiVisible = true;
+
+    /// <summary>UI updates pause entirely while the window is hidden (perf budget).
+    /// On re-show, the latest reading is applied immediately — never a stale frame.</summary>
+    public bool UiVisible
+    {
+        get => _uiVisible;
+        set
+        {
+            if (_uiVisible == value)
+                return;
+            _uiVisible = value;
+            if (value)
+            {
+                if (_monitor.Latest is { } latest)
+                    OnSnapshot(latest);
+                UpdateSensorNotice();
+                _healthTimer ??= CreateHealthTimer();
+                _healthTimer.Start();
+            }
+            else
+            {
+                _healthTimer?.Stop();
+            }
+        }
+    }
+
+    private DispatcherTimer CreateHealthTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(5) };
+        timer.Tick += (_, _) => UpdateSensorNotice();
+        return timer;
+    }
 
     public MainViewModel(
         MachineIdentity machine,
@@ -61,30 +106,46 @@ public partial class MainViewModel : ObservableObject
         TrendsViewModel trends,
         RemarksViewModel remarksFeed,
         SettingsViewModel settingsVm,
+        DeviceViewModel deviceVm,
         OnboardingViewModel onboarding)
     {
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _ambient = ambient;
         _scores = scores;
         _settings = settings;
+        _monitor = monitor;
         MachineName = machine.Display;
         ProfileName = profile.DisplayName;
         Trends = trends;
         RemarksFeed = remarksFeed;
         Settings = settingsVm;
+        Device = deviceVm;
         Onboarding = onboarding;
         IsFirstRun = !settings.GetBool(SettingsKeys.FirstRunDone, false);
 
+        // Latest-wins delivery: at most one dispatcher hop is ever in flight, and
+        // it always applies the newest snapshot. The old per-snapshot Background-
+        // priority queue could be starved for minutes by a full-tilt CPU (stress
+        // tests, games), leaving the dashboard frozen at pre-load temperatures.
         monitor.SnapshotCaptured += snap =>
         {
             if (!UiVisible && _cardsById.Count > 0)
                 return;
-            _dispatcher.BeginInvoke(DispatcherPriority.Background, () => OnSnapshot(snap));
+            if (Interlocked.Exchange(ref _pendingSnapshot, snap) is null)
+                _dispatcher.BeginInvoke(DispatcherPriority.DataBind, DrainPendingSnapshot);
         };
         ambient.Updated += _ => _dispatcher.BeginInvoke(UpdateWeather);
         scores.ScoresUpdated += dict => _dispatcher.BeginInvoke(() => UpdateScores(dict));
 
         UpdateWeather();
+        _healthTimer = CreateHealthTimer();
+        _healthTimer.Start();
+    }
+
+    private void DrainPendingSnapshot()
+    {
+        if (Interlocked.Exchange(ref _pendingSnapshot, null) is { } snap)
+            OnSnapshot(snap);
     }
 
     private void OnSnapshot(SensorSnapshot snap)
@@ -95,8 +156,11 @@ public partial class MainViewModel : ObservableObject
 
         foreach (ComponentKind kind in CardOrder)
         {
-            foreach (ComponentReading reading in snap.Components.Where(c => c.Kind == kind))
+            for (int i = 0; i < snap.Components.Count; i++)
             {
+                ComponentReading reading = snap.Components[i];
+                if (reading.Kind != kind)
+                    continue;
                 if (!_cardsById.TryGetValue(reading.Id, out ComponentCardViewModel? card))
                 {
                     card = new ComponentCardViewModel(reading);
@@ -106,6 +170,28 @@ public partial class MainViewModel : ObservableObject
                 card.Update(reading, ambient, roomOffset, fahrenheit);
             }
         }
+
+        _needsAdmin = !Simulated && !Elevated && snap.Find(ComponentKind.Cpu) is { TemperatureC: null };
+    }
+
+    /// <summary>Runs every 5 s while the window is visible; never while hidden.</summary>
+    private void UpdateSensorNotice()
+    {
+        string notice = "";
+        if (_monitor.IsPaused)
+        {
+            notice = "MONITORING PAUSED — resume from the tray menu; readings below are frozen";
+        }
+        else if (_monitor.Latest is { } latest)
+        {
+            double ageSeconds = (DateTimeOffset.UtcNow - latest.TimestampUtc).TotalSeconds;
+            double limit = Math.Max(10, _monitor.Interval.TotalSeconds * 4);
+            if (ageSeconds > limit)
+                notice = $"SENSORS STALLED — last reading {ageSeconds:0} s ago; values shown may be outdated";
+            else if (_needsAdmin)
+                notice = "CPU temperature locked — restart DeltaT and accept the administrator prompt to unlock it";
+        }
+        SensorNotice = notice;
     }
 
     private void UpdateWeather()

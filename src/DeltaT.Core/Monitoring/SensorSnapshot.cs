@@ -14,8 +14,9 @@ public sealed record ComponentReading(
     bool IsThrottling,
     double? ThrottleLimitC)
 {
-    /// <summary>Stable identity for storage/UI (a machine can have several drives).</summary>
-    public string Id => $"{Kind}:{Name}";
+    /// <summary>Stable identity for storage/UI (a machine can have several drives).
+    /// Materialized once — it gets used as a dictionary key on every sample.</summary>
+    public string Id { get; } = $"{Kind}:{Name}";
 
     public LoadBucket? Bucket => LoadPercent is { } p ? LoadBuckets.FromPercent(p) : null;
 }
@@ -25,8 +26,15 @@ public sealed record SensorSnapshot(
     bool OnAcPower,
     IReadOnlyList<ComponentReading> Components)
 {
-    public ComponentReading? Find(ComponentKind kind) =>
-        Components.FirstOrDefault(c => c.Kind == kind);
+    public ComponentReading? Find(ComponentKind kind)
+    {
+        for (int i = 0; i < Components.Count; i++)
+        {
+            if (Components[i].Kind == kind)
+                return Components[i];
+        }
+        return null;
+    }
 }
 
 /// <summary>The only doorway to sensors. The hardware implementation wraps

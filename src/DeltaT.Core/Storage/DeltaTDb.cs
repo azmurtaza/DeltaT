@@ -65,7 +65,10 @@ public sealed class DeltaTDb
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA busy_timeout=5000;";
+        // NORMAL is the recommended synchronous level under WAL: batched sample
+        // writes stop forcing a full fsync each commit, and WAL still guarantees
+        // consistency (worst case on power loss: the last unsynced batch).
+        cmd.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
         cmd.ExecuteNonQuery();
         return conn;
     }

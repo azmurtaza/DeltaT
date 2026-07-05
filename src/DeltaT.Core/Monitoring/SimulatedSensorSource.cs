@@ -25,6 +25,7 @@ public sealed class SimulatedSensorSource : ISensorSource
     private double _ssdTemp;
     private double _cpuLoad;
     private double _gpuLoad;
+    private double _fanRpm;
     private int _phaseSecondsLeft;
     private Phase _phase = Phase.Idle;
 
@@ -76,13 +77,22 @@ public sealed class SimulatedSensorSource : ISensorSource
         _cpuTemp = Math.Min(_cpuTemp, CpuLimit);
         _gpuTemp = Math.Min(_gpuTemp, GpuLimit);
 
+        // Fan follows heat like a laptop EC curve: quiet floor near idle, ramps
+        // with the hotter die. Dusty airflow spins harder for the same result.
+        double hottest = Math.Max(_cpuTemp, _gpuTemp);
+        double fanTarget = hottest < ambient + 14 ? 0 : 1700 + Math.Max(0, hottest - (ambient + 14)) * 95;
+        if (Scenario == SimScenario.DustyAirflow)
+            fanTarget *= 1.14;
+        _fanRpm = Clamp(Approach(_fanRpm, fanTarget, 8, dt) + Noise(40), 0, 6200);
+        double? fan = _fanRpm > 500 ? Math.Round(_fanRpm) : null;
+
         var components = new List<ComponentReading>
         {
             new(ComponentKind.Cpu, "Simulated Core i5-13420H",
                 Math.Round(_cpuTemp, 1), null, Math.Round(_cpuLoad, 1), null,
                 Math.Round(8 + _cpuLoad * 0.5, 1), null, cpuThrottle, CpuLimit),
             new(ComponentKind.GpuDiscrete, "Simulated RTX 3050 Laptop",
-                Math.Round(_gpuTemp, 1), Math.Round(_gpuTemp + 7, 1), Math.Round(_gpuLoad, 1), null,
+                Math.Round(_gpuTemp, 1), Math.Round(_gpuTemp + 7, 1), Math.Round(_gpuLoad, 1), fan,
                 Math.Round(5 + _gpuLoad * 0.7, 1), null, gpuThrottle, GpuLimit),
             new(ComponentKind.Storage, "Simulated NVMe SSD",
                 Math.Round(_ssdTemp, 1), null, Math.Round(Math.Min(100, _cpuLoad * 0.3 + 1), 1), null, null,

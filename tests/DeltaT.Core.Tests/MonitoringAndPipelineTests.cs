@@ -211,6 +211,36 @@ public class TelemetryPipelineTests : IDisposable
         });
     }
 
+    [Fact]
+    public void CpuMinutes_InheritChassisFan_WhenCpuHasNoFanSensor()
+    {
+        // Laptops rarely expose the CPU fan; the GPU fan is the chassis proxy so
+        // fan-normalized scoring can see manual overrides on the CPU side too.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
+        {
+            source.Enqueue(new SensorSnapshot(t, true, new[]
+            {
+                new ComponentReading(ComponentKind.Cpu, "CPU", 90, null, 95, null, null, null, false, 100),
+                new ComponentReading(ComponentKind.GpuDiscrete, "GPU", 70, null, 40, 5000, null, null, false, 87),
+            }));
+        }
+        source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5)); // roll the last minute over
+        while (source.Remaining > 0)
+            monitor.Capture();
+        pipeline.Flush();
+
+        var stats = _repo.GetBucketStats(ComponentKind.Cpu, "CPU",
+            Snap.T0.AddMinutes(-1).ToUnixTimeSeconds(), Snap.T0.AddMinutes(10).ToUnixTimeSeconds());
+        BucketStat heavy = Assert.Single(stats, s => s.Bucket == LoadBucket.Heavy);
+        Assert.NotNull(heavy.FanAvg);
+        Assert.Equal(5000, heavy.FanAvg!.Value, 1.0);
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
