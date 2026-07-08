@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:DeltaT.App.Controls"
         xmlns:ui="clr-namespace:DeltaT.App.Ui"
-        Title="DeltaT — thermal fingerprint" Width="520" Height="580"
+        Title="DeltaT - thermal fingerprint" Width="520" Height="580"
         Icon="pack://application:,,,/Assets/deltat.ico"
         Background="{StaticResource Brush.BgGlow}" Foreground="{StaticResource Brush.Text}"
         FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
@@ -47,19 +47,19 @@
             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap">
                 DeltaT idles for 25 seconds, then loads every CPU core for 2½ minutes and watches:
                 how fast the heat soaks in, where it settles, and whether the silicon has to throttle.
-                Same test, same numbers — run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
+                Same test, same numbers - run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
             </TextBlock>
             <StackPanel Margin="0,16,0,0">
                 <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="BEFORE YOU START"/>
                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="19" Margin="0,6,0,0" TextWrapping="Wrap"
-                           Text="Plug in the charger; battery runs aren't comparable. Close heavy apps so the idle phase is actually idle. Fans will spin up — that's the point."/>
+                           Text="Plug in the charger; battery runs aren't comparable. Close heavy apps so the idle phase is actually idle. Fans will spin up - that's the point."/>
             </StackPanel>
             <Border Background="{StaticResource Brush.PanelHigh}" BorderBrush="{StaticResource Brush.Warm}"
                     BorderThickness="2,0,0,0"
                     Padding="12,9" Margin="0,16,0,0"
                     Visibility="{Binding OnBattery, Converter={StaticResource BoolToVis}}">
                 <TextBlock FontSize="12" Foreground="{StaticResource Brush.Warm}"
-                           Text="You're on battery right now — results will be recorded but flagged."/>
+                           Text="You're on battery right now - results will be recorded but flagged."/>
             </Border>
             <Button Style="{StaticResource Button.Primary}" Content="START THE TEST" Padding="20,10"
                     HorizontalAlignment="Left" Margin="0,22,0,0"

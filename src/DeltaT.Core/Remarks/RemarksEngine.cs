@@ -119,7 +119,7 @@ public sealed class RemarksEngine
             }.Where(s => s is not null));
             string outside = ctx.AmbientC is { } a ? $" It's {a:0}° outside{(ctx.City is { } city ? $" in {city}" : "")}." : "";
             return One("hello", ctx, RemarkSeverity.Notice,
-                $"First readings are in — {temps}.{outside} DeltaT is watching now; give it about a week to learn what normal looks like here.");
+                $"First readings are in - {temps}.{outside} DeltaT is watching now; give it about a week to learn what normal looks like here.");
         }),
 
         new Rule("temp-climbing", TimeSpan.FromHours(2), ctx =>
@@ -155,7 +155,7 @@ public sealed class RemarksEngine
                 if (snap.Find(kind) is { TemperatureC: { } t }
                     && ctx.AllTimeMax.TryGetValue(kind, out double max) && max > 40 && t > max)
                     list.Add(new Remark("record-high", ctx.NowUtc, RemarkSeverity.Notice,
-                        $"New record: {kind.Label()} just hit {t:0}° — the hottest DeltaT has ever seen it.", kind));
+                        $"New record: {kind.Label()} just hit {t:0}° - the hottest DeltaT has ever seen it.", kind));
             }
             return list;
         }),
@@ -163,37 +163,37 @@ public sealed class RemarksEngine
         new Rule("weather-hot", TimeSpan.FromHours(8), ctx =>
             ctx.AmbientC is { } a && a >= 38
                 ? One("weather-hot", ctx, RemarkSeverity.Info,
-                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the paste — DeltaT corrects for it.")
+                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the paste - DeltaT corrects for it.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("weather-cold", TimeSpan.FromHours(12), ctx =>
             ctx.AmbientC is { } a && a <= 8
                 ? One("weather-cold", ctx, RemarkSeverity.Info,
-                    $"{a:0}° outside — free cooling day. Don't let today's pretty temps fool the long-term picture; DeltaT won't.")
+                    $"{a:0}° outside - free cooling day. Don't let today's pretty temps fool the long-term picture; DeltaT won't.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("weather-stale", TimeSpan.FromHours(12), ctx =>
             ctx.AmbientStale
                 ? One("weather-stale", ctx, RemarkSeverity.Info,
-                    "Can't reach the weather service — using the last known outside temperature until it's back.")
+                    "Can't reach the weather service - using the last known outside temperature until it's back.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("on-battery", TimeSpan.FromHours(4), ctx =>
             !ctx.OnAcPower && ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket == LoadBucket.Heavy
                 ? One("on-battery", ctx, RemarkSeverity.Info,
-                    "Heavy load on battery — these readings don't count toward paste scoring (battery power limits change the physics).")
+                    "Heavy load on battery - these readings don't count toward paste scoring (battery power limits change the physics).")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("learning-daily", TimeSpan.FromHours(20), ctx =>
             !ctx.BaselineReady && ctx.LearningDay >= 1
                 ? One("learning-daily", ctx, RemarkSeverity.Info,
-                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% assembled. Use the machine normally — games and heavy work teach DeltaT the most.")
+                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% assembled. Use the machine normally - games and heavy work teach DeltaT the most.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("baseline-ready", TimeSpan.MaxValue, ctx =>
             ctx.BaselineJustBecameReady
                 ? One("baseline-ready", ctx, RemarkSeverity.Notice,
-                    "Baseline locked in. From now on, DeltaT compares this machine against itself — the only comparison that means anything.")
+                    "Baseline locked in. From now on, DeltaT compares this machine against itself - the only comparison that means anything.")
                 : Enumerable.Empty<Remark>()),
 
         // The repaste verdict is one-shot (host consumes it once), so no real cooldown needed.
@@ -215,7 +215,7 @@ public sealed class RemarksEngine
         new Rule("baseline-stale", TimeSpan.FromDays(3), ctx =>
             ctx.BaselineStale
                 ? One("baseline-stale", ctx, RemarkSeverity.Warning,
-                    $"DeltaT hadn't run in about {StaleGap(ctx.DormantDays)}. A lot can change while it's off — dust, a moved fan, a cleaning, even a repaste — so the current score is judging against an old, unverified baseline. Recalibrate (Settings) to trust it again.")
+                    $"DeltaT hadn't run in about {StaleGap(ctx.DormantDays)}. A lot can change while it's off - dust, a moved fan, a cleaning, even a repaste - so the current score is judging against an old, unverified baseline. Recalibrate (Settings) to trust it again.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("monthly-report", TimeSpan.FromDays(28), ctx =>
@@ -226,7 +226,7 @@ public sealed class RemarksEngine
             {
                 int drop = lastMonth - now;
                 string line = drop >= 6
-                    ? $"Monthly check: {kind.Label()} paste score is {now}, down {drop} from last month ({lastMonth}). The drift is real, not weather — DeltaT already corrected for that."
+                    ? $"Monthly check: {kind.Label()} paste score is {now}, down {drop} from last month ({lastMonth}). The drift is real, not weather - DeltaT already corrected for that."
                     : drop <= -4
                         ? $"Monthly check: {kind.Label()} paste score is {now}, up {-drop} from last month ({lastMonth}). Whatever changed, the paste is happier."
                         : $"Monthly check: {kind.Label()} paste score is {now}, about the same as last month ({lastMonth}). Holding steady.";
@@ -259,7 +259,7 @@ public sealed class RemarksEngine
                         $"{kind.Label()} paste score is {score.Value}. DeltaT's honest read: it's time. Fresh paste should claw back several degrees.", kind));
                 else if (score.Verdict == Verdict.Degraded)
                     list.Add(new Remark("verdict-repaste", ctx.NowUtc, RemarkSeverity.Warning,
-                        $"{kind.Label()} paste is degrading (score {score.Value}). Start planning a repaste — no emergency, but the direction is clear.", kind));
+                        $"{kind.Label()} paste is degrading (score {score.Value}). Start planning a repaste - no emergency, but the direction is clear.", kind));
             }
             return list;
         }),
@@ -267,7 +267,7 @@ public sealed class RemarksEngine
         new Rule("ssd-hot", TimeSpan.FromHours(2), ctx =>
             ctx.Latest?.Components.FirstOrDefault(c => c.Kind == ComponentKind.Storage && c.TemperatureC >= 70) is { TemperatureC: { } t }
                 ? One("ssd-hot", ctx, RemarkSeverity.Warning,
-                    $"SSD at {t:0}° — beyond comfortable. It has no paste to blame; check airflow around the drive bay.")
+                    $"SSD at {t:0}° - beyond comfortable. It has no paste to blame; check airflow around the drive bay.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("all-quiet", TimeSpan.FromDays(7), ctx =>

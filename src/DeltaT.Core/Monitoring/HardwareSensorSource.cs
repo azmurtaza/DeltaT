@@ -134,7 +134,7 @@ public sealed class HardwareSensorSource : ISensorSource
         if (now - _lastReopenUtc < ReopenCooldown)
             return;
         _lastReopenUtc = now;
-        Diagnostic?.Invoke($"sensor stall detected ({why}) — reinitializing the sensor engine");
+        Diagnostic?.Invoke($"sensor stall detected ({why}) - reinitializing the sensor engine");
         try
         {
             _computer.Close();

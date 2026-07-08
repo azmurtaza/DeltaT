@@ -46,7 +46,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
     [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. First verdict lands after about a week of normal use.";
     [ObservableProperty] private string _weatherText = "locating…";
-    [ObservableProperty] private string _weatherTooltip = "Resolving your location (cached afterwards — DeltaT never tracks you)";
+    [ObservableProperty] private string _weatherTooltip = "Resolving your location (cached afterwards - DeltaT never tracks you)";
     [ObservableProperty] private bool _weatherStale;
     [ObservableProperty] private string _latestRemark = "DeltaT is warming up…";
     [ObservableProperty] private string _latestRemarkTime = "";
@@ -180,16 +180,16 @@ public partial class MainViewModel : ObservableObject
         string notice = "";
         if (_monitor.IsPaused)
         {
-            notice = "MONITORING PAUSED — resume from the tray menu; readings below are frozen";
+            notice = "MONITORING PAUSED - resume from the tray menu; readings below are frozen";
         }
         else if (_monitor.Latest is { } latest)
         {
             double ageSeconds = (DateTimeOffset.UtcNow - latest.TimestampUtc).TotalSeconds;
             double limit = Math.Max(10, _monitor.Interval.TotalSeconds * 4);
             if (ageSeconds > limit)
-                notice = $"SENSORS STALLED — last reading {ageSeconds:0} s ago; values shown may be outdated";
+                notice = $"SENSORS STALLED - last reading {ageSeconds:0} s ago; values shown may be outdated";
             else if (_needsAdmin)
-                notice = "CPU temperature locked — restart DeltaT and accept the administrator prompt to unlock it";
+                notice = "CPU temperature locked - restart DeltaT and accept the administrator prompt to unlock it";
         }
         SensorNotice = notice;
     }
@@ -201,7 +201,7 @@ public partial class MainViewModel : ObservableObject
         {
             WeatherText = _ambient.Location is null ? "location unknown" : "weather offline";
             WeatherTooltip = _ambient.Location is null
-                ? "Couldn't resolve a location automatically — set one in Settings."
+                ? "Couldn't resolve a location automatically - set one in Settings."
                 : "Weather service unreachable; using the last known value once it exists.";
             WeatherStale = true;
             return;
@@ -212,7 +212,7 @@ public partial class MainViewModel : ObservableObject
         WeatherStale = _ambient.IsStale;
         double minutes = Math.Max(1, (DateTimeOffset.UtcNow - reading.FetchedUtc).TotalMinutes);
         string age = minutes > 90 ? $"{minutes / 60:0.#} h ago" : $"{minutes:0} min ago";
-        WeatherTooltip = $"Outside temperature in {reading.Location.Display} — fetched {age}. Refreshes every 3 h.";
+        WeatherTooltip = $"Outside temperature in {reading.Location.Display} - fetched {age}. Refreshes every 3 h.";
     }
 
     private void UpdateScores(IReadOnlyDictionary<ComponentKind, ComponentScore> scores)
@@ -230,7 +230,7 @@ public partial class MainViewModel : ObservableObject
         {
             double progress = all.Max(s => s.CalibrationProgress);
             int day = Math.Max(1, (int)(DateTimeOffset.UtcNow - _scores.EpochStart).TotalDays + 1);
-            VerdictTitle = $"Learning your machine — day {day}";
+            VerdictTitle = $"Learning your machine - day {day}";
             VerdictDetail = $"Baseline {progress * 100:0}% assembled. Use the machine normally; games and heavy work teach DeltaT fastest. Hard limits are enforced from day one.";
             return;
         }
@@ -240,9 +240,9 @@ public partial class MainViewModel : ObservableObject
         VerdictDetail = worst.Reasons.Count > 0
             ? worst.Reasons[0].Text + (worst.Hint switch
               {
-                  PatternHint.LooksLikeDust => "  Pattern points at dust/airflow more than paste — try compressed air first.",
+                  PatternHint.LooksLikeDust => "  Pattern points at dust/airflow more than paste - try compressed air first.",
                   PatternHint.LooksLikePaste => "  Pattern (fast heat-soak, throttling) points squarely at the paste.",
-                  PatternHint.Mixed => "  Signals are mixed — likely both dust and aging paste.",
+                  PatternHint.Mixed => "  Signals are mixed - likely both dust and aging paste.",
                   _ => "",
               })
             : "All quiet.";

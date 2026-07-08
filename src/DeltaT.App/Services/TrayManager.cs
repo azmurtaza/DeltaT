@@ -43,7 +43,7 @@ public sealed class TrayManager : IDisposable
             if (_monitor.IsPaused)
             {
                 // The menu can only be clicked after the constructor finished.
-                _tray!.ToolTipText = "DeltaT — monitoring paused";
+                _tray!.ToolTipText = "DeltaT - monitoring paused";
                 _lastTooltip = "";
             }
         };
@@ -61,7 +61,7 @@ public sealed class TrayManager : IDisposable
 
         _tray = new TaskbarIcon
         {
-            ToolTipText = "DeltaT — warming up",
+            ToolTipText = "DeltaT - warming up",
             ContextMenu = menu,
             IconSource = RenderIcon(null),
         };
@@ -80,7 +80,7 @@ public sealed class TrayManager : IDisposable
     public void ShowRemarkToast(DeltaT.Core.Remarks.Remark remark)
     {
         _tray.ShowBalloonTip(
-            remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? "DeltaT — needs attention" : "DeltaT noticed",
+            remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? "DeltaT - needs attention" : "DeltaT noticed",
             remark.Text,
             remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? BalloonIcon.Error : BalloonIcon.Warning);
     }

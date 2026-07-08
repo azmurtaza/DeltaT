@@ -62,7 +62,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         GeoLocation? loc = _ambient.Location;
         LocationText = loc is null
-            ? "No location set — auto-detect or search below."
+            ? "No location set - auto-detect or search below."
             : $"{loc.Display}   ({(loc.Source == "ip" ? "auto-detected" : "set manually")})";
 
         try
@@ -94,7 +94,7 @@ public partial class SettingsViewModel : ObservableObject
         bool ok = value ? AutostartService.Enable() : AutostartService.Disable();
         StatusText = ok
             ? value ? "DeltaT will start with Windows (elevated, no UAC prompt)." : "Autostart removed."
-            : "Task Scheduler said no — is DeltaT running elevated?";
+            : "Task Scheduler said no - is DeltaT running elevated?";
     }
 
     [RelayCommand]
@@ -106,7 +106,7 @@ public partial class SettingsViewModel : ObservableObject
         Searching = false;
         if (loc is null)
         {
-            StatusText = "Auto-detect failed — search for your city instead.";
+            StatusText = "Auto-detect failed - search for your city instead.";
             return;
         }
         _ambient.SetLocation(loc);
@@ -124,7 +124,7 @@ public partial class SettingsViewModel : ObservableObject
         foreach (GeoLocation r in results)
             CityResults.Add(r);
         Searching = false;
-        StatusText = results.Count == 0 ? "No matches — try a bigger nearby city." : "";
+        StatusText = results.Count == 0 ? "No matches - try a bigger nearby city." : "";
     }
 
     [RelayCommand]
@@ -144,10 +144,10 @@ public partial class SettingsViewModel : ObservableObject
             "Tell DeltaT you just replaced the thermal paste?\n\n"
             + "The learned baseline resets and a fresh learning week starts. "
             + "Once the new baseline locks, DeltaT reports exactly what the repaste bought you.",
-            "DeltaT — repaste", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            "DeltaT - repaste", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
         _scores.RegisterRepaste(DateTimeOffset.UtcNow);
-        StatusText = "Repaste logged. New baseline learning started — verdict in about a week.";
+        StatusText = "Repaste logged. New baseline learning started - verdict in about a week.";
     }
 
     [RelayCommand]
@@ -155,11 +155,11 @@ public partial class SettingsViewModel : ObservableObject
     {
         MessageBoxResult answer = MessageBox.Show(
             "Recalibrate the learned baseline?\n\n"
-            + "Use this when the cooling changed but the paste didn't — new fans, a clean-out, "
-            + "a moved rig — or after DeltaT has been off for a long stretch. The current baseline "
+            + "Use this when the cooling changed but the paste didn't - new fans, a clean-out, "
+            + "a moved rig - or after DeltaT has been off for a long stretch. The current baseline "
             + "is retired and a fresh learning week begins. This is not a repaste, so there's no "
             + "before/after verdict.",
-            "DeltaT — recalibrate", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            "DeltaT - recalibrate", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
         _scores.Recalibrate(DateTimeOffset.UtcNow);
         StatusText = "Recalibration started. Scoring pauses for about a week while DeltaT relearns.";

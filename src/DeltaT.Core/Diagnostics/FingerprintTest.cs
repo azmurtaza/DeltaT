@@ -58,7 +58,7 @@ public sealed class FingerprintTest
         _monitor.SnapshotCaptured += Collect;
         try
         {
-            await TickPhase("Settling — hands off the machine", Settle, progress, ct).ConfigureAwait(false);
+            await TickPhase("Settling - hands off the machine", Settle, progress, ct).ConfigureAwait(false);
 
             double cpuStart = TailAverage(cpuSamples, TimeSpan.FromSeconds(10)) ?? cpuSamples.LastOrDefault().Temp;
             int loadStartIndex = cpuSamples.Count;
@@ -66,7 +66,7 @@ public sealed class FingerprintTest
 
             using (var burner = new CpuBurner())
             {
-                await TickPhase("Full CPU load — let it cook", Load, progress, ct).ConfigureAwait(false);
+                await TickPhase("Full CPU load - let it cook", Load, progress, ct).ConfigureAwait(false);
             }
 
             var loadSamples = cpuSamples.Skip(loadStartIndex).ToList();

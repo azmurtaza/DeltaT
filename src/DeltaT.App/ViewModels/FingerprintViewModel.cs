@@ -88,7 +88,7 @@ public partial class FingerprintViewModel : ObservableObject
         ResultCells.Add(new StatCell("SUSTAINED", $"{result.CpuSustainedC:0.#}°"));
         ResultCells.Add(new StatCell("PEAK", $"{result.CpuPeakC:0.#}°"));
         ResultCells.Add(new StatCell("SOAK RATE", $"{result.SoakRatePerMin:0.#}°/min"));
-        ResultCells.Add(new StatCell("Δ OUTSIDE", result.CpuSustainedDeltaC is { } dd ? $"+{dd:0.#}°" : "—"));
+        ResultCells.Add(new StatCell("Δ OUTSIDE", result.CpuSustainedDeltaC is { } dd ? $"+{dd:0.#}°" : "-"));
         ResultCells.Add(new StatCell("THROTTLING", result.ThrottleSamples > 0 ? $"{result.ThrottleSamples} samples" : "none"));
         if (result.GpuWasLoaded && result.GpuPeakC is { } gp)
             ResultCells.Add(new StatCell("GPU PEAK", $"{gp:0.#}°"));
@@ -100,14 +100,14 @@ public partial class FingerprintViewModel : ObservableObject
             VerdictText = Math.Abs(diff) < 1.5
                 ? $"Versus the {when} fingerprint: unchanged ({diff:+0.#;-0.#}° weather-corrected). The paste is holding steady."
                 : diff > 0
-                    ? $"Versus the {when} fingerprint: running {diff:0.#}° hotter, weather-corrected. Rerun monthly — a steady climb is the paste drying out."
-                    : $"Versus the {when} fingerprint: {-diff:0.#}° cooler, weather-corrected. Whatever you did — it worked.";
+                    ? $"Versus the {when} fingerprint: running {diff:0.#}° hotter, weather-corrected. Rerun monthly - a steady climb is the paste drying out."
+                    : $"Versus the {when} fingerprint: {-diff:0.#}° cooler, weather-corrected. Whatever you did - it worked.";
         }
         else
         {
             VerdictText = result.OnAcPower
                 ? "First fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift."
-                : "Recorded — but this run was on battery, so power limits softened the load. Prefer plugged-in runs for comparable numbers.";
+                : "Recorded - but this run was on battery, so power limits softened the load. Prefer plugged-in runs for comparable numbers.";
         }
 
         State = "done";

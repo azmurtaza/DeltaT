@@ -213,8 +213,8 @@ public static class DemoSeeder
 
         // Shared story: repasted a month ago, baseline learned, fingerprint captured.
         Ev(30, "repaste", null, 1, "Thermal paste replaced. New baseline learning started.");
-        Ev(29.6, "fingerprint", null, 1, "Fingerprint test complete — CPU and GPU load-response curves captured.");
-        Ev(25, "remark", null, 1, "Baseline locked in. From now on, DeltaT compares this machine against itself — the only comparison that means anything.");
+        Ev(29.6, "fingerprint", null, 1, "Fingerprint test complete - CPU and GPU load-response curves captured.");
+        Ev(25, "remark", null, 1, "Baseline locked in. From now on, DeltaT compares this machine against itself - the only comparison that means anything.");
 
         // Baseline-window heat-soak references (the "healthy" soak rate).
         foreach (double d in new[] { 28.0, 26.5, 24.0 })
@@ -226,8 +226,8 @@ public static class DemoSeeder
         if (!degraded)
         {
             Ev(19, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
-            Ev(12, "fingerprint", null, 1, "Fingerprint re-run — response curves unchanged since the last check.");
-            Ev(6, "remark", ComponentKind.GpuDiscrete, 1, "New record: GPU touched 71° under load — the hottest DeltaT has seen it, still well inside spec.");
+            Ev(12, "fingerprint", null, 1, "Fingerprint re-run - response curves unchanged since the last check.");
+            Ev(6, "remark", ComponentKind.GpuDiscrete, 1, "New record: GPU touched 71° under load - the hottest DeltaT has seen it, still well inside spec.");
             Ev(1.5, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
             foreach (double d in new[] { 5.0, 3.0, 1.0 })
             {
@@ -256,8 +256,8 @@ public static class DemoSeeder
         foreach (double d in new[] { 3.4, 1.1, 0.5 })
             Ev(d, "throttle", ComponentKind.GpuDiscrete, 2, "GPU reached its thermal cap and trimmed the boost clock.");
 
-        Ev(2.2, "remark", ComponentKind.GpuDiscrete, 2, "GPU paste is degrading — the delta over baseline keeps widening. Start planning a repaste; no emergency, but the direction is clear.");
-        Ev(0.35, "remark", ComponentKind.Cpu, 3, "CPU paste has crossed into repaste territory. DeltaT's honest read: it's time — fresh paste should claw back several degrees.");
+        Ev(2.2, "remark", ComponentKind.GpuDiscrete, 2, "GPU paste is degrading - the delta over baseline keeps widening. Start planning a repaste; no emergency, but the direction is clear.");
+        Ev(0.35, "remark", ComponentKind.Cpu, 3, "CPU paste has crossed into repaste territory. DeltaT's honest read: it's time - fresh paste should claw back several degrees.");
     }
 
     // ------------------------------------------------------------------ helpers
