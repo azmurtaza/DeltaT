@@ -73,6 +73,9 @@ public static class SettingsKeys
 
     public const string BaselineEpoch = "baseline.epoch";          // increments on repaste
     public const string BaselineEpochStart = "baseline.epochStart";
+    public const string BaselineEpochReason = "baseline.epochReason"; // initial | repaste | recalibrate
+
+    public const string LastSeenUtc = "app.lastSeenUtc";           // heartbeat: last scoring pass, for dormancy detection
 
     public const string UnitsFahrenheit = "ui.fahrenheit";
     public const string CloseToTray = "ui.closeToTray";

@@ -87,7 +87,11 @@ public sealed class RemarksCoordinator : IDisposable
             BaselineReady: _scores.IsBaselineReady,
             BaselineJustBecameReady: _scores.BaselineJustBecameReady,
             CalibrationProgress: scores.Count > 0 ? scores.Values.Max(s => s.CalibrationProgress) : 0,
-            LearningDay: Math.Max(1, (int)(now - _scores.EpochStart).TotalDays + 1));
+            LearningDay: Math.Max(1, (int)(now - _scores.EpochStart).TotalDays + 1),
+            BaselineStale: _scores.BaselineStale,
+            DormantDays: _scores.DormantDays,
+            ScoreVsLastMonth: BuildMonthlyComparison(scores, nowTs),
+            RepasteOutcome: _scores.ConsumeRepasteReport());
 
         IReadOnlyList<Remark> fired = _engine.Evaluate(ctx);
         foreach (Remark remark in fired)
@@ -168,6 +172,35 @@ public sealed class RemarksCoordinator : IDisposable
             }
         }
         return drops.Count > 0 ? drops : null;
+    }
+
+    /// <summary>Current score vs the daily snapshot nearest ~30 days ago, per component —
+    /// feeds the monthly readout. Reuses the same 'score' events SnapshotDailyScores writes.</summary>
+    private IReadOnlyDictionary<ComponentKind, (int LastMonth, int Now)>? BuildMonthlyComparison(
+        IReadOnlyDictionary<ComponentKind, ComponentScore> scores, long nowTs)
+    {
+        if (scores.Count == 0)
+            return null;
+        const long month = 30 * 86400;
+        long targetTs = nowTs - month;
+        var result = new Dictionary<ComponentKind, (int, int)>();
+        foreach ((ComponentKind kind, ComponentScore score) in scores)
+        {
+            if (score.Calibrating)
+                continue;
+            // Snapshots from 25–40 days ago; pick the one closest to a month back.
+            StoredEvent? reference = _repo
+                .GetEvents("score", nowTs - 40 * 86400, nowTs - 25 * 86400, 100)
+                .Where(e => e.Kind == kind.ToString())
+                .OrderBy(e => Math.Abs(e.Ts - targetTs))
+                .FirstOrDefault();
+            if (reference?.Data is { } json
+                && JsonDocument.Parse(json).RootElement.TryGetProperty("value", out JsonElement v))
+            {
+                result[kind] = (v.GetInt32(), score.Value);
+            }
+        }
+        return result.Count > 0 ? result : null;
     }
 
     public void Dispose() => _timer.Stop();

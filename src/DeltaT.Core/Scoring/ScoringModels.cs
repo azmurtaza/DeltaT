@@ -72,7 +72,12 @@ public sealed record ScoreInput(
     double? LimitC,
     ComponentProfile? Profile,
     bool BaselineReady,
-    double CalibrationProgress);
+    double CalibrationProgress,
+    // True when the machine was dormant long enough that the learned baseline may
+    // no longer describe the current physical setup (dust, cooler swap, unlogged
+    // repaste). A confidence note only — it never moves the number.
+    bool BaselineStale = false,
+    int DormantDays = 0);
 
 public static class Verdicts
 {

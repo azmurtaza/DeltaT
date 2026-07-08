@@ -21,12 +21,15 @@ public class ScoringEngineTests
         double? soakBaseline = null,
         bool ready = true,
         double progress = 1.0,
-        double recentHours = 7 * 24) =>
+        double recentHours = 7 * 24,
+        bool stale = false,
+        int dormantDays = 0) =>
         new(ComponentKind.Cpu, "Test CPU",
             recent ?? Array.Empty<RecentBucketObs>(),
             baseline ?? Array.Empty<BaselineBucket>(),
             recentHours, throttleEvents, soakRecent, soakBaseline,
-            LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress);
+            LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress,
+            BaselineStale: stale, DormantDays: dormantDays);
 
     private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
         new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
@@ -208,6 +211,24 @@ public class ScoringEngineTests
 
         Assert.Contains(score.Reasons, r => r.Code == "chassis-norm" && r.PointsLost == 0);
         Assert.True(score.Value >= 85);
+    }
+
+    // ------------------------------------------------------------------ stale baseline
+
+    [Fact]
+    public void StaleBaseline_FlagsConfidence_WithoutMovingTheNumber()
+    {
+        ScoreInput onBaseline = Input(
+            recent: new[] { Heavy(delta: 60) },
+            baseline: new[] { HeavyBase(delta: 60) });
+        ScoreInput stale = onBaseline with { BaselineStale = true, DormantDays = 70 };
+
+        ComponentScore fresh = ScoringEngine.Score(onBaseline, Fmt);
+        ComponentScore staleScore = ScoringEngine.Score(stale, Fmt);
+
+        Assert.Equal(fresh.Value, staleScore.Value);                       // staleness never penalizes
+        Assert.Contains(staleScore.Reasons, r => r.Code == "baseline-stale");
+        Assert.DoesNotContain(fresh.Reasons, r => r.Code == "baseline-stale");
     }
 
     // ------------------------------------------------------------------ pattern hints

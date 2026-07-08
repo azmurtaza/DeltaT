@@ -18,6 +18,12 @@ public sealed class ScoreCoordinator
 
     private Dictionary<ComponentKind, ComponentScore> _latest = new();
     private bool _wasReady;
+    private RepasteReport? _pendingRepasteReport;
+
+    /// <summary>Dormancy beyond which the learned baseline is treated as unverified:
+    /// the physical setup (dust, fans, an unlogged repaste) may have drifted while
+    /// DeltaT wasn't watching, so the score deserves a "recalibrate me" flag.</summary>
+    public static readonly TimeSpan StaleThreshold = TimeSpan.FromDays(45);
 
     public event Action<IReadOnlyDictionary<ComponentKind, ComponentScore>>? ScoresUpdated;
 
@@ -26,6 +32,13 @@ public sealed class ScoreCoordinator
 
     /// <summary>True once any pasted component has a locked baseline.</summary>
     public bool IsBaselineReady => _wasReady;
+
+    /// <summary>The machine was dormant long enough (see <see cref="StaleThreshold"/>)
+    /// that the current baseline can no longer be trusted without recalibration.</summary>
+    public bool BaselineStale { get; private set; }
+
+    /// <summary>How many days DeltaT was off before this run, when that gap tripped staleness.</summary>
+    public int DormantDays { get; private set; }
 
     public ScoreCoordinator(
         TelemetryRepository repo,
@@ -44,12 +57,44 @@ public sealed class ScoreCoordinator
         {
             _settings.SetInt(SettingsKeys.BaselineEpoch, 0);
             _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, DateTimeOffset.UtcNow);
+            _settings.Set(SettingsKeys.BaselineEpochReason, "initial");
+        }
+
+        DetectDormancy(DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>One-shot at startup: if DeltaT sat idle past the stale threshold and a
+    /// baseline already exists, flag it for recalibration. Non-destructive — the
+    /// baseline stays put until the user acts.</summary>
+    private void DetectDormancy(DateTimeOffset now)
+    {
+        if (_settings.GetTimestamp(SettingsKeys.LastSeenUtc) is not { } lastSeen)
+            return;
+        int gapDays = (int)Math.Max(0, (now - lastSeen).TotalDays);
+        if (gapDays >= StaleThreshold.TotalDays && _repo.GetBaseline(Epoch).Count > 0)
+        {
+            BaselineStale = true;
+            DormantDays = gapDays;
         }
     }
 
     public int Epoch => _settings.GetInt(SettingsKeys.BaselineEpoch) ?? 0;
 
     public DateTimeOffset EpochStart => _settings.GetTimestamp(SettingsKeys.BaselineEpochStart) ?? DateTimeOffset.UtcNow;
+
+    private string EpochReason => _settings.Get(SettingsKeys.BaselineEpochReason) ?? "initial";
+
+    /// <summary>Consumed once by the remarks layer to surface a just-computed repaste
+    /// verdict through the normal remark → toast pipe. Returns null after the read.</summary>
+    public RepasteReport? ConsumeRepasteReport()
+    {
+        lock (_gate)
+        {
+            RepasteReport? r = _pendingRepasteReport;
+            _pendingRepasteReport = null;
+            return r;
+        }
+    }
 
     public IReadOnlyDictionary<ComponentKind, ComponentScore> Latest
     {
@@ -78,48 +123,81 @@ public sealed class ScoreCoordinator
         _wasReady = anyReady;
 
         if (BaselineJustBecameReady && Epoch > 0)
-            ReportRepasteOutcome(nowUtc);
+        {
+            if (EpochReason == "recalibrate")
+                ReportRecalibrationComplete(nowUtc);
+            else
+                ReportRepasteOutcome(nowUtc);
+        }
 
+        _settings.SetTimestamp(SettingsKeys.LastSeenUtc, nowUtc); // heartbeat for dormancy detection
         lock (_gate) _latest = results;
         ScoresUpdated?.Invoke(results);
         return results;
     }
 
-    /// <summary>The payoff moment: the post-repaste baseline just locked, so we
-    /// can tell the user exactly what the fresh paste bought them.</summary>
+    /// <summary>The payoff moment: the post-repaste baseline just locked, so DeltaT
+    /// can tell the user — fairly — what the fresh paste actually did. Compares the
+    /// two epochs' baselines like-for-like (same load bucket + ambient band,
+    /// fan-normalized) via <see cref="BaselineComparer"/>, so a repaste that made
+    /// things *worse* is called out just as clearly as one that helped. The verdict
+    /// is stashed for the remarks layer to surface as a remark (and a toast when the
+    /// news is bad).</summary>
     private void ReportRepasteOutcome(DateTimeOffset nowUtc)
     {
         IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1);
         IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch);
-        var gains = new List<string>();
 
+        var perComponent = new List<(ComponentKind Kind, BaselineComparison Cmp)>();
         foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete })
         {
-            // Compare the heaviest bucket both epochs know, same ambient band.
-            var pair = (
-                from b in before
-                from a in after
-                where b.Kind == kind && a.Kind == kind
-                      && b.Bucket == a.Bucket && b.Band == a.Band
-                      && b.Bucket >= LoadBucket.Medium
-                orderby a.Bucket descending, Math.Min(a.Minutes, b.Minutes) descending
-                select (Before: b, After: a)).FirstOrDefault();
-            if (pair.Before is null || pair.After is null)
-                continue;
-            double gain = pair.Before.DeltaAvg - pair.After.DeltaAvg;
-            gains.Add($"{kind.Label()} {(gain >= 0 ? "−" : "+")}{Math.Abs(gain):0.#}°");
+            BaselineComparison cmp = BaselineComparer.Compare(before, after, kind);
+            if (cmp.Verdict != RepasteVerdict.Inconclusive)
+                perComponent.Add((kind, cmp));
         }
 
-        if (gains.Count == 0)
-            return;
-        string summary = string.Join(", ", gains);
-        bool improved = gains.Any(g => g.Contains('−'));
-        _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
-            improved
-                ? $"Repaste verdict is in: {summary} under load versus the old paste, weather-corrected. Money well spent."
-                : $"Repaste verdict: {summary} under load versus the old paste. It barely moved — either the old paste was fine, or the mount deserves a second look.",
-            null);
+        RepasteReport report = BuildRepasteReport(perComponent);
+        lock (_gate) _pendingRepasteReport = report;
     }
+
+    private static RepasteReport BuildRepasteReport(IReadOnlyList<(ComponentKind Kind, BaselineComparison Cmp)> parts)
+    {
+        if (parts.Count == 0)
+            return new RepasteReport(RepasteVerdict.Inconclusive,
+                "Repaste logged, but there hasn't been enough comparable load yet to judge it. Run something demanding and DeltaT will report the before/after.");
+
+        bool fanCorrected = parts.Any(p => p.Cmp.FanCorrected);
+        string corrNote = fanCorrected ? "weather- and fan-corrected" : "weather-corrected";
+
+        // Overall verdict: any regression wins (it's the news that matters most),
+        // then any improvement, otherwise it barely moved.
+        if (parts.Any(p => p.Cmp.Verdict == RepasteVerdict.Worse))
+        {
+            string worse = Join(parts.Where(p => p.Cmp.Verdict == RepasteVerdict.Worse),
+                p => $"{p.Kind.Label()} {p.Cmp.WeightedDeltaChangeC:0.#}° hotter");
+            return new RepasteReport(RepasteVerdict.Worse,
+                $"Repaste verdict: {worse} under load versus the old paste, {corrNote}. That usually means an air bubble, too little or too much paste, or an uneven mount — worth pulling the cooler and redoing it before the numbers settle in as the new normal.");
+        }
+
+        if (parts.Any(p => p.Cmp.Verdict == RepasteVerdict.Improved))
+        {
+            string gains = Join(parts.Where(p => p.Cmp.Verdict == RepasteVerdict.Improved),
+                p => $"{p.Kind.Label()} −{Math.Abs(p.Cmp.WeightedDeltaChangeC):0.#}°");
+            return new RepasteReport(RepasteVerdict.Improved,
+                $"Repaste verdict is in: {gains} under load versus the old paste, {corrNote}. Money well spent.");
+        }
+
+        return new RepasteReport(RepasteVerdict.Unchanged,
+            $"Repaste verdict: temperatures barely moved versus the old paste ({corrNote}). Either the old paste was still fine, or the mount deserves a second look.");
+    }
+
+    private static string Join<T>(IEnumerable<T> items, Func<T, string> fmt) => string.Join(", ", items.Select(fmt));
+
+    /// <summary>A recalibration (not a repaste) just finished relearning. No before/after
+    /// claim — the point was to replace a baseline we no longer trusted.</summary>
+    private void ReportRecalibrationComplete(DateTimeOffset nowUtc) =>
+        _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
+            "Recalibration complete — a fresh baseline is locked in and scoring is back on solid ground.", null);
 
     private ComponentScore ScoreComponent(
         ComponentReading c, DateTimeOffset epochStart, DateTimeOffset learningEnd, DateTimeOffset nowUtc, out bool ready)
@@ -162,7 +240,9 @@ public sealed class ScoreCoordinator
             LimitC: c.ThrottleLimitC,
             Profile: c.Kind == ComponentKind.Cpu ? _profile.Cpu : _profile.Gpu,
             BaselineReady: ready,
-            CalibrationProgress: progress);
+            CalibrationProgress: progress,
+            BaselineStale: BaselineStale,
+            DormantDays: DormantDays);
 
         return ScoringEngine.Score(input, _fmtTemp);
     }
@@ -187,13 +267,36 @@ public sealed class ScoreCoordinator
     /// A few days later the before/after comparison lives in the events + baselines.</summary>
     public void RegisterRepaste(DateTimeOffset nowUtc, string? note = null)
     {
-        int newEpoch = Epoch + 1;
-        _settings.SetInt(SettingsKeys.BaselineEpoch, newEpoch);
-        _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
-        _wasReady = false;
+        StartNewEpoch(nowUtc, "repaste");
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "repaste", null, null, 1,
             string.IsNullOrWhiteSpace(note) ? "Thermal paste replaced. New baseline learning started." : $"Thermal paste replaced: {note}",
             null);
         Compute(nowUtc);
     }
+
+    /// <summary>User accepted DeltaT's "your baseline is stale" prompt: relearn from
+    /// scratch without claiming a repaste happened. Unlike <see cref="RegisterRepaste"/>
+    /// there's no before/after verdict — the old baseline was the thing we distrusted.</summary>
+    public void Recalibrate(DateTimeOffset nowUtc, string? note = null)
+    {
+        StartNewEpoch(nowUtc, "recalibrate");
+        _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "recalibrate", null, null, 1,
+            string.IsNullOrWhiteSpace(note) ? "Baseline recalibration started — scoring pauses for about a week while DeltaT relearns what normal looks like now." : $"Baseline recalibration started: {note}",
+            null);
+        Compute(nowUtc);
+    }
+
+    private void StartNewEpoch(DateTimeOffset nowUtc, string reason)
+    {
+        _settings.SetInt(SettingsKeys.BaselineEpoch, Epoch + 1);
+        _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
+        _settings.Set(SettingsKeys.BaselineEpochReason, reason);
+        _wasReady = false;
+        BaselineStale = false; // a fresh learning window supersedes the stale one
+        DormantDays = 0;
+    }
 }
+
+/// <summary>A just-computed repaste verdict, handed to the remarks layer to surface
+/// once through the normal remark → toast pipe.</summary>
+public sealed record RepasteReport(RepasteVerdict Verdict, string Text);
