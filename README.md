@@ -2,46 +2,51 @@
 
 **Your machine's thermal conscience.**
 
-DeltaT runs quietly in the system tray, watches your CPU / GPU / SSD temperatures against the weather outside, learns what *healthy* looks like for your specific machine, and tells you — with evidence — when it's time to change your thermal paste.
+DeltaT sits in your system tray, watches your CPU, GPU, and SSD temperatures relative to the weather outside, and learns what normal looks like for your specific machine. When something starts drifting, it tells you why and whether it is actually time to repaste.
 
-## Why it's different
+## Why it is different
 
-Raw temperatures lie. A 45 °C summer afternoon makes healthy paste look dead; an air-conditioned room hides paste that's drying out. DeltaT scores paste health on **temperature rise over outside ambient, at a given load, compared to your machine's own learned baseline** — the signal that actually tracks paste degradation.
+Raw temperatures are misleading. A 45 C summer afternoon can make healthy paste look dead, while an air-conditioned room can hide paste that is quietly drying out. DeltaT scores paste health based on temperature rise over outside ambient at a given load, compared to your machine's own learned baseline. That is the number that actually tracks paste degradation over time.
 
-- **Load-bucketed stats** — idle / light / medium / heavy tracked separately per component
-- **Paste Health Score 0–100** for CPU and GPU, with plain-language reasons ("+6 °C over baseline at heavy load in similar weather")
-- **Dust-vs-paste insight** — tells you when you just need compressed air, not a repaste
-- **Repaste log** — mark a repaste, see your before/after gains a few days later
-- **Thermal fingerprint test** — guided 5-minute check you can rerun monthly
-- **Weather-aware** — location resolved once, outside temp refreshed every 3 h (Open-Meteo, no account needed)
+Fan speed is also factored in, so switching between silent and performance fan modes does not get misread as paste health changing.
+
+## What it does
+
+- **Paste Health Score 0-100** for CPU and GPU - compares current temp rise over ambient, per load bucket, against your machine's own baseline, not a spec sheet or benchmark database
+- **Load-bucketed stats** - idle, light, medium, and heavy load tracked separately so a brief gaming session does not skew your baseline
+- **SSD, battery, and board** - thermal health and wear readouts (SMART wear level, battery wear) alongside the paste scores
+- **Dust vs. paste insight** - fast heat spikes read as paste degradation; high steady temps with elevated fans at normal soak rate read as dust or airflow. DeltaT tells you which pattern it sees, so you know whether to grab compressed air or open the machine
+- **Repaste verdict** - after you log a repaste and the new baseline settles, DeltaT compares before and after like-for-like (same load bucket, same ambient band, fan-normalized) and calls it Improved, Unchanged, Worse, or Inconclusive. A worse result (air bubble, bad mount, pump-out) raises a visible warning, not just a quiet note
+- **History and trends** - full local history with 24h, 7d, 30d, and all-time graphs, plus a monthly score readout so you can see how this month compares to 30 days ago
+- **Staleness detection** - if DeltaT has not run for 45 days or more with a locked baseline, it flags the score as unverified and offers a one-click Recalibrate in Settings. Your old baseline is never auto-deleted
+- **Weather-aware** - outside temp refreshes every 3 hours via Open-Meteo. No account needed
+
+## How the score works
+
+The score is not ready on day one. DeltaT spends the first 7 days learning your machine's baseline under real conditions. Absolute temperature limit warnings (proximity to TjMax) are active from the start regardless. Once the baseline locks, the score compares every new reading against your machine's own history, bucketed by load and ambient temperature, so seasonal changes and airflow differences do not create false alarms.
 
 ## Requirements
 
-- Windows 10/11 (64-bit)
-- Administrator rights — CPU temperature registers need a kernel driver, same as HWiNFO/HWMonitor
+- Windows 10 or 11 (64-bit)
+- Administrator rights - CPU temperature registers and storage SMART data require a kernel driver, the same as HWiNFO or HWMonitor. Non-elevated runs will miss CPU package temps and drive health
 
 ## Install
 
-Run **`DeltaT-Setup-<version>.exe`** and follow the wizard. It's a self-contained
-build — no .NET install needed on the target machine. The setup:
+Run **`DeltaT-Setup-<version>.exe`** and follow the wizard. It is a self-contained build, so no separate .NET install is needed on the target machine. The setup:
 
-- installs to `Program Files\DeltaT` and adds Start Menu + (optional) desktop shortcuts;
-- optionally registers a **sign-in startup task** so DeltaT launches straight into the
-  system tray every login. The task runs with highest privileges (elevated, so it gets
-  CPU temps) *without* a UAC prompt each login, and is laptop-safe (keeps running on
-  battery). Uncheck that box during setup if you'd rather start it manually;
-- leaves your learned thermal history and settings in `%LOCALAPPDATA%\DeltaT` on
-  uninstall, so a reinstall keeps the machine's baseline.
+- installs to `Program Files\DeltaT` and adds Start Menu and optional desktop shortcuts
+- optionally registers a sign-in startup task so DeltaT launches straight into the system tray on every login. The task runs with elevated privileges so it can read CPU temps without a UAC prompt each time, and it is laptop-safe so it keeps running on battery. Uncheck that box during setup if you prefer to start it manually
+- leaves your learned thermal history and settings in `%LOCALAPPDATA%\DeltaT` on uninstall, so reinstalling keeps the machine's baseline intact
 
-Launching the app while it's already running just surfaces the existing window
-(single-instance). Closing the window minimizes to the tray; quit from the tray menu.
+Launching the app while it is already running just brings up the existing window. Closing the window minimizes to tray. Quit from the tray menu.
 
 ## Build
 
 ```
 dotnet build DeltaT.sln
-dotnet run --project src/DeltaT.App     # the app (run elevated)
-dotnet run --project src/DeltaT.Spike   # raw sensor dump for diagnostics
+dotnet test
+dotnet run --project src/DeltaT.App     # run elevated for full sensor access
+dotnet run --project src/DeltaT.Spike   # dumps every sensor to console for diagnostics
 ```
 
 Requires the .NET 8 SDK (`winget install Microsoft.DotNet.SDK.8`).
@@ -52,7 +57,4 @@ Requires the .NET 8 SDK (`winget install Microsoft.DotNet.SDK.8`).
 powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 ```
 
-Publishes a self-contained `win-x64` build and compiles `installer\DeltaT.iss` into
-`installer\out\DeltaT-Setup-<version>.exe`. Needs Inno Setup 6
-(`winget install --id JRSoftware.InnoSetup`). The version comes from `<Version>` in
-`src/DeltaT.App/DeltaT.App.csproj` — bump it there to cut a new release.
+Publishes a self-contained `win-x64` build and compiles `installer\DeltaT.iss` into `installer\out\DeltaT-Setup-<version>.exe`. Needs Inno Setup 6 (`winget install --id JRSoftware.InnoSetup`). The version is pulled from `<Version>` in `src/DeltaT.App/DeltaT.App.csproj`, so bump it there when cutting a new release.
