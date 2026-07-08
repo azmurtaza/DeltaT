@@ -79,6 +79,14 @@ public static class ScoringEngine
 
         double penalty = 0;
 
+        // Confidence note (no points): the baseline is old and unverified since the
+        // machine sat dormant. Staleness isn't paste failure, so it never moves the
+        // number — it tells the user why the number deserves a grain of salt.
+        if (input.BaselineStale)
+            reasons.Add(new ScoreReason("baseline-stale",
+                $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since — a lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
+                0));
+
         // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
         //    fan-normalized so airflow overrides can't masquerade as paste health.
         (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
@@ -151,6 +159,14 @@ public static class ScoringEngine
 
         return new ComponentScore(input.Kind, input.Name, score, Verdicts.FromScore(score), false, 1.0, reasons, hint);
     }
+
+    /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>
+    private static string DescribeDormancy(int days) => days switch
+    {
+        >= 60 => $"~{days / 30} months",
+        >= 21 => $"~{(int)Math.Round(days / 7.0)} weeks",
+        _ => $"{days} days",
+    };
 
     /// <summary>Weighted rpm context behind a fan-normalized comparison, for the reason line.</summary>
     public sealed record FanNormalization(double RecentRpm, double BaselineRpm, double CorrectionC);

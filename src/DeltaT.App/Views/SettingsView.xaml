@@ -128,6 +128,10 @@
                                        Text="Just repasted? Tell DeltaT. The baseline resets, and once the new one locks you get a before/after verdict — weather-corrected."/>
                             <Button Style="{StaticResource Button.Primary}" Content="I REPASTED THIS MACHINE"
                                     HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,16,0,12"
+                                       Text="Changed the cooling but not the paste — new fans, a clean-out, a moved rig — or DeltaT sat idle for months? Recalibrate to relearn the baseline. No before/after claim, just a fresh reference."/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="RECALIBRATE BASELINE"
+                                    HorizontalAlignment="Left" Command="{Binding RecalibrateCommand}"/>
                         </StackPanel>
                     </HeaderedContentControl>
 

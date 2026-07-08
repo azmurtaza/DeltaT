@@ -151,6 +151,21 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void Recalibrate()
+    {
+        MessageBoxResult answer = MessageBox.Show(
+            "Recalibrate the learned baseline?\n\n"
+            + "Use this when the cooling changed but the paste didn't — new fans, a clean-out, "
+            + "a moved rig — or after DeltaT has been off for a long stretch. The current baseline "
+            + "is retired and a fresh learning week begins. This is not a repaste, so there's no "
+            + "before/after verdict.",
+            "DeltaT — recalibrate", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+        _scores.Recalibrate(DateTimeOffset.UtcNow);
+        StatusText = "Recalibration started. Scoring pauses for about a week while DeltaT relearns.";
+    }
+
+    [RelayCommand]
     private async Task ExportCsvAsync()
     {
         var dialog = new Microsoft.Win32.SaveFileDialog

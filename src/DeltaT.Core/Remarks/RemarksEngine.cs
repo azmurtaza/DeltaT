@@ -32,7 +32,14 @@ public sealed record RemarkContext(
     bool BaselineReady,
     bool BaselineJustBecameReady,
     double CalibrationProgress,
-    int LearningDay);
+    int LearningDay,
+    // Baseline gone stale after a long dormancy — prompt a recalibration.
+    bool BaselineStale = false,
+    int DormantDays = 0,
+    // Per paste-component score now vs ~30 days ago, for the monthly readout.
+    IReadOnlyDictionary<ComponentKind, (int LastMonth, int Now)>? ScoreVsLastMonth = null,
+    // A just-locked repaste verdict to announce once (better/worse/unchanged).
+    RepasteReport? RepasteOutcome = null);
 
 /// <summary>DeltaT's voice: dry, precise, occasionally warm. Rules fire against a
 /// context snapshot and are rate-limited per rule (and per component where it
@@ -189,6 +196,45 @@ public sealed class RemarksEngine
                     "Baseline locked in. From now on, DeltaT compares this machine against itself — the only comparison that means anything.")
                 : Enumerable.Empty<Remark>()),
 
+        // The repaste verdict is one-shot (host consumes it once), so no real cooldown needed.
+        new Rule("repaste-outcome", TimeSpan.Zero, ctx =>
+        {
+            if (ctx.RepasteOutcome is not { } r) return Enumerable.Empty<Remark>();
+            RemarkSeverity sev = r.Verdict switch
+            {
+                RepasteVerdict.Worse => RemarkSeverity.Warning,   // bad application → toast
+                RepasteVerdict.Improved => RemarkSeverity.Notice,
+                RepasteVerdict.Unchanged => RemarkSeverity.Notice,
+                _ => RemarkSeverity.Info,
+            };
+            return One("repaste-outcome", ctx, sev, r.Text);
+        }),
+
+        // Long dormancy: the baseline may no longer describe the machine. Warn (toast)
+        // and point at recalibration. Fires at most every few days while stale.
+        new Rule("baseline-stale", TimeSpan.FromDays(3), ctx =>
+            ctx.BaselineStale
+                ? One("baseline-stale", ctx, RemarkSeverity.Warning,
+                    $"DeltaT hadn't run in about {StaleGap(ctx.DormantDays)}. A lot can change while it's off — dust, a moved fan, a cleaning, even a repaste — so the current score is judging against an old, unverified baseline. Recalibrate (Settings) to trust it again.")
+                : Enumerable.Empty<Remark>()),
+
+        new Rule("monthly-report", TimeSpan.FromDays(28), ctx =>
+        {
+            if (ctx.ScoreVsLastMonth is null) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach ((ComponentKind kind, (int lastMonth, int now)) in ctx.ScoreVsLastMonth)
+            {
+                int drop = lastMonth - now;
+                string line = drop >= 6
+                    ? $"Monthly check: {kind.Label()} paste score is {now}, down {drop} from last month ({lastMonth}). The drift is real, not weather — DeltaT already corrected for that."
+                    : drop <= -4
+                        ? $"Monthly check: {kind.Label()} paste score is {now}, up {-drop} from last month ({lastMonth}). Whatever changed, the paste is happier."
+                        : $"Monthly check: {kind.Label()} paste score is {now}, about the same as last month ({lastMonth}). Holding steady.";
+                list.Add(new Remark("monthly-report", ctx.NowUtc, RemarkSeverity.Info, line, kind));
+            }
+            return list;
+        }),
+
         new Rule("score-drop", TimeSpan.FromHours(24), ctx =>
         {
             if (ctx.ScoreDropThisWeek is null) return Enumerable.Empty<Remark>();
@@ -239,4 +285,11 @@ public sealed class RemarksEngine
     {
         yield return new Remark(id, ctx.NowUtc, sev, text, kind);
     }
+
+    private static string StaleGap(int days) => days switch
+    {
+        >= 60 => $"{days / 30} months",
+        >= 21 => $"{(int)Math.Round(days / 7.0)} weeks",
+        _ => $"{days} days",
+    };
 }
