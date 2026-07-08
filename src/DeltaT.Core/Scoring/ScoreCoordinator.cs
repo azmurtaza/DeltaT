@@ -176,7 +176,7 @@ public sealed class ScoreCoordinator
             string worse = Join(parts.Where(p => p.Cmp.Verdict == RepasteVerdict.Worse),
                 p => $"{p.Kind.Label()} {p.Cmp.WeightedDeltaChangeC:0.#}° hotter");
             return new RepasteReport(RepasteVerdict.Worse,
-                $"Repaste verdict: {worse} under load versus the old paste, {corrNote}. That usually means an air bubble, too little or too much paste, or an uneven mount — worth pulling the cooler and redoing it before the numbers settle in as the new normal.");
+                $"Repaste verdict: {worse} under load versus the old paste, {corrNote}. That usually means an air bubble, too little or too much paste, or an uneven mount - worth pulling the cooler and redoing it before the numbers settle in as the new normal.");
         }
 
         if (parts.Any(p => p.Cmp.Verdict == RepasteVerdict.Improved))
@@ -197,7 +197,7 @@ public sealed class ScoreCoordinator
     /// claim — the point was to replace a baseline we no longer trusted.</summary>
     private void ReportRecalibrationComplete(DateTimeOffset nowUtc) =>
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
-            "Recalibration complete — a fresh baseline is locked in and scoring is back on solid ground.", null);
+            "Recalibration complete - a fresh baseline is locked in and scoring is back on solid ground.", null);
 
     private ComponentScore ScoreComponent(
         ComponentReading c, DateTimeOffset epochStart, DateTimeOffset learningEnd, DateTimeOffset nowUtc, out bool ready)
@@ -281,7 +281,7 @@ public sealed class ScoreCoordinator
     {
         StartNewEpoch(nowUtc, "recalibrate");
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "recalibrate", null, null, 1,
-            string.IsNullOrWhiteSpace(note) ? "Baseline recalibration started — scoring pauses for about a week while DeltaT relearns what normal looks like now." : $"Baseline recalibration started: {note}",
+            string.IsNullOrWhiteSpace(note) ? "Baseline recalibration started - scoring pauses for about a week while DeltaT relearns what normal looks like now." : $"Baseline recalibration started: {note}",
             null);
         Compute(nowUtc);
     }

@@ -137,7 +137,7 @@ public sealed class RingGauge : FrameworkElement
 
         // Center numerals.
         double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        string mainText = HasValue ? Math.Round(RenderValue).ToString(CultureInfo.InvariantCulture) : "—";
+        string mainText = HasValue ? Math.Round(RenderValue).ToString(CultureInfo.InvariantCulture) : "-";
         var main = new FormattedText(mainText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             new Typeface(DinCond, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal),
             size * 0.30, new SolidColorBrush(ThermalPalette.Text), dip);

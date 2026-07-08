@@ -14,7 +14,7 @@ void Line(string s = "")
 }
 
 bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
-Line($"DeltaT sensor spike — {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+Line($"DeltaT sensor spike - {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Line($"Elevated: {elevated}{(elevated ? "" : "   << CPU package temps + storage SMART need admin")}");
 Line(new string('=', 78));
 
@@ -61,7 +61,7 @@ void Dump(IHardware hw, int depth)
         Dump(sub, depth + 1);
 }
 
-static string Fmt(float? v) => v.HasValue ? v.Value.ToString("0.##") : "—";
+static string Fmt(float? v) => v.HasValue ? v.Value.ToString("0.##") : "-";
 
 internal sealed class UpdateVisitor : IVisitor
 {

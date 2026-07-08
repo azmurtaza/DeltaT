@@ -84,7 +84,7 @@ public static class ScoringEngine
         // number — it tells the user why the number deserves a grain of salt.
         if (input.BaselineStale)
             reasons.Add(new ScoreReason("baseline-stale",
-                $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since — a lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
+                $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since - a lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
                 0));
 
         // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
@@ -105,7 +105,7 @@ public static class ScoringEngine
             else if (excess < -1.5)
             {
                 reasons.Add(new ScoreReason("delta-cooler",
-                    $"Running {-excess:0.#} °C cooler than baseline — paste is doing great.", 0));
+                    $"Running {-excess:0.#} °C cooler than baseline - paste is doing great.", 0));
             }
             else
             {
@@ -115,15 +115,15 @@ public static class ScoringEngine
             if (fanNorm is { } fn)
             {
                 reasons.Add(new ScoreReason("fan-normalized", fn.CorrectionC > 0
-                    ? $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline — the extra airflow flatters the readings, so the comparison was corrected by +{fn.CorrectionC:0.#} °C."
-                    : $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline — quieter fans inflate the readings, so the comparison was corrected by {fn.CorrectionC:0.#} °C.",
+                    ? $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline - the extra airflow flatters the readings, so the comparison was corrected by +{fn.CorrectionC:0.#} °C."
+                    : $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline - quieter fans inflate the readings, so the comparison was corrected by {fn.CorrectionC:0.#} °C.",
                     0));
             }
         }
         else
         {
             reasons.Add(new ScoreReason("delta-no-data",
-                "Not enough recent load to compare against baseline — run something demanding (or the fingerprint test) for a sharper score.", 0));
+                "Not enough recent load to compare against baseline - run something demanding (or the fingerprint test) for a sharper score.", 0));
         }
 
         // 2) Thermal throttling — the paste failing at its actual job.
@@ -263,7 +263,7 @@ public static class ScoringEngine
                 double p = calibrating ? 0 : MaxAbsolutePenalty;
                 penalty += p;
                 reasons.Add(new ScoreReason("beyond-chassis",
-                    $"Averaging {fmtTemp(avg)} under heavy load — past the {fmtTemp(prof.ConcernC)} this chassis should ever sustain.", p));
+                    $"Averaging {fmtTemp(avg)} under heavy load - past the {fmtTemp(prof.ConcernC)} this chassis should ever sustain.", p));
             }
             else if (avg >= prof.SustainedNormC)
             {
@@ -277,13 +277,13 @@ public static class ScoringEngine
             double p = calibrating ? 0 : 6;
             penalty += p;
             reasons.Add(new ScoreReason("headroom",
-                $"Peaks within 2 °C of the {fmtTemp(limit)} silicon limit — no headroom left.", p));
+                $"Peaks within 2 °C of the {fmtTemp(limit)} silicon limit - no headroom left.", p));
         }
 
         if (calibrating && input.ThrottleEvents > 0)
         {
             reasons.Add(new ScoreReason("throttle-early",
-                $"Already thermal-throttled {input.ThrottleEvents}× during calibration — expect a hard verdict once the baseline locks.", 0));
+                $"Already thermal-throttled {input.ThrottleEvents}× during calibration - expect a hard verdict once the baseline locks.", 0));
         }
 
         return penalty;

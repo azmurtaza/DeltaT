@@ -96,7 +96,7 @@ public partial class TrendsViewModel : ObservableObject
                     stats.Add(new StatCell("MAX", $"{pts.Max(p => p.Max):0.#}°"));
                     var deltas = series.Where(p => p.TempAvg is not null && p.Ambient is not null)
                                        .Select(p => p.TempAvg!.Value - p.Ambient!.Value).ToList();
-                    stats.Add(new StatCell("Δ OUTSIDE", deltas.Count > 0 ? $"+{deltas.Average():0.#}°" : "—"));
+                    stats.Add(new StatCell("Δ OUTSIDE", deltas.Count > 0 ? $"+{deltas.Average():0.#}°" : "-"));
                     stats.Add(new StatCell("THROTTLES", throttleCount.ToString()));
                 }
                 return (Points: (IReadOnlyList<ChartPoint>)pts, Ambient: (IReadOnlyList<ChartPoint>)amb,

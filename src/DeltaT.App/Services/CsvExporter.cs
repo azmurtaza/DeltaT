@@ -1,14 +1,18 @@
 using System.Globalization;
 using System.IO;
 using System.Text;
+using DeltaT.Core.Monitoring;
 using DeltaT.Core.Storage;
 
 namespace DeltaT.App.Services;
 
 public static class CsvExporter
 {
-    /// <summary>Exports minute-level aggregates — detailed enough for any
-    /// spreadsheet analysis, small enough to open anywhere.</summary>
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    /// <summary>Exports minute-level aggregates as a spreadsheet-friendly CSV:
+    /// separate local date and time columns, human-readable load levels, weather
+    /// bands and power source, and units spelled out in every header.</summary>
     public static int Export(DeltaTDb db, string path)
     {
         using var conn = db.Open();
@@ -21,31 +25,61 @@ public static class CsvExporter
             FROM agg_minute ORDER BY minute, kind;
             """;
 
-        using var writer = new StreamWriter(path, false, Encoding.UTF8);
-        writer.WriteLine("minute_utc,component,name,load_bucket,ambient_band,on_ac,samples,temp_avg,temp_min,temp_max,load_avg,delta_vs_outside,throttle_samples");
+        using var writer = new StreamWriter(path, false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        writer.WriteLine("date,time,component,sensor,load_level,outside_band,power,samples,"
+            + "temp_avg_c,temp_min_c,temp_max_c,load_avg_pct,rise_over_outside_c,throttle_samples");
 
         int rows = 0;
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            string minute = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(0)).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-            string name = reader.GetString(2).Replace('"', '\'');
+            // Stored UTC; the CSV is a display edge, so show the user's local time.
+            DateTime local = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(0)).LocalDateTime;
+
             writer.WriteLine(string.Join(',',
-                minute,
-                reader.GetString(1),
-                $"\"{name}\"",
-                reader.GetInt32(3),
-                reader.GetInt32(4),
-                reader.GetInt32(5),
+                local.ToString("yyyy-MM-dd", Inv),
+                local.ToString("HH:mm", Inv),
+                ComponentLabel(reader.GetString(1)),
+                Quote(reader.GetString(2)),
+                LoadLevel(reader.GetInt32(3)),
+                OutsideBand(reader.GetInt32(4)),
+                reader.GetInt32(5) != 0 ? "AC" : "Battery",
                 reader.GetInt64(6),
-                reader.GetDouble(7).ToString("0.##", CultureInfo.InvariantCulture),
-                reader.GetDouble(8).ToString("0.##", CultureInfo.InvariantCulture),
-                reader.GetDouble(9).ToString("0.##", CultureInfo.InvariantCulture),
-                reader.GetDouble(10).ToString("0.##", CultureInfo.InvariantCulture),
-                reader.IsDBNull(11) ? "" : reader.GetDouble(11).ToString("0.##", CultureInfo.InvariantCulture),
+                Num(reader.GetDouble(7)),
+                Num(reader.GetDouble(8)),
+                Num(reader.GetDouble(9)),
+                Num(reader.GetDouble(10)),
+                reader.IsDBNull(11) ? "" : Num(reader.GetDouble(11)),
                 reader.GetInt32(12)));
             rows++;
         }
         return rows;
     }
+
+    private static string Num(double v) => v.ToString("0.##", Inv);
+
+    private static string Quote(string s) => $"\"{s.Replace("\"", "\"\"")}\"";
+
+    private static string ComponentLabel(string kind) => kind switch
+    {
+        "Cpu" => "CPU",
+        "GpuDiscrete" => "GPU",
+        "GpuIntegrated" => "iGPU",
+        "Storage" => "SSD",
+        "Battery" => "Battery",
+        "Board" => "Motherboard",
+        _ => kind,
+    };
+
+    private static string LoadLevel(int bucket) =>
+        Enum.IsDefined((LoadBucket)bucket) ? ((LoadBucket)bucket).ToString() : "Unknown";
+
+    private static string OutsideBand(int band) => band switch
+    {
+        (int)AmbientBand.Cold => "Cold (<15C)",
+        (int)AmbientBand.Mild => "Mild (15-25C)",
+        (int)AmbientBand.Warm => "Warm (25-35C)",
+        (int)AmbientBand.Hot => "Hot (>35C)",
+        _ => "Unknown",
+    };
 }

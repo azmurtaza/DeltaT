@@ -78,10 +78,10 @@ public partial class DeviceViewModel : ObservableObject
 
         var limits = new List<string>();
         if (snap?.Find(ComponentKind.Cpu)?.ThrottleLimitC is { } cpuLimit)
-            limits.Add($"CPU TjMax {Temp(cpuLimit, fahrenheit):0}{unit} — read from the silicon");
+            limits.Add($"CPU TjMax {Temp(cpuLimit, fahrenheit):0}{unit} - read from the silicon");
         if (snap?.Find(ComponentKind.GpuDiscrete)?.ThrottleLimitC is { } gpuLimit)
             limits.Add($"GPU throttle point {Temp(gpuLimit, fahrenheit):0}{unit}");
-        LimitsText = limits.Count > 0 ? string.Join("\n", limits) : "No limits reported yet — sensors still warming up.";
+        LimitsText = limits.Count > 0 ? string.Join("\n", limits) : "No limits reported yet - sensors still warming up.";
     }
 
     internal static double Temp(double c, bool fahrenheit) => fahrenheit ? c * 9 / 5 + 32 : c;
@@ -96,10 +96,10 @@ public partial class ComponentIntelViewModel : ObservableObject
     public string Label { get; }
     public bool HasProfile => _spec is not null;
 
-    [ObservableProperty] private string _idleDeltaText = "—";
-    [ObservableProperty] private string _heavyDeltaText = "—";
-    [ObservableProperty] private string _sustainedText = "—";
-    [ObservableProperty] private string _concernText = "—";
+    [ObservableProperty] private string _idleDeltaText = "-";
+    [ObservableProperty] private string _heavyDeltaText = "-";
+    [ObservableProperty] private string _sustainedText = "-";
+    [ObservableProperty] private string _concernText = "-";
     [ObservableProperty] private string _nowText = "no reading yet";
     [ObservableProperty] private double _colorFraction;
     [ObservableProperty] private bool _hasReading;

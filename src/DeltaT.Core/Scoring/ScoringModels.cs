@@ -95,8 +95,8 @@ public static class Verdicts
         Verdict.Calibrating => "Calibrating",
         Verdict.Fresh => "Fresh",
         Verdict.Good => "Good",
-        Verdict.Aging => "Aging — watch it",
-        Verdict.Degraded => "Degraded — plan a repaste",
+        Verdict.Aging => "Aging - watch it",
+        Verdict.Degraded => "Degraded - plan a repaste",
         _ => "Repaste now",
     };
 
