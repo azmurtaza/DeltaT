@@ -17,6 +17,7 @@ using DeltaT.Core.Monitoring;
 using DeltaT.Core.Remarks;
 using DeltaT.Core.Scoring;
 using DeltaT.Core.Storage;
+using DeltaT.Core.Updates;
 using DeltaT.Core.Weather;
 
 namespace DeltaT.App;
@@ -35,6 +36,7 @@ public partial class App : Application
     private AmbientService? _ambient;
     private ScoreCoordinator? _scores;
     private RemarksCoordinator? _remarks;
+    private UpdateService? _updates;
     private TrayManager? _tray;
     private MainViewModel? _vm;
     private MainWindow? _window;
@@ -220,10 +222,13 @@ public partial class App : Application
         if (_uishotDir is not null)
             _settings.SetBool(SettingsKeys.FirstRunDone, true); // uishot wants the real screens, not onboarding
         _repo = new TelemetryRepository(_db);
-        // Dev/demo screenshots (`--seed=healthy|repaste`): lay down a realistic
-        // multi-week history before anything else reads the store.
-        if (ParseSeed(args) is { } degraded)
-            DemoSeeder.Seed(_db, _repo, _settings, degraded, DateTimeOffset.UtcNow);
+        // Dev/demo screenshots (`--seed=healthy|repaste|provisional`): lay down a
+        // realistic multi-week history before anything else reads the store.
+        if (ParseSeed(args) is { } seed)
+            DemoSeeder.Seed(_db, _repo, _settings,
+                degraded: seed is "repaste" or "degraded" or "aging",
+                DateTimeOffset.UtcNow,
+                provisional: seed == "provisional");
         _ambient = new AmbientService(_settings);
 
         MachineIdentity machine = MachineIdentityProvider.Detect();
@@ -264,8 +269,9 @@ public partial class App : Application
 
         var trends = new TrendsViewModel(_repo);
         var remarksFeed = new RemarksViewModel(_repo);
+        _updates = new UpdateService(_settings);
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
-            () => _monitor.Latest, simulate);
+            _updates, () => _monitor.Latest, simulate);
         var deviceVm = new DeviceViewModel(machine, profile, () => _monitor.Latest, _ambient, _settings);
         var onboarding = new OnboardingViewModel(_settings, _ambient, machine);
 
@@ -309,6 +315,38 @@ public partial class App : Application
         // Second-instance "show me" signal.
         _showWait = ThreadPool.RegisterWaitForSingleObject(_showSignal!,
             (_, _) => Dispatcher.BeginInvoke(ShowMainWindow), null, -1, executeOnlyOnce: false);
+
+        // Keep installs current: check GitHub shortly after launch and self-update if a
+        // newer release is out (unless the user opted out). Never during sim/screenshots.
+        if (!simulate && _uishotDir is null && _updates.AutoUpdateEnabled)
+            _ = CheckForUpdatesOnStartupAsync();
+    }
+
+    /// <summary>Background one-shot: if a newer release exists, download it and hand off
+    /// to the installer, which restarts DeltaT. Any failure is swallowed - a missed
+    /// update must never stop the app from running.</summary>
+    private async Task CheckForUpdatesOnStartupAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(6)); // let startup settle first
+            ReleaseInfo? release = await _updates!.CheckAsync();
+            if (release is null)
+                return;
+
+            string? installer = await _updates.DownloadAsync(release);
+            if (installer is null)
+                return;
+
+            Dispatcher.Invoke(() => _tray?.ShowInfo("DeltaT is updating",
+                $"Installing {release.Tag}. DeltaT will restart in a moment."));
+            await Task.Delay(TimeSpan.FromSeconds(2)); // give the toast a beat to show
+            _updates.ApplyAndRelaunch(installer);
+        }
+        catch (Exception ex)
+        {
+            Log("update", ex);
+        }
     }
 
     private static SimScenario ParseScenario(string[] args)
@@ -323,16 +361,14 @@ public partial class App : Application
         };
     }
 
-    /// <summary>`--seed=healthy|fresh` or `--seed=repaste|degraded` fills the sim db
-    /// with demo history for screenshots. Returns null when absent, true for the
-    /// degraded/repaste story, false for the healthy one.</summary>
-    private static bool? ParseSeed(string[] args)
+    /// <summary>`--seed=healthy|repaste|provisional` fills the sim db with demo history
+    /// for screenshots. Returns null when absent, else the normalized mode string.</summary>
+    private static string? ParseSeed(string[] args)
     {
         string? arg = args.FirstOrDefault(a => a.StartsWith("--seed", StringComparison.OrdinalIgnoreCase));
         if (arg is null)
             return null;
-        string value = arg.Contains('=') ? arg[(arg.IndexOf('=') + 1)..].ToLowerInvariant() : "healthy";
-        return value is "repaste" or "degraded" or "aging";
+        return arg.Contains('=') ? arg[(arg.IndexOf('=') + 1)..].ToLowerInvariant() : "healthy";
     }
 
     /// <summary>Simulation runs against a separate db so fake telemetry never

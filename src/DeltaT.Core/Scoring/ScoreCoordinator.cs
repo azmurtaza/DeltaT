@@ -60,7 +60,28 @@ public sealed class ScoreCoordinator
             _settings.Set(SettingsKeys.BaselineEpochReason, "initial");
         }
 
+        BackfillBaselineLock(DateTimeOffset.UtcNow);
         DetectDormancy(DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>How long the old fixed-window code learned before locking a baseline.
+    /// Used only to reconstruct a lock point for baselines learned before this build.</summary>
+    private static readonly TimeSpan LegacyLearningWindow = TimeSpan.FromDays(7);
+
+    /// <summary>One-shot upgrade path: a baseline learned under the old fixed-window
+    /// code carries no lock timestamp. Without one, the confidence-based window would
+    /// grow to now and relearn over newer (possibly degraded) data, quietly discarding
+    /// the reference the user already earned. Freeze it at where the old 7-day window
+    /// would have ended so the existing baseline is preserved untouched.</summary>
+    private void BackfillBaselineLock(DateTimeOffset now)
+    {
+        if (_settings.GetTimestamp(SettingsKeys.BaselineLockedUtc) is not null)
+            return;
+        if (_repo.GetBaseline(Epoch).Count == 0)
+            return; // nothing learned yet — the new confidence model drives from scratch
+
+        DateTimeOffset approxLock = EpochStart + LegacyLearningWindow;
+        _settings.SetTimestamp(SettingsKeys.BaselineLockedUtc, approxLock < now ? approxLock : now);
     }
 
     /// <summary>One-shot at startup: if DeltaT sat idle past the stale threshold and a
@@ -109,18 +130,24 @@ public sealed class ScoreCoordinator
             return results;
 
         DateTimeOffset epochStart = EpochStart;
-        DateTimeOffset learningEnd = epochStart + BaselineBuilder.LearningWindow;
+        // The learning window grows until confidence locks it, then freezes at the lock
+        // time so the reference stays a stable comparison point instead of drifting.
+        DateTimeOffset? locked = _settings.GetTimestamp(SettingsKeys.BaselineLockedUtc);
         bool anyReady = false;
 
         foreach (ComponentReading c in snap.Components.Where(c => c.Kind.HasPaste()))
         {
-            ComponentScore score = ScoreComponent(c, epochStart, learningEnd, nowUtc, out bool ready);
+            ComponentScore score = ScoreComponent(c, epochStart, locked, nowUtc, out bool ready);
             results[c.Kind] = score;
             anyReady |= ready;
         }
 
         BaselineJustBecameReady = anyReady && !_wasReady;
         _wasReady = anyReady;
+
+        // Freeze the learning window the moment the first component's baseline locks.
+        if (BaselineJustBecameReady && locked is null)
+            _settings.SetTimestamp(SettingsKeys.BaselineLockedUtc, nowUtc);
 
         if (BaselineJustBecameReady && Epoch > 0)
         {
@@ -200,31 +227,35 @@ public sealed class ScoreCoordinator
             "Recalibration complete - a fresh baseline is locked in and scoring is back on solid ground.", null);
 
     private ComponentScore ScoreComponent(
-        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset learningEnd, DateTimeOffset nowUtc, out bool ready)
+        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset? locked, DateTimeOffset nowUtc, out bool ready)
     {
         long epochStartTs = epochStart.ToUnixTimeSeconds();
         long nowTs = nowUtc.ToUnixTimeSeconds();
-        long learningEndTs = Math.Min(learningEnd.ToUnixTimeSeconds(), nowTs);
+        // Grow the window until the baseline locks, then freeze it at the lock time.
+        long learningEndTs = Math.Min(locked?.ToUnixTimeSeconds() ?? nowTs, nowTs);
 
         // Baseline pool: learning window, AC power only, known ambient only.
         var baselineStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, epochStartTs, learningEndTs));
 
-        ready = BaselineBuilder.IsReady(epochStart, nowUtc, baselineStats);
+        // Readiness is now a confidence judgement, not a timer: how precisely we know
+        // this machine's loaded normal (standard error of session means), gated by the
+        // paste still curing. Idle-only data never reaches confidence, so a lightly used
+        // machine honestly keeps learning instead of locking a hollow baseline.
+        CalibrationState cal = BaselineBuilder.Assess(epochStart, nowUtc, baselineStats,
+            (bucket, band) => _repo.GetSessionMeanDeltas(
+                c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, learningEndTs, BaselineBuilder.SessionGapSeconds));
+        ready = cal.Ready;
 
-        // If the calendar window has passed but the machine never saw real load,
-        // keep learning until it has (idle-only data can't define "healthy").
-        if (!ready && nowUtc > learningEnd)
-        {
-            baselineStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, epochStartTs, nowTs));
-            learningEndTs = nowTs;
-            ready = BaselineBuilder.IsReady(epochStart, nowUtc, baselineStats);
-        }
-
-        double progress = BaselineBuilder.Progress(epochStart, nowUtc, baselineStats);
+        double progress = cal.Confidence;
         double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs);
 
-        // Recent pool: last 7 days that are NOT part of the learning window.
-        long recentFromTs = Math.Max(learningEndTs, nowTs - (long)TimeSpan.FromDays(7).TotalSeconds);
+        // Recent pool. Once the baseline is locked, "recent" is data AFTER the frozen
+        // learning window. Before lock there is no post-window data yet, so a provisional
+        // read compares the last 7 days against the provisional baseline: the two windows
+        // overlap, which only biases the estimate toward "on baseline" (conservative,
+        // never alarmist) and lets DeltaT show a number instead of nothing.
+        long weekAgo = nowTs - (long)TimeSpan.FromDays(7).TotalSeconds;
+        long recentFromTs = locked is not null ? Math.Max(learningEndTs, weekAgo) : weekAgo;
         var recentStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, recentFromTs, nowTs));
         double recentHours = Math.Max(1, (nowTs - recentFromTs) / 3600.0);
 
@@ -232,7 +263,11 @@ public sealed class ScoreCoordinator
             c.Kind, c.Name,
             Recent: recentStats.Select(s => new RecentBucketObs(
                 s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount)).ToList(),
-            Baseline: ready ? BuildBaseline(c, epochStartTs, learningEndTs, baselineStats, soakBaseline, nowUtc) : Array.Empty<BaselineBucket>(),
+            // Build the baseline every pass, not just once locked: a provisional
+            // baseline lets the engine put an estimated number on the score before
+            // lock. Idle-only history yields no rows, so this stays empty until real
+            // load appears — exactly when a provisional score would be meaningless.
+            Baseline: BuildBaseline(c, epochStartTs, learningEndTs, baselineStats, soakBaseline, nowUtc),
             RecentWindowHours: recentHours,
             ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs),
             SoakRateRecent: _repo.GetAverageSoakRate(c.Kind, recentFromTs, nowTs),
@@ -242,7 +277,8 @@ public sealed class ScoreCoordinator
             BaselineReady: ready,
             CalibrationProgress: progress,
             BaselineStale: BaselineStale,
-            DormantDays: DormantDays);
+            DormantDays: DormantDays,
+            CalibrationConstraint: cal.Constraint);
 
         return ScoringEngine.Score(input, _fmtTemp);
     }
@@ -253,6 +289,7 @@ public sealed class ScoreCoordinator
         List<BaselineRow> rows = BaselineBuilder.Build(
             Epoch, c.Kind, c.Name, stats,
             (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs),
+            (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs, BaselineBuilder.SessionGapSeconds),
             soakAvg, nowUtc);
         _repo.UpsertBaseline(rows);
         return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes)).ToList();
@@ -291,6 +328,7 @@ public sealed class ScoreCoordinator
         _settings.SetInt(SettingsKeys.BaselineEpoch, Epoch + 1);
         _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
         _settings.Set(SettingsKeys.BaselineEpochReason, reason);
+        _settings.Set(SettingsKeys.BaselineLockedUtc, ""); // fresh epoch: window grows again until it re-locks
         _wasReady = false;
         BaselineStale = false; // a fresh learning window supersedes the stale one
         DormantDays = 0;

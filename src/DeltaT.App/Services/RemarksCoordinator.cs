@@ -91,7 +91,11 @@ public sealed class RemarksCoordinator : IDisposable
             BaselineStale: _scores.BaselineStale,
             DormantDays: _scores.DormantDays,
             ScoreVsLastMonth: BuildMonthlyComparison(scores, nowTs),
-            RepasteOutcome: _scores.ConsumeRepasteReport());
+            RepasteOutcome: _scores.ConsumeRepasteReport(),
+            CalibrationConstraint: scores.Values
+                .Where(s => s.Calibrating)
+                .OrderByDescending(s => s.CalibrationProgress)
+                .FirstOrDefault()?.CalibrationConstraint ?? "");
 
         IReadOnlyList<Remark> fired = _engine.Evaluate(ctx);
         foreach (Remark remark in fired)

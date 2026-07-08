@@ -39,7 +39,10 @@ public sealed record StoredEvent(long Id, long Ts, string Type, string? Kind, st
 
 public sealed record BaselineRow(
     int Epoch, ComponentKind Kind, string Name, int Band, LoadBucket Bucket,
-    double DeltaAvg, double? DeltaP95, double? SoakRate, double? FanAvg, int Minutes, long Updated);
+    double DeltaAvg, double? DeltaP95, double? SoakRate, double? FanAvg, int Minutes, long Updated,
+    // Standard error of the cell's mean delta, from independent session means.
+    // Null for cells (or legacy rows) without enough sessions to estimate it.
+    double? DeltaSe = null);
 
 /// <summary>All reads/writes of telemetry. SQL lives here and nowhere else.</summary>
 public sealed class TelemetryRepository
@@ -348,6 +351,54 @@ public sealed class TelemetryRepository
         return list;
     }
 
+    /// <summary>Per-session mean deltas for one cell. A "session" is a contiguous run
+    /// of loaded minutes; a gap larger than <paramref name="gapSeconds"/> starts a new
+    /// one. Collapsing each session to a single mean strips the heavy minute-to-minute
+    /// autocorrelation, so the calibration model can treat them as independent samples
+    /// and compute an honest standard error of the baseline mean.</summary>
+    public IReadOnlyList<double> GetSessionMeanDeltas(
+        ComponentKind kind, string name, LoadBucket bucket, int band, bool onAc, long fromTs, long toTs, int gapSeconds)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT minute, delta_sum/delta_n FROM agg_minute
+            WHERE kind=$kind AND name=$name AND bucket=$bucket AND band=$band AND on_ac=$onac
+              AND delta_n > 0 AND minute BETWEEN $from AND $to
+            ORDER BY minute;
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$bucket", (int)bucket);
+        cmd.Parameters.AddWithValue("$band", band);
+        cmd.Parameters.AddWithValue("$onac", onAc ? 1 : 0);
+        cmd.Parameters.AddWithValue("$from", fromTs);
+        cmd.Parameters.AddWithValue("$to", toTs);
+
+        var sessionMeans = new List<double>();
+        long prevMinute = long.MinValue;
+        double runSum = 0;
+        int runN = 0;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            long minute = reader.GetInt64(0);
+            double delta = reader.GetDouble(1);
+            if (runN > 0 && minute - prevMinute > gapSeconds)
+            {
+                sessionMeans.Add(runSum / runN);
+                runSum = 0;
+                runN = 0;
+            }
+            runSum += delta;
+            runN++;
+            prevMinute = minute;
+        }
+        if (runN > 0)
+            sessionMeans.Add(runSum / runN);
+        return sessionMeans;
+    }
+
     /// <summary>Chart series. Resolution: "raw" (samples), "minute" or "hour" (aggregates).</summary>
     public IReadOnlyList<SeriesPoint> GetSeries(ComponentKind kind, string? name, long fromTs, long toTs, string resolution)
     {
@@ -425,11 +476,11 @@ public sealed class TelemetryRepository
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated)
-            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd)
+            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se)
+            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd,$dse)
             ON CONFLICT(epoch,kind,name,band,bucket) DO UPDATE SET
                 delta_avg=excluded.delta_avg, delta_p95=excluded.delta_p95, soak_rate=excluded.soak_rate,
-                fan_avg=excluded.fan_avg, minutes=excluded.minutes, updated=excluded.updated;
+                fan_avg=excluded.fan_avg, minutes=excluded.minutes, updated=excluded.updated, delta_se=excluded.delta_se;
             """;
         foreach (BaselineRow r in rows)
         {
@@ -445,6 +496,7 @@ public sealed class TelemetryRepository
             cmd.Parameters.AddWithValue("$fan", (object?)r.FanAvg ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$min", r.Minutes);
             cmd.Parameters.AddWithValue("$upd", r.Updated);
+            cmd.Parameters.AddWithValue("$dse", (object?)r.DeltaSe ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
@@ -454,7 +506,7 @@ public sealed class TelemetryRepository
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated FROM baseline WHERE epoch=$e;";
+        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se FROM baseline WHERE epoch=$e;";
         cmd.Parameters.AddWithValue("$e", epoch);
         var list = new List<BaselineRow>();
         using var reader = cmd.ExecuteReader();
@@ -468,7 +520,8 @@ public sealed class TelemetryRepository
                 reader.IsDBNull(6) ? null : reader.GetDouble(6),
                 reader.IsDBNull(7) ? null : reader.GetDouble(7),
                 reader.IsDBNull(8) ? null : reader.GetDouble(8),
-                reader.GetInt32(9), reader.GetInt64(10)));
+                reader.GetInt32(9), reader.GetInt64(10),
+                reader.IsDBNull(11) ? null : reader.GetDouble(11)));
         }
         return list;
     }

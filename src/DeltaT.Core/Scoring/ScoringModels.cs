@@ -31,12 +31,18 @@ public sealed record ComponentScore(
     int Value,
     Verdict Verdict,
     bool Calibrating,
-    double CalibrationProgress,     // 0..1, meaningful while calibrating
+    double CalibrationProgress,     // 0..1, meaningful while calibrating — the honest confidence meter
     IReadOnlyList<ScoreReason> Reasons,
-    PatternHint Hint)
+    PatternHint Hint,
+    // While calibrating: the one thing holding the baseline back (empty once ready).
+    string CalibrationConstraint = "",
+    // A real number computed before the baseline has locked — shown as an estimate
+    // with its confidence, never as a final verdict. False both for the pure
+    // "not enough data yet" state and for a locked score.
+    bool Provisional = false)
 {
-    public static ComponentScore CalibratingScore(ComponentKind kind, string name, double progress, IReadOnlyList<ScoreReason> reasons) =>
-        new(kind, name, 0, Verdict.Calibrating, true, progress, reasons, PatternHint.None);
+    public static ComponentScore CalibratingScore(ComponentKind kind, string name, double progress, IReadOnlyList<ScoreReason> reasons, string constraint = "") =>
+        new(kind, name, 0, Verdict.Calibrating, true, progress, reasons, PatternHint.None, constraint);
 }
 
 /// <summary>Recent behaviour of one (bucket, ambient band) cell.</summary>
@@ -77,7 +83,9 @@ public sealed record ScoreInput(
     // no longer describe the current physical setup (dust, cooler swap, unlogged
     // repaste). A confidence note only — it never moves the number.
     bool BaselineStale = false,
-    int DormantDays = 0);
+    int DormantDays = 0,
+    // While calibrating: the binding constraint on baseline confidence, for the UI.
+    string CalibrationConstraint = "");
 
 public static class Verdicts
 {

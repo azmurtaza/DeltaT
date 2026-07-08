@@ -26,8 +26,15 @@ public sealed record BaselineComparison(
 /// made things *worse* is caught with the same rigor as one that helped.</summary>
 public static class BaselineComparer
 {
-    /// <summary>°C of weighted change beyond which we call it a real move.</summary>
+    /// <summary>°C of weighted change beyond which we call it a real move. A floor:
+    /// even a statistically clean shift smaller than this is practically noise.</summary>
     public const double SignificantChangeC = 1.5;
+
+    /// <summary>How many standard errors the weighted change must clear to count as
+    /// real when both epochs carry per-cell standard errors. ~2σ ≈ 95% confidence,
+    /// so two tight baselines can be separated by less than the °C floor, while two
+    /// noisy ones must move more — an honest, self-scaling bar.</summary>
+    public const double SignificanceSigma = 2.0;
 
     /// <summary>Matched heavy+medium minutes needed before the verdict is trusted.</summary>
     public const int MinConclusiveMinutes = 30;
@@ -35,9 +42,9 @@ public static class BaselineComparer
     public static BaselineComparison Compare(
         IReadOnlyList<BaselineRow> before, IReadOnlyList<BaselineRow> after, ComponentKind kind)
     {
-        double sumWeighted = 0, sumWeights = 0;
+        double sumWeighted = 0, sumWeights = 0, sumSeSq = 0;
         int matchedMinutes = 0, loadedMatchedMinutes = 0;
-        bool fanCorrected = false;
+        bool fanCorrected = false, haveSe = false;
 
         foreach (BaselineRow a in after.Where(r => r.Kind == kind))
         {
@@ -71,15 +78,34 @@ public static class BaselineComparer
             double w = ScoringEngine.Weight(a.Bucket) * Math.Min(1.0, cellMinutes / 60.0 + 0.5);
             sumWeighted += change * w;
             sumWeights += w;
+
+            // Variance of this cell's change = se_after² + se_before² (independent means).
+            // Propagate it, weighted, so the aggregate carries its own standard error.
+            if (a.DeltaSe is { } seA && b.DeltaSe is { } seB)
+            {
+                haveSe = true;
+                double cellSe = Math.Sqrt(seA * seA + seB * seB);
+                sumSeSq += (w * cellSe) * (w * cellSe);
+            }
         }
 
         if (sumWeights <= 0 || loadedMatchedMinutes < MinConclusiveMinutes)
             return new BaselineComparison(RepasteVerdict.Inconclusive, 0, matchedMinutes, fanCorrected);
 
         double weightedChange = sumWeighted / sumWeights;
+
+        // The move must clear the practical °C floor and, when we have the standard
+        // errors to say so, be statistically distinguishable from no change at all.
+        double threshold = SignificantChangeC;
+        if (haveSe)
+        {
+            double weightedSe = Math.Sqrt(sumSeSq) / sumWeights;
+            threshold = Math.Max(SignificantChangeC, SignificanceSigma * weightedSe);
+        }
+
         RepasteVerdict verdict =
-            weightedChange <= -SignificantChangeC ? RepasteVerdict.Improved
-            : weightedChange >= SignificantChangeC ? RepasteVerdict.Worse
+            weightedChange <= -threshold ? RepasteVerdict.Improved
+            : weightedChange >= threshold ? RepasteVerdict.Worse
             : RepasteVerdict.Unchanged;
 
         return new BaselineComparison(verdict, Math.Round(weightedChange, 1), matchedMinutes, fanCorrected);

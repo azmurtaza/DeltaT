@@ -74,6 +74,7 @@ public static class SettingsKeys
     public const string BaselineEpoch = "baseline.epoch";          // increments on repaste
     public const string BaselineEpochStart = "baseline.epochStart";
     public const string BaselineEpochReason = "baseline.epochReason"; // initial | repaste | recalibrate
+    public const string BaselineLockedUtc = "baseline.lockedUtc";   // when confidence first crossed ready; freezes the learning window
 
     public const string LastSeenUtc = "app.lastSeenUtc";           // heartbeat: last scoring pass, for dormancy detection
 
@@ -82,5 +83,6 @@ public static class SettingsKeys
     public const string NotificationsEnabled = "ui.notifications";
     public const string SampleIntervalSeconds = "monitor.intervalSeconds";
     public const string AutostartEnabled = "app.autostart";
+    public const string AutoUpdate = "app.autoUpdate";             // check GitHub for newer releases and self-update
     public const string FirstRunDone = "app.firstRunDone";
 }

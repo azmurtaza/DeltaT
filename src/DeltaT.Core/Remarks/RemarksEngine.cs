@@ -39,7 +39,9 @@ public sealed record RemarkContext(
     // Per paste-component score now vs ~30 days ago, for the monthly readout.
     IReadOnlyDictionary<ComponentKind, (int LastMonth, int Now)>? ScoreVsLastMonth = null,
     // A just-locked repaste verdict to announce once (better/worse/unchanged).
-    RepasteReport? RepasteOutcome = null);
+    RepasteReport? RepasteOutcome = null,
+    // While calibrating: the binding constraint on baseline confidence.
+    string CalibrationConstraint = "");
 
 /// <summary>DeltaT's voice: dry, precise, occasionally warm. Rules fire against a
 /// context snapshot and are rate-limited per rule (and per component where it
@@ -187,7 +189,10 @@ public sealed class RemarksEngine
         new Rule("learning-daily", TimeSpan.FromHours(20), ctx =>
             !ctx.BaselineReady && ctx.LearningDay >= 1
                 ? One("learning-daily", ctx, RemarkSeverity.Info,
-                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% assembled. Use the machine normally - games and heavy work teach DeltaT the most.")
+                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% confident"
+                    + (string.IsNullOrWhiteSpace(ctx.CalibrationConstraint)
+                        ? ". Use the machine normally - games and heavy work teach DeltaT the most."
+                        : $" - {ctx.CalibrationConstraint}."))
                 : Enumerable.Empty<Remark>()),
 
         new Rule("baseline-ready", TimeSpan.MaxValue, ctx =>

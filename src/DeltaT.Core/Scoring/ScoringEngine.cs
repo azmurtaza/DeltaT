@@ -70,11 +70,21 @@ public static class ScoringEngine
     public static ComponentScore Score(ScoreInput input, Func<double, string> fmtTemp)
     {
         var reasons = new List<ScoreReason>();
+        bool locked = input.BaselineReady;
 
-        if (!input.BaselineReady)
+        // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
+        //    fan-normalized so airflow overrides can't masquerade as paste health.
+        //    This also decides whether there's anything to put a number on yet.
+        (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
+            = ComputeExcess(input);
+
+        // Before the baseline locks, DeltaT still shows a number the moment a real
+        // like-for-like comparison exists — flagged provisional, carrying its
+        // confidence. With nothing comparable yet, stay honest and show no number.
+        if (!locked && (input.Baseline.Count == 0 || weightedExcess is null))
         {
             AddAbsoluteObservations(input, reasons, fmtTemp, calibrating: true);
-            return ComponentScore.CalibratingScore(input.Kind, input.Name, input.CalibrationProgress, reasons);
+            return ComponentScore.CalibratingScore(input.Kind, input.Name, input.CalibrationProgress, reasons, input.CalibrationConstraint);
         }
 
         double penalty = 0;
@@ -86,11 +96,6 @@ public static class ScoringEngine
             reasons.Add(new ScoreReason("baseline-stale",
                 $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since - a lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
                 0));
-
-        // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
-        //    fan-normalized so airflow overrides can't masquerade as paste health.
-        (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
-            = ComputeExcess(input);
 
         if (weightedExcess is { } excess)
         {
@@ -157,7 +162,15 @@ public static class ScoringEngine
         int score = (int)Math.Round(Math.Clamp(100 - penalty, 0, 100));
         PatternHint hint = InferPattern(input, heavyExcess, idleExcess, broadExcess);
 
-        return new ComponentScore(input.Kind, input.Name, score, Verdicts.FromScore(score), false, 1.0, reasons, hint);
+        // A locked score is final; an unlocked one is a provisional estimate that
+        // still carries its calibration confidence so the UI can show the band.
+        return new ComponentScore(
+            input.Kind, input.Name, score, Verdicts.FromScore(score),
+            Calibrating: !locked,
+            CalibrationProgress: locked ? 1.0 : input.CalibrationProgress,
+            reasons, hint,
+            locked ? "" : input.CalibrationConstraint,
+            Provisional: !locked);
     }
 
     /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>

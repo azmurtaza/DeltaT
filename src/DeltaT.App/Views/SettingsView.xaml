@@ -135,6 +135,28 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Updates"
+                                            Margin="0,0,0,14" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <StackPanel Margin="0,0,14,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Update automatically"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="Install new versions from GitHub on startup. Turn off to update only when you ask."/>
+                                </StackPanel>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          IsChecked="{Binding AutoUpdateEnabled}"/>
+                            </Grid>
+                            <Grid Margin="0">
+                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" VerticalAlignment="Center"
+                                           FontFamily="{StaticResource Font.Mono}"
+                                           Text="{Binding CurrentVersionText, StringFormat='Current: {0}'}"/>
+                                <Button Style="{StaticResource Button.Ghost}" Content="CHECK FOR UPDATES"
+                                        HorizontalAlignment="Right" Command="{Binding CheckForUpdatesCommand}"/>
+                            </Grid>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
                     <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Data">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11"

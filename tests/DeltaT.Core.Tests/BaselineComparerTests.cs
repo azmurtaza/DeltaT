@@ -13,6 +13,9 @@ public class BaselineComparerTests
     private static BaselineRow Row(LoadBucket bucket, double delta, double? fan = null, int minutes = 200, int epoch = 0) =>
         new(epoch, ComponentKind.Cpu, "Test CPU", Warm, bucket, delta, delta + 3, null, fan, minutes, 0);
 
+    private static BaselineRow RowSe(LoadBucket bucket, double delta, double se, int minutes = 200, int epoch = 0) =>
+        new(epoch, ComponentKind.Cpu, "Test CPU", Warm, bucket, delta, delta + 3, null, null, minutes, 0, se);
+
     [Fact]
     public void NewPasteCooler_AtHeavyLoad_ReadsImproved()
     {
@@ -69,6 +72,29 @@ public class BaselineComparerTests
         };
 
         Assert.Equal(RepasteVerdict.Unchanged, BaselineComparer.Compare(before, after, ComponentKind.Cpu).Verdict);
+    }
+
+    [Fact]
+    public void NoisyBaselines_RaiseTheBar_SoASmallShiftReadsUnchanged()
+    {
+        // Under the fixed °C floor a 2.5° move reads as a regression...
+        var before = new[] { Row(LoadBucket.Heavy, 60) };
+        var after = new[] { Row(LoadBucket.Heavy, 62.5, epoch: 1) };
+        Assert.Equal(RepasteVerdict.Worse, BaselineComparer.Compare(before, after, ComponentKind.Cpu).Verdict);
+
+        // ...but when both baselines are that noisy (±2° SE each), 2.5° isn't significant.
+        var beforeSe = new[] { RowSe(LoadBucket.Heavy, 60, se: 2.0) };
+        var afterSe = new[] { RowSe(LoadBucket.Heavy, 62.5, se: 2.0, epoch: 1) };
+        Assert.Equal(RepasteVerdict.Unchanged, BaselineComparer.Compare(beforeSe, afterSe, ComponentKind.Cpu).Verdict);
+    }
+
+    [Fact]
+    public void TightBaselines_ConfirmARealRegression()
+    {
+        // Same 2.5° move, but both baselines are tight (±0.2° SE) → clearly real.
+        var before = new[] { RowSe(LoadBucket.Heavy, 60, se: 0.2) };
+        var after = new[] { RowSe(LoadBucket.Heavy, 62.5, se: 0.2, epoch: 1) };
+        Assert.Equal(RepasteVerdict.Worse, BaselineComparer.Compare(before, after, ComponentKind.Cpu).Verdict);
     }
 
     [Fact]

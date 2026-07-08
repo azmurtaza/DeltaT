@@ -161,9 +161,12 @@ public sealed class HardwareSensorSource : ISensorSource
 
     private sealed class CpuSensors
     {
-        public ISensor? Package, CoreMax, CoreAvg, Load, Power;
+        public ISensor? Package, CoreMax, CoreAvg, Tctl, Load, Power, PowerCores;
         public readonly List<ISensor> Cores = new();
         public readonly List<ISensor> Distances = new();
+        // Every temperature sensor on the package except the distance-to-TjMax
+        // ones (which are gaps, not absolute temps): the vendor-agnostic safety net.
+        public readonly List<ISensor> AllTemps = new();
     }
 
     private CpuSensors ResolveCpu(IHardware hw)
@@ -175,6 +178,7 @@ public sealed class HardwareSensorSource : ISensorSource
         {
             switch (sensor.SensorType)
             {
+                // Intel exposes these; AMD does not.
                 case SensorType.Temperature when sensor.Name == "CPU Package":
                     s.Package = sensor;
                     break;
@@ -183,6 +187,12 @@ public sealed class HardwareSensorSource : ISensorSource
                     break;
                 case SensorType.Temperature when sensor.Name == "Core Average":
                     s.CoreAvg = sensor;
+                    break;
+                // AMD Ryzen's primary die temperature (e.g. "Core (Tctl/Tdie)",
+                // "Core (Tdie)"). Without this, AMD laptops report no CPU sensor at all.
+                case SensorType.Temperature when sensor.Name.StartsWith("Core (Tctl", StringComparison.Ordinal)
+                                              || sensor.Name.StartsWith("Core (Tdie", StringComparison.Ordinal):
+                    s.Tctl = sensor;
                     break;
                 case SensorType.Temperature when sensor.Name.EndsWith("Distance to TjMax", StringComparison.Ordinal):
                     s.Distances.Add(sensor);
@@ -193,10 +203,18 @@ public sealed class HardwareSensorSource : ISensorSource
                 case SensorType.Load when sensor.Name == "CPU Total":
                     s.Load = sensor;
                     break;
-                case SensorType.Power when sensor.Name == "CPU Package":
+                // Intel: "CPU Package"; AMD: "Package"; either may also expose "CPU Cores".
+                case SensorType.Power when sensor.Name is "CPU Package" or "Package":
                     s.Power = sensor;
                     break;
+                case SensorType.Power when sensor.Name == "CPU Cores":
+                    s.PowerCores = sensor;
+                    break;
             }
+
+            if (sensor.SensorType == SensorType.Temperature
+                && !sensor.Name.EndsWith("Distance to TjMax", StringComparison.Ordinal))
+                s.AllTemps.Add(sensor);
         }
         _cpuCache[hw] = s;
         return s;
@@ -209,10 +227,22 @@ public sealed class HardwareSensorSource : ISensorSource
         // Hottest of everything the die reports. Package DTS and hottest core
         // disagree by a few degrees on hybrid parts; users compare us against
         // tools that show the max, and the max is what the paste has to survive.
+        // Tctl/Tdie is the AMD equivalent of package temperature.
         double? temp = MaxOf(Temp(s.Package), Temp(s.CoreMax));
         foreach (ISensor core in s.Cores)
             temp = MaxOf(temp, Temp(core));
+        temp = MaxOf(temp, Temp(s.Tctl));
         temp ??= Temp(s.CoreAvg);
+
+        // Vendor-agnostic safety net: if no sensor we recognise by name produced a
+        // reading (an unfamiliar AMD APU, a future part), fall back to the hottest of
+        // whatever temperature sensors the package does expose. As long as the chip
+        // surfaces any core temperature at all, DeltaT reads it.
+        if (temp is null)
+        {
+            foreach (ISensor t in s.AllTemps)
+                temp = MaxOf(temp, Temp(t));
+        }
 
         _cpuTjMax ??= DetectTjMax(hw, s);
 
@@ -231,7 +261,7 @@ public sealed class HardwareSensorSource : ISensorSource
             temp, null,
             Percent(s.Load),
             null,
-            Watts(s.Power),
+            Watts(s.Power ?? s.PowerCores),
             null,
             throttling,
             _cpuTjMax);

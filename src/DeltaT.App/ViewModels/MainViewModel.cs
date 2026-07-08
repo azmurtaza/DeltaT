@@ -228,10 +228,27 @@ public partial class MainViewModel : ObservableObject
 
         if (all.All(s => s.Calibrating))
         {
-            double progress = all.Max(s => s.CalibrationProgress);
-            int day = Math.Max(1, (int)(DateTimeOffset.UtcNow - _scores.EpochStart).TotalDays + 1);
-            VerdictTitle = $"Learning your machine - day {day}";
-            VerdictDetail = $"Baseline {progress * 100:0}% assembled. Use the machine normally; games and heavy work teach DeltaT fastest. Hard limits are enforced from day one.";
+            // Once there's real load to compare, show the estimated verdict (worst
+            // first) with its confidence, rather than hiding behind a bare percentage.
+            List<ComponentScore> estimates = all.Where(s => s.Provisional).OrderBy(s => s.Value).ToList();
+            if (estimates.Count > 0)
+            {
+                ComponentScore worstEstimate = estimates[0];
+                string why = worstEstimate.Reasons.Count > 0 ? worstEstimate.Reasons[0].Text : "";
+                VerdictTitle = $"{worstEstimate.Kind.Label()}: {worstEstimate.Verdict.Label()} (estimate)";
+                VerdictDetail = $"{why} Still calibrating, {worstEstimate.CalibrationProgress * 100:0}% confident"
+                    + (string.IsNullOrWhiteSpace(worstEstimate.CalibrationConstraint) ? "." : $"; {worstEstimate.CalibrationConstraint}.");
+                return;
+            }
+
+            // Nothing comparable yet: show the furthest-along component and, honestly,
+            // the one thing still holding its baseline back — confidence, not a countdown.
+            ComponentScore lead = all.OrderByDescending(s => s.CalibrationProgress).First();
+            string constraint = lead.CalibrationConstraint;
+            VerdictTitle = $"Learning your machine - {lead.CalibrationProgress * 100:0}% confident";
+            VerdictDetail = (string.IsNullOrWhiteSpace(constraint)
+                ? "Use the machine normally; games and heavy work teach DeltaT fastest."
+                : $"What's next: {constraint}.") + " Hard limits are enforced from day one.";
             return;
         }
 

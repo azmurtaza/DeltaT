@@ -31,13 +31,29 @@ public static class DemoSeeder
     private const int HistoryDays = 30;
     private const int Band = (int)AmbientBand.Mild; // seeded weather stays in one band so comparisons are like-for-like
 
-    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc)
+    /// <param name="provisional">When true, start the epoch just two days ago and leave
+    /// the baseline unlocked, so the score is still calibrating but far enough along to
+    /// show a provisional estimate — for screenshotting the pre-lock UI.</param>
+    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc, bool provisional = false)
     {
         ClearAll(db);
 
         settings.SetBool(SettingsKeys.FirstRunDone, true);
         settings.SetInt(SettingsKeys.BaselineEpoch, 0);
-        settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-HistoryDays));
+        if (provisional)
+        {
+            // Young epoch, not yet cured: still calibrating, but with real load to estimate from.
+            settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-2.2));
+            settings.Set(SettingsKeys.BaselineLockedUtc, "");
+        }
+        else
+        {
+            settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-HistoryDays));
+            // Freeze the learning window in the clean early stretch (degradation only starts
+            // ~22 days ago), so the baseline is the healthy reference the recent weeks are
+            // judged against — matching how a continuously-running install would have locked.
+            settings.SetTimestamp(SettingsKeys.BaselineLockedUtc, nowUtc.AddDays(-HistoryDays + 7));
+        }
         SeedWeather(settings, nowUtc);
 
         List<MinuteAccum> minutes = GenerateTimeline(degraded, nowUtc);

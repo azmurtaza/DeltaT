@@ -77,6 +77,11 @@ public sealed class TrayManager : IDisposable
             BalloonIcon.Info);
     }
 
+    public void ShowInfo(string title, string message)
+    {
+        _tray.ShowBalloonTip(title, message, BalloonIcon.Info);
+    }
+
     public void ShowRemarkToast(DeltaT.Core.Remarks.Remark remark)
     {
         _tray.ShowBalloonTip(

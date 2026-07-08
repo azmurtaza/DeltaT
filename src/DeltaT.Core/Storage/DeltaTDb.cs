@@ -206,5 +206,19 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 3)
+        {
+            // Confidence-based calibration: each baseline cell now carries the standard
+            // error of its mean delta, so calibration readiness and repaste verdicts can
+            // be significance-tested. Additive and nullable — existing rows read as
+            // "unknown SE" and are simply relearned on the next baseline rebuild.
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE baseline ADD COLUMN delta_se REAL;
+                PRAGMA user_version = 3;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }

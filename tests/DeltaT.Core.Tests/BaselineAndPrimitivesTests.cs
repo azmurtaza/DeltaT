@@ -9,41 +9,98 @@ public class BaselineBuilderTests
 {
     private static readonly DateTimeOffset Start = new(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
 
+    // A "now" far enough past the epoch start that the cure term is 1.0 and can't cap
+    // confidence — so these tests exercise the data-confidence half in isolation.
+    private static readonly DateTimeOffset Cured = Start.AddHours(120);
+
     private static BucketStat Stat(LoadBucket bucket, int minutes, double? delta = 60, int band = 2) =>
         new(bucket, band, true, minutes, minutes * 30, 85, 60, 95, 90, delta, null, 0);
 
+    /// <summary>Session-mean provider that returns <paramref name="means"/> for the
+    /// Heavy/band-2 cell and nothing for anything else.</summary>
+    private static Func<LoadBucket, int, IReadOnlyList<double>> HeavyMeans(params double[] means) =>
+        (bucket, band) => bucket == LoadBucket.Heavy && band == 2 ? means : Array.Empty<double>();
+
     [Fact]
-    public void NotReady_BeforeMinDays_EvenWithPlentyOfLoad()
+    public void NotReady_WhileCuring_EvenWithPerfectData()
     {
+        // Great, tight data on day one — but the paste hasn't settled, so confidence is capped.
         var stats = new[] { Stat(LoadBucket.Heavy, 500) };
-        Assert.False(BaselineBuilder.IsReady(Start, Start.AddDays(3), stats));
+        CalibrationState cal = BaselineBuilder.Assess(Start, Start.AddHours(24), stats,
+            HeavyMeans(60, 60.1, 59.9, 60.05));
+
+        Assert.False(cal.Ready);
+        Assert.True(cal.Confidence <= 0.11);           // held down by the cure floor
+        Assert.Contains("settling", cal.Constraint);
     }
 
     [Fact]
-    public void NotReady_WithoutEnoughLoadedMinutes_EvenAfterAWeek()
+    public void NotReady_WithoutLoadedSessions_EvenAfterCuring()
     {
-        var stats = new[] { Stat(LoadBucket.Idle, 5000), Stat(LoadBucket.Heavy, 20) };
-        Assert.False(BaselineBuilder.IsReady(Start, Start.AddDays(9), stats));
+        // Idle-only history can never define a paste baseline.
+        var stats = new[] { Stat(LoadBucket.Idle, 5000) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Start.AddDays(31), stats,
+            (_, _) => Array.Empty<double>());
+
+        Assert.False(cal.Ready);
+        Assert.Equal(0, cal.DataConfidence);
+        Assert.Contains("load", cal.Constraint);
     }
 
     [Fact]
-    public void Ready_WhenDaysAndLoadBothSuffice()
+    public void NotReady_WithTooFewSessions()
     {
-        var stats = new[] { Stat(LoadBucket.Heavy, 60), Stat(LoadBucket.Medium, 40) };
-        Assert.True(BaselineBuilder.IsReady(Start, Start.AddDays(6), stats));
+        // Cured and tight, but only two independent sessions — variance can't be trusted yet.
+        var stats = new[] { Stat(LoadBucket.Heavy, 200) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
+            HeavyMeans(60, 60.1));
+
+        Assert.False(cal.Ready);
+        Assert.Equal(2, cal.LoadedSessions);
+        Assert.Contains("session", cal.Constraint);
     }
 
     [Fact]
-    public void Progress_BlendsDaysAndLoad()
+    public void Ready_WhenCuredAndPrecise()
     {
-        var none = Array.Empty<BucketStat>();
-        Assert.Equal(0.6, BaselineBuilder.Progress(Start, Start.AddDays(5), none), 2);
-        var full = new[] { Stat(LoadBucket.Heavy, 90) };
-        Assert.Equal(1.0, BaselineBuilder.Progress(Start, Start.AddDays(5), full), 2);
+        var stats = new[] { Stat(LoadBucket.Heavy, 200) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
+            HeavyMeans(60, 60.2, 59.8, 60.1, 59.9)); // 5 tight sessions
+
+        Assert.True(cal.Ready);
+        Assert.True(cal.Confidence >= BaselineBuilder.ReadyConfidence);
     }
 
     [Fact]
-    public void Build_SkipsThinCells_UnknownBands_AndNullDeltas()
+    public void Confidence_IsHigherForTighterData()
+    {
+        var stats = new[] { Stat(LoadBucket.Heavy, 200) };
+        double tight = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(60, 60.2, 59.8, 60.1)).DataConfidence;
+        double noisy = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(50, 60, 70, 55)).DataConfidence;
+
+        Assert.True(tight > noisy);
+        Assert.True(noisy < BaselineBuilder.ReadyConfidence); // scattered readings never lock
+    }
+
+    [Theory]
+    [InlineData(24, 0.10)]   // before the floor: capped low
+    [InlineData(72, 0.55)]   // halfway through the ramp
+    [InlineData(96, 1.00)]   // fully cured
+    [InlineData(200, 1.00)]  // stays at 1
+    public void CureMaturity_RampsFromFloorToFull(double hours, double expected) =>
+        Assert.Equal(expected, BaselineBuilder.CureMaturity(Start, Start.AddHours(hours)), 2);
+
+    [Fact]
+    public void StandardError_NullBelowTwoSamples_ElseShrinksWithN()
+    {
+        Assert.Null(BaselineBuilder.StandardError(Array.Empty<double>()));
+        Assert.Null(BaselineBuilder.StandardError(new[] { 42.0 }));
+        // {58,60,62}: sd = 2, SE = 2/sqrt(3) ≈ 1.1547
+        Assert.Equal(1.1547, BaselineBuilder.StandardError(new[] { 58.0, 60, 62 })!.Value, 3);
+    }
+
+    [Fact]
+    public void Build_SkipsThinCells_UnknownBands_AndNullDeltas_AndCarriesSe()
     {
         var stats = new[]
         {
@@ -53,12 +110,15 @@ public class BaselineBuilderTests
             Stat(LoadBucket.Idle, 60, band: -1),              // unknown band
         };
         var rows = BaselineBuilder.Build(0, ComponentKind.Cpu, "cpu", stats,
-            (_, _) => new[] { 58.0, 59, 60, 61, 62 }, soakRateAvg: 18, Start.AddDays(7));
+            minuteDeltasFor: (_, _) => new[] { 58.0, 59, 60, 61, 62 },
+            sessionMeansFor: (_, _) => new[] { 58.0, 60, 62 },
+            soakRateAvg: 18, Cured);
 
         BaselineRow row = Assert.Single(rows);
         Assert.Equal(LoadBucket.Heavy, row.Bucket);
         Assert.Equal(62, row.DeltaP95); // p95 of the 5-value distribution
         Assert.Equal(18, row.SoakRate);
+        Assert.Equal(1.1547, row.DeltaSe!.Value, 3); // SE of the 3 session means
     }
 
     [Fact]

@@ -9,6 +9,7 @@ using DeltaT.Core.Machine;
 using DeltaT.Core.Monitoring;
 using DeltaT.Core.Scoring;
 using DeltaT.Core.Storage;
+using DeltaT.Core.Updates;
 using DeltaT.Core.Weather;
 
 namespace DeltaT.App.ViewModels;
@@ -19,8 +20,14 @@ public partial class SettingsViewModel : ObservableObject
     private readonly AmbientService _ambient;
     private readonly ScoreCoordinator _scores;
     private readonly DeltaTDb _db;
+    private readonly UpdateService _updates;
 
     public bool AutostartAvailable { get; }
+
+    /// <summary>Self-update is meaningless against the simulated store, so hide it there.</summary>
+    public bool UpdatesAvailable { get; }
+
+    public string CurrentVersionText => UpdateService.CurrentVersionLabel;
 
     [ObservableProperty] private string _locationText = "";
     [ObservableProperty] private string _cityQuery = "";
@@ -31,6 +38,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _closeToTray;
     [ObservableProperty] private bool _notificationsEnabled;
     [ObservableProperty] private bool _autostartEnabled;
+    [ObservableProperty] private bool _autoUpdateEnabled;
+    [ObservableProperty] private bool _checkingUpdate;
     [ObservableProperty] private string _dbText = "";
     [ObservableProperty] private string _statusText = "";
 
@@ -39,14 +48,16 @@ public partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(
         SettingsStore settings, AmbientService ambient, ScoreCoordinator scores,
         MachineIdentity machine, ThermalProfile profile, DeltaTDb db,
-        Func<SensorSnapshot?> latest, bool simulated)
+        UpdateService updates, Func<SensorSnapshot?> latest, bool simulated)
     {
         _settings = settings;
         _ambient = ambient;
         _scores = scores;
         _db = db;
+        _updates = updates;
 
         AutostartAvailable = !simulated;
+        UpdatesAvailable = !simulated;
 
         _fahrenheit = settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
         _indoorOffset = settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
@@ -54,6 +65,7 @@ public partial class SettingsViewModel : ObservableObject
         _closeToTray = settings.GetBool(SettingsKeys.CloseToTray, true);
         _notificationsEnabled = settings.GetBool(SettingsKeys.NotificationsEnabled, true);
         _autostartEnabled = AutostartAvailable && AutostartService.IsEnabled();
+        _autoUpdateEnabled = updates.AutoUpdateEnabled;
 
         RefreshInfo();
     }
@@ -95,6 +107,60 @@ public partial class SettingsViewModel : ObservableObject
         StatusText = ok
             ? value ? "DeltaT will start with Windows (elevated, no UAC prompt)." : "Autostart removed."
             : "Task Scheduler said no - is DeltaT running elevated?";
+    }
+
+    partial void OnAutoUpdateEnabledChanged(bool value)
+    {
+        _updates.AutoUpdateEnabled = value;
+        StatusText = value
+            ? "DeltaT will install new versions automatically on startup."
+            : "Auto-update off - check for new versions manually below.";
+    }
+
+    [RelayCommand]
+    private async Task CheckForUpdatesAsync()
+    {
+        if (!UpdatesAvailable || CheckingUpdate) return;
+        CheckingUpdate = true;
+        StatusText = "Checking for updates…";
+        try
+        {
+            ReleaseInfo? release = await _updates.CheckAsync();
+            if (release is null)
+            {
+                StatusText = $"You're on the latest version ({CurrentVersionText}).";
+                return;
+            }
+
+            MessageBoxResult answer = MessageBox.Show(
+                $"DeltaT {release.Tag} is available - you have {CurrentVersionText}.\n\n"
+                + "Download and install it now? DeltaT will close and reopen once it's done.",
+                "DeltaT - update available", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (answer != MessageBoxResult.Yes)
+            {
+                StatusText = $"Update {release.Tag} is ready whenever you are.";
+                return;
+            }
+
+            StatusText = $"Downloading DeltaT {release.Tag}…";
+            string? installer = await _updates.DownloadAsync(release);
+            if (installer is null)
+            {
+                StatusText = "Download failed - try again, or grab the installer from GitHub.";
+                return;
+            }
+
+            StatusText = "Installing… DeltaT will restart in a moment.";
+            _updates.ApplyAndRelaunch(installer); // shuts the app down; the helper relaunches it
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Update check failed: {ex.Message}";
+        }
+        finally
+        {
+            CheckingUpdate = false;
+        }
     }
 
     [RelayCommand]

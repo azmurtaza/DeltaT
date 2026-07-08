@@ -26,6 +26,10 @@ public sealed class ScoreDial : FrameworkElement
         nameof(Progress), typeof(double), typeof(ScoreDial),
         new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender, OnFractionSourceChanged));
 
+    public static readonly DependencyProperty ProvisionalProperty = DependencyProperty.Register(
+        nameof(Provisional), typeof(bool), typeof(ScoreDial),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender, OnFractionSourceChanged));
+
     public static readonly DependencyProperty LabelProperty = DependencyProperty.Register(
         nameof(Label), typeof(string), typeof(ScoreDial),
         new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.AffectsRender));
@@ -41,6 +45,7 @@ public sealed class ScoreDial : FrameworkElement
     public int Score { get => (int)GetValue(ScoreProperty); set => SetValue(ScoreProperty, value); }
     public bool Calibrating { get => (bool)GetValue(CalibratingProperty); set => SetValue(CalibratingProperty, value); }
     public double Progress { get => (double)GetValue(ProgressProperty); set => SetValue(ProgressProperty, value); }
+    public bool Provisional { get => (bool)GetValue(ProvisionalProperty); set => SetValue(ProvisionalProperty, value); }
     public string Label { get => (string)GetValue(LabelProperty); set => SetValue(LabelProperty, value); }
     public string Verdict { get => (string)GetValue(VerdictProperty); set => SetValue(VerdictProperty, value); }
     private double RenderFraction => (double)GetValue(RenderFractionProperty);
@@ -70,7 +75,9 @@ public sealed class ScoreDial : FrameworkElement
     private static void OnFractionSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var dial = (ScoreDial)d;
-        double target = dial.Calibrating
+        // Provisional and locked both fill to the score; a bare calibrating dial
+        // (no number yet) fills to learning progress.
+        double target = dial.Calibrating && !dial.Provisional
             ? Math.Clamp(dial.Progress, 0, 1)
             : Math.Clamp(dial.Score / 100.0, 0, 1);
         var anim = new DoubleAnimation(target, TimeSpan.FromMilliseconds(600))
@@ -93,9 +100,13 @@ public sealed class ScoreDial : FrameworkElement
 
         double frac = Math.Clamp(RenderFraction, 0, 1);
         int lit = (int)Math.Round(frac * (MinorTicks - 1));
-        Color litColor = Calibrating
+        // Bare calibrating: dim ember. Provisional: the verdict color, but muted so
+        // it never reads as a final number. Locked: the full verdict color.
+        Color litColor = Calibrating && !Provisional
             ? Color.FromArgb(140, ThermalPalette.Accent.R, ThermalPalette.Accent.G, ThermalPalette.Accent.B)
-            : ThermalPalette.VerdictColor(Score);
+            : Provisional
+                ? Dim(ThermalPalette.VerdictColor(Score), 165)
+                : ThermalPalette.VerdictColor(Score);
 
         Pen dimMinor = TickPen(ThermalPalette.Track, 1.4);
         Pen dimMajor = TickPen(Color.FromRgb(0x3C, 0x2B, 0x1C), 2.0);
@@ -124,13 +135,18 @@ public sealed class ScoreDial : FrameworkElement
             dc.DrawLine(pen, a, b);
         }
 
-        Color subColor = Calibrating
+        Color subColor = Calibrating && !Provisional
             ? Color.FromArgb(190, ThermalPalette.Accent.R, ThermalPalette.Accent.G, ThermalPalette.Accent.B)
             : litColor;
-        if (Calibrating)
+        if (Calibrating && !Provisional)
             // No score yet, so the meter says so: dashes for the reading, the
             // learning progress spelled out small (the ticks fill with it too).
             DrawCenter(dc, center, size, dip, "--", $"CAL {Progress * 100:0}%", ThermalPalette.TextFaint, subColor);
+        else if (Provisional)
+            // A real estimate before lock: the number in a muted verdict color, with
+            // the verdict word and how confident DeltaT is in it so far.
+            DrawCenter(dc, center, size, dip, Score.ToString(CultureInfo.InvariantCulture),
+                $"{Verdict} · {Progress * 100:0}%", Dim(ThermalPalette.Text, 190), subColor);
         else
             DrawCenter(dc, center, size, dip, Score.ToString(CultureInfo.InvariantCulture), Verdict, ThermalPalette.Text, subColor);
 
@@ -169,6 +185,9 @@ public sealed class ScoreDial : FrameworkElement
         }
         dc.DrawText(word, new Point(center.X - word.Width / 2, center.Y + numeral.Height * 0.44));
     }
+
+    /// <summary>Same hue, lower alpha — for the provisional (pre-lock) treatment.</summary>
+    private static Color Dim(Color c, byte alpha) => Color.FromArgb(alpha, c.R, c.G, c.B);
 
     /// <summary>Hair-spaced caps, same trick as Ui.Tracking but for drawn text.</summary>
     private static string Track(string s) =>

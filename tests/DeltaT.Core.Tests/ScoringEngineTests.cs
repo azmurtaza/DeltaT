@@ -54,6 +54,37 @@ public class ScoringEngineTests
     }
 
     [Fact]
+    public void NotReadyWithComparableLoad_ProducesProvisionalScore()
+    {
+        // Before lock, but there's real like-for-like load: show an estimate, not "--".
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 68) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            ready: false, progress: 0.55), Fmt);
+
+        Assert.True(score.Provisional);
+        Assert.True(score.Calibrating);              // still not locked
+        Assert.Equal(0.55, score.CalibrationProgress, 2);
+        Assert.True(score.Value is > 0 and < 100);   // a real number, not the calibrating zero
+        Assert.NotEqual(Verdict.Calibrating, score.Verdict);
+    }
+
+    [Fact]
+    public void NotReadyWithoutBaseline_StaysBareCalibrating()
+    {
+        // Nothing comparable yet → no number, honest "--" calibrating state.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 68) },
+            baseline: Array.Empty<BaselineBucket>(),
+            ready: false, progress: 0.2), Fmt);
+
+        Assert.False(score.Provisional);
+        Assert.True(score.Calibrating);
+        Assert.Equal(0, score.Value);
+        Assert.Equal(Verdict.Calibrating, score.Verdict);
+    }
+
+    [Fact]
     public void DegradedTrifecta_ExcessThrottleAndSoak_IsRepasteTerritory()
     {
         ComponentScore score = ScoringEngine.Score(Input(

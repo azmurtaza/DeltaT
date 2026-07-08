@@ -42,7 +42,7 @@ DeltaT.sln
 
 ## The brain — how DeltaT decides
 
-1. **Baseline learning (first ~7 days)**: records delta-over-ambient per component per load bucket, heat-soak rate (how fast temp spikes when load hits), fan speeds (if exposed), throttle events. Score shows "calibrating" until confident; absolute-limit warnings work from day 1.
+1. **Baseline learning (confidence-gated, not a fixed timer)**: records delta-over-ambient per component per load bucket, heat-soak rate (how fast temp spikes when load hits), fan speeds (if exposed), throttle events. The score stays "calibrating" until the baseline is *statistically* confident — the standard error of independent session means falls below target for the loaded buckets — gated by a paste break-in ramp (~3.5+ days minimum). Feeding it varied load locks it sooner; leaving it idle keeps it learning. Absolute-limit warnings work from day 1.
 2. **Ambient correction**: location resolved once (auto by IP, or typed manually) and cached — exactly as you specified, no continuous polling. The outside *temperature* refreshes every 3h (cheap single GET; weather changes even when location doesn't). Offline → last cached value with staleness note. Optional "indoor offset" setting for heavily air-conditioned rooms. Baselines are bucketed by ambient band (<15 / 15–25 / 25–35 / >35°C) so summer-vs-winter comparisons stay fair.
 3. **Safe limits — three layers (your fallback chain, preserved)**:
    - **The silicon itself** (primary): CPU TjMax read from the chip (100°C on your i5-13420H), GPU throttle point where exposed. More authoritative than any benchmark site.
@@ -83,7 +83,7 @@ DeltaT.sln
 - **Admin required** for CPU temps (kernel driver) — unavoidable, same as every serious monitor. Autostart handles it gracefully.
 - **Battery temp**: Windows rarely exposes it; shown only if your ACPI does (on the Nitro, likely not). Same caveat for laptop fan RPM and "system/board" temp — laptops hide these behind the EC. CPU/GPU/SSD — the ones that matter for paste — are reliably available.
 - **Dual GPU**: RTX 3050 is the paste-relevant GPU; iGPU shown collapsed.
-- **7-day calibration** before scores are confident; absolute warnings active immediately.
+- **Confidence-gated calibration** (standard error of session means per bucket + paste break-in ramp, ~3.5+ days for a well-used machine) before scores are confident; absolute warnings active immediately.
 - **OneDrive folder**: builds inside a synced folder can get flaky with file locks; .gitignore mitigations first, and if it fights us I'll suggest relocating to `C:\dev`.
 
 ## Verification
