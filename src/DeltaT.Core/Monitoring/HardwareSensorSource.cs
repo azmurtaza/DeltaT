@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using LibreHardwareMonitor.Hardware;
 
 namespace DeltaT.Core.Monitoring;
@@ -25,7 +26,9 @@ public sealed class HardwareSensorSource : ISensorSource
     private readonly UpdateVisitor _visitor = new();
     private double? _cpuTjMax;
     private readonly BatteryCycleReader _batteryCycles = new();
+    private readonly AcpiThermalZoneReader _acpiZone = new();
     private bool _cpuTempEverMissingLogged;
+    private bool _acpiFallbackLogged;
 
     // Resolved sensor references, so each Read() is direct value access instead
     // of repeated name scans. Keyed by hardware instance: a reopen creates new
@@ -44,6 +47,23 @@ public sealed class HardwareSensorSource : ISensorSource
     private static readonly TimeSpan MissingTempLimit = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReopenCooldown = TimeSpan.FromMinutes(5);
 
+    // Cold-start recovery: the WinRing0 kernel driver can fail to initialise at
+    // startup (a vendor tool or the just-replaced instance still holding it after an
+    // auto-update, a boot-time race), which leaves *every* CPU temperature null for
+    // this whole process while a fresh start would have worked. If a CPU is present
+    // but never yields a temperature, rebuild the session a few times to reload the
+    // driver — then stop, so a genuinely non-elevated run (temps truly unavailable)
+    // doesn't reopen forever.
+    private DateTimeOffset _wdColdStartSince;
+    private int _coldStartReopens;
+    private const int MaxColdStartReopens = 4;
+    private static readonly TimeSpan ColdStartRetry = TimeSpan.FromSeconds(25);
+
+    // Reloading the driver only helps if we actually have the rights to read CPU MSRs;
+    // a non-elevated run will never get a temperature no matter how many times we retry,
+    // so don't churn the session for it.
+    private readonly bool _isElevated = ProcessIsElevated();
+
     /// <summary>Self-healing / anomaly notes (sensor stall, reopen attempts) for the app log.</summary>
     public event Action<string>? Diagnostic;
 
@@ -58,6 +78,7 @@ public sealed class HardwareSensorSource : ISensorSource
     {
         _computer = BuildComputer();
         _computer.Open();
+        _wdColdStartSince = DateTimeOffset.UtcNow;
     }
 
     private static Computer BuildComputer() => new()
@@ -125,15 +146,23 @@ public sealed class HardwareSensorSource : ISensorSource
                 Reopen(now, $"CPU reading frozen at {temp:0.0} °C / {cpu.LoadPercent ?? 0:0.0} % for {(now - _wdLastChangeUtc).TotalSeconds:0} s");
             }
         }
-        else if (_wdEverSawTemp && now - _wdLastTempSeenUtc >= MissingTempLimit)
+        else if (_wdEverSawTemp)
         {
-            Reopen(now, $"CPU temperature disappeared {(now - _wdLastTempSeenUtc).TotalSeconds:0} s ago");
+            if (now - _wdLastTempSeenUtc >= MissingTempLimit)
+                Reopen(now, $"CPU temperature disappeared {(now - _wdLastTempSeenUtc).TotalSeconds:0} s ago");
+        }
+        else if (_isElevated && _coldStartReopens < MaxColdStartReopens && now - _wdColdStartSince >= ColdStartRetry)
+        {
+            // A CPU is present but has never once reported a temperature — most likely
+            // the kernel driver didn't come up. Reload the session to try again.
+            _coldStartReopens++;
+            Reopen(now, "CPU temperature never appeared - reloading the sensor driver (it may have failed to initialise at startup)", bypassCooldown: true);
         }
     }
 
-    private void Reopen(DateTimeOffset now, string why)
+    private void Reopen(DateTimeOffset now, string why, bool bypassCooldown = false)
     {
-        if (now - _lastReopenUtc < ReopenCooldown)
+        if (!bypassCooldown && now - _lastReopenUtc < ReopenCooldown)
             return;
         _lastReopenUtc = now;
         Diagnostic?.Invoke($"sensor stall detected ({why}) - reinitializing the sensor engine");
@@ -146,7 +175,7 @@ public sealed class HardwareSensorSource : ISensorSource
         _gpuCache.Clear();
         _wdTemp = _wdLoad = null;
         _wdEverSawTemp = false;
-        _wdLastChangeUtc = _wdLastTempSeenUtc = now;
+        _wdLastChangeUtc = _wdLastTempSeenUtc = _wdColdStartSince = now;
         try
         {
             _computer = BuildComputer();
@@ -255,6 +284,20 @@ public sealed class HardwareSensorSource : ISensorSource
         // that reads without it. Borrow that so a non-elevated or unusual machine still
         // shows a CPU temperature instead of a blank card.
         temp ??= FallbackCpuTempFromBoard();
+
+        // Truly-last resort for a CPU LHM can't parse at all (e.g. a brand-new part):
+        // the ACPI thermal zone. Not the exact die, but real and roughly CPU-tracking,
+        // and available on almost any Windows machine when elevated. Only consulted when
+        // everything above came up empty, so an accurate LHM reading always wins.
+        if (temp is null && _acpiZone.CurrentCelsius is { } zone)
+        {
+            temp = zone;
+            if (!_acpiFallbackLogged)
+            {
+                _acpiFallbackLogged = true;
+                Diagnostic?.Invoke($"using ACPI thermal-zone temperature ({zone:0.#} °C) as a CPU fallback - LibreHardwareMonitor couldn't read this CPU directly");
+            }
+        }
 
         if (temp is null && !_cpuTempEverMissingLogged)
         {
@@ -475,6 +518,16 @@ public sealed class HardwareSensorSource : ISensorSource
 
     private static double? Watts(ISensor? s) => s?.Value is { } v && v is >= 0 and < 500 ? Math.Round(v, 1) : null;
 
+    private static bool ProcessIsElevated()
+    {
+        try
+        {
+            using WindowsIdentity id = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch { return false; }
+    }
+
     private static bool IsOnAcPower()
     {
         return GetSystemPowerStatus(out SystemPowerStatus status) && status.ACLineStatus != 0;
@@ -497,6 +550,7 @@ public sealed class HardwareSensorSource : ISensorSource
     public void Dispose()
     {
         _batteryCycles.Dispose();
+        _acpiZone.Dispose();
         _computer.Close();
     }
 

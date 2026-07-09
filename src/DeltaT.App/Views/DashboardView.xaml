@@ -84,9 +84,17 @@
                     </Style.Triggers>
                 </Style>
             </Border.Style>
-            <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11"
-                       Foreground="{StaticResource Brush.HotWarn}" TextWrapping="Wrap"
-                       Text="{Binding SensorNotice}"/>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0"
+                        Content="RESTART AS ADMINISTRATOR"
+                        Command="{Binding RestartAsAdminCommand}"
+                        Visibility="{Binding ElevationOffered, Converter={StaticResource BoolToVis}}"
+                        Style="{StaticResource Button.Primary}"/>
+                <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11"
+                           Foreground="{StaticResource Brush.HotWarn}" TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Text="{Binding SensorNotice}"/>
+            </DockPanel>
         </Border>
 
         <!-- ================= live telemetry ledger -->

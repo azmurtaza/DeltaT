@@ -64,11 +64,21 @@ public partial class App : Application
         // must be able to capture alongside a live tray instance.
         _mutex = new Mutex(true, @"Local\DeltaT.App.Singleton", out bool isFirst);
         _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DeltaT.App.Show");
+        bool elevatingHandoff = e.Args.Contains("--elevating", StringComparer.OrdinalIgnoreCase);
         if (!isFirst && _uishotDir is null)
         {
-            _showSignal.Set();
-            Shutdown();
-            return;
+            // Normal second launch → just surface the running instance and exit.
+            // Elevation handoff is different: the non-elevated instance that spawned
+            // this one is exiting to release the singleton, so wait briefly for it to
+            // let go and then take over as the primary (elevated) instance. Without
+            // this, the elevated relaunch loses the race and the app never comes up
+            // elevated — which is exactly how CPU temps silently stay blank.
+            if (!(elevatingHandoff && _mutex.WaitOne(TimeSpan.FromSeconds(8))))
+            {
+                _showSignal.Set();
+                Shutdown();
+                return;
+            }
         }
 
         // CPU temperature registers need the kernel driver → admin. Relaunch
@@ -80,7 +90,7 @@ public partial class App : Application
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = Environment.ProcessPath!,
-                    Arguments = string.Join(' ', e.Args),
+                    Arguments = ElevatedArgs(e.Args),
                     UseShellExecute = true,
                     Verb = "runas",
                 });
@@ -90,6 +100,8 @@ public partial class App : Application
             catch (Win32Exception)
             {
                 // UAC declined — run with whatever sensors we can see (GPU, battery).
+                // The dashboard offers a one-click "Restart as administrator" so this
+                // is always recoverable without hunting for a shortcut.
             }
         }
 
@@ -277,7 +289,7 @@ public partial class App : Application
 
         _vm = new MainViewModel(machine, profile, _monitor, _ambient, _scores, _settings,
             trends, remarksFeed, settingsVm, deviceVm, onboarding)
-        { Simulated = simulate, Elevated = simulate || IsElevated() };
+        { Simulated = simulate, Elevated = simulate || IsElevated(), RequestElevation = RelaunchAsAdmin };
         if (args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
             _vm.UiVisible = false; // tray start: no window yet, skip card churn
         _tray = new TrayManager(_monitor, ShowMainWindow, Quit);
@@ -383,6 +395,36 @@ public partial class App : Application
 
     private static bool IsElevated() =>
         new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+
+    /// <summary>Command line for an elevated relaunch: the original args plus the
+    /// <c>--elevating</c> marker, so the new instance knows to wait out the singleton
+    /// this one is about to release instead of bouncing off it as a "second launch".</summary>
+    private static string ElevatedArgs(string[] args) => string.Join(' ',
+        args.Contains("--elevating", StringComparer.OrdinalIgnoreCase) ? args : args.Append("--elevating"));
+
+    /// <summary>User asked to unlock CPU sensors after declining (or never getting) the
+    /// UAC prompt: spawn an elevated copy and step aside so it becomes the primary
+    /// instance. If UAC is declined again, nothing changes.</summary>
+    public void RelaunchAsAdmin()
+    {
+        if (IsSimulated || IsElevated())
+            return;
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = Environment.ProcessPath!,
+                Arguments = ElevatedArgs(Environment.GetCommandLineArgs().Skip(1).ToArray()),
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+            Quit(); // release the singleton so the elevated instance takes over cleanly
+        }
+        catch (Win32Exception)
+        {
+            // UAC declined again — leave the running instance as it is.
+        }
+    }
 
     public void ShowMainWindow()
     {

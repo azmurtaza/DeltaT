@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using DeltaT.App.Controls;
 using DeltaT.Core.Knowledge;
 using DeltaT.Core.Machine;
@@ -63,8 +64,18 @@ public partial class MainViewModel : ObservableObject
     /// silently as live data.</summary>
     [ObservableProperty] private string _sensorNotice = "";
 
+    /// <summary>True when the CPU sensor is dark purely because DeltaT isn't elevated —
+    /// drives the dashboard's one-click "Restart as administrator" recovery.</summary>
+    [ObservableProperty] private bool _elevationOffered;
+
     /// <summary>Whether the process holds admin rights (CPU temps need the kernel driver).</summary>
     public bool Elevated { get; init; } = true;
+
+    /// <summary>Invoked to relaunch DeltaT elevated (wired to App by the composition root).</summary>
+    public Action? RequestElevation { get; init; }
+
+    [RelayCommand]
+    private void RestartAsAdmin() => RequestElevation?.Invoke();
 
     private bool _uiVisible = true;
 
@@ -203,9 +214,12 @@ public partial class MainViewModel : ObservableObject
             if (ageSeconds > limit)
                 notice = $"SENSORS STALLED - last reading {ageSeconds:0} s ago; values shown may be outdated";
             else if (_needsAdmin)
-                notice = "CPU temperature locked - restart DeltaT and accept the administrator prompt to unlock it";
+                notice = "CPU TEMPERATURE LOCKED - reading the CPU needs administrator access (the kernel driver). Restart elevated to unlock it.";
         }
         SensorNotice = notice;
+        // The recovery button only makes sense for the elevation case, never for a
+        // pause/stall (and never in sim, which has no real sensors to unlock).
+        ElevationOffered = _needsAdmin && !Simulated && !Elevated;
     }
 
     private void UpdateWeather()

@@ -8,6 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Keep this in lockstep with DeltaT.Core so the spike diagnoses the SAME
+         LibreHardwareMonitor the app actually ships. A mismatch here once masked a
+         0.9.6 CPU-temp regression on Raptor Lake - see deltat-gotchas. -->
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
   </ItemGroup>
 
