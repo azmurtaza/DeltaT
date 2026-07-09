@@ -41,6 +41,8 @@ public sealed record ComponentScore(
     // "not enough data yet" state and for a locked score.
     bool Provisional = false)
 {
+    public ScoringEngine.FanNormalization? Fan { get; init; }
+
     public static ComponentScore CalibratingScore(ComponentKind kind, string name, double progress, IReadOnlyList<ScoreReason> reasons, string constraint = "") =>
         new(kind, name, 0, Verdict.Calibrating, true, progress, reasons, PatternHint.None, constraint);
 }
@@ -85,7 +87,11 @@ public sealed record ScoreInput(
     bool BaselineStale = false,
     int DormantDays = 0,
     // While calibrating: the binding constraint on baseline confidence, for the UI.
-    string CalibrationConstraint = "");
+    string CalibrationConstraint = "",
+    // Statistical confidence in the baseline data itself (independent of paste cure).
+    // A provisional score is only shown once this is solid, so a thin, half-learned
+    // baseline can't flash a misleading number before it locks.
+    double CalibrationDataConfidence = 1.0);
 
 public static class Verdicts
 {

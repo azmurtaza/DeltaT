@@ -44,6 +44,11 @@ public static class ScoringEngine
     /// <summary>Below this rpm a "fan reading" is noise or a stopped fan, not airflow data.</summary>
     public const double MinMeaningfulFanRpm = 300;
 
+    /// <summary>Baseline data confidence a not-yet-locked score needs before DeltaT will
+    /// show a provisional number instead of the learning dial. Keeps early, thin-data
+    /// estimates (which can read as a false 100 or a false Aging) off the screen.</summary>
+    public const double ProvisionalMinDataConfidence = 0.5;
+
     /// <summary>Minimum minutes of recent data in a bucket before it may judge.</summary>
     public static int MinMinutes(LoadBucket b) => b switch
     {
@@ -78,10 +83,13 @@ public static class ScoringEngine
         (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
             = ComputeExcess(input);
 
-        // Before the baseline locks, DeltaT still shows a number the moment a real
-        // like-for-like comparison exists — flagged provisional, carrying its
-        // confidence. With nothing comparable yet, stay honest and show no number.
-        if (!locked && (input.Baseline.Count == 0 || weightedExcess is null))
+        // Before the baseline locks, DeltaT shows a provisional number only once the
+        // estimate is genuinely data-backed: a real like-for-like comparison exists AND
+        // the baseline data confidence has crossed a floor. Otherwise a thin, half-learned
+        // baseline could flash a misleading 100 (or a false Aging) that whipsaws as more
+        // data lands — so below the floor we stay honest and show the learning dial.
+        if (!locked && (input.Baseline.Count == 0 || weightedExcess is null
+                        || input.CalibrationDataConfidence < ProvisionalMinDataConfidence))
         {
             AddAbsoluteObservations(input, reasons, fmtTemp, calibrating: true);
             return ComponentScore.CalibratingScore(input.Kind, input.Name, input.CalibrationProgress, reasons, input.CalibrationConstraint);
@@ -170,7 +178,8 @@ public static class ScoringEngine
             CalibrationProgress: locked ? 1.0 : input.CalibrationProgress,
             reasons, hint,
             locked ? "" : input.CalibrationConstraint,
-            Provisional: !locked);
+            Provisional: !locked)
+        { Fan = fanNorm };
     }
 
     /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>

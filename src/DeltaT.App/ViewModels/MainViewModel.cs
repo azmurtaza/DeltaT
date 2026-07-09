@@ -45,6 +45,9 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
     [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. First verdict lands after about a week of normal use.";
+    [ObservableProperty] private string _scoringBasis = "Normalized for weather · load";
+    [ObservableProperty] private string _fanNote = "";
+    [ObservableProperty] private bool _fanNoteActive;
     [ObservableProperty] private string _weatherText = "locating…";
     [ObservableProperty] private string _weatherTooltip = "Resolving your location (cached afterwards - DeltaT never tracks you)";
     [ObservableProperty] private bool _weatherStale;
@@ -52,6 +55,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _latestRemarkTime = "";
     [ObservableProperty] private Brush _remarkDot = new SolidColorBrush(ThermalPalette.Accent);
     [ObservableProperty] private bool _simulated;
+    private bool _hasFanSensor;
 
     /// <summary>Non-empty when the readings can't be trusted right now
     /// (monitoring paused, sensors stalled, CPU sensor locked behind elevation).
@@ -172,6 +176,16 @@ public partial class MainViewModel : ObservableObject
         }
 
         _needsAdmin = !Simulated && !Elevated && snap.Find(ComponentKind.Cpu) is { TemperatureC: null };
+        if (!_hasFanSensor && snap.Components.Any(c => c.FanRpm.HasValue))
+            OnFanSensorFound();
+    }
+
+    private void OnFanSensorFound()
+    {
+        _hasFanSensor = true;
+        ScoringBasis = "Normalized for weather · load · fan speed";
+        if (!FanNoteActive && FanNote.Length > 0)
+            FanNote = "";
     }
 
     /// <summary>Runs every 5 s while the window is visible; never while hidden.</summary>
@@ -226,6 +240,9 @@ public partial class MainViewModel : ObservableObject
         if (all.Count == 0)
             return;
 
+        if (!_hasFanSensor && all.Any(s => s.Fan is not null))
+            OnFanSensorFound();
+
         if (all.All(s => s.Calibrating))
         {
             // Once there's real load to compare, show the estimated verdict (worst
@@ -234,6 +251,7 @@ public partial class MainViewModel : ObservableObject
             if (estimates.Count > 0)
             {
                 ComponentScore worstEstimate = estimates[0];
+                UpdateFanNote(worstEstimate);
                 string why = worstEstimate.Reasons.Count > 0 ? worstEstimate.Reasons[0].Text : "";
                 VerdictTitle = $"{worstEstimate.Kind.Label()}: {worstEstimate.Verdict.Label()} (estimate)";
                 VerdictDetail = $"{why} Still calibrating, {worstEstimate.CalibrationProgress * 100:0}% confident"
@@ -244,6 +262,7 @@ public partial class MainViewModel : ObservableObject
             // Nothing comparable yet: show the furthest-along component and, honestly,
             // the one thing still holding its baseline back — confidence, not a countdown.
             ComponentScore lead = all.OrderByDescending(s => s.CalibrationProgress).First();
+            UpdateFanNote(null);
             string constraint = lead.CalibrationConstraint;
             VerdictTitle = $"Learning your machine - {lead.CalibrationProgress * 100:0}% confident";
             VerdictDetail = (string.IsNullOrWhiteSpace(constraint)
@@ -253,6 +272,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         ComponentScore worst = all.Where(s => !s.Calibrating).OrderBy(s => s.Value).First();
+        UpdateFanNote(worst);
         VerdictTitle = $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
         VerdictDetail = worst.Reasons.Count > 0
             ? worst.Reasons[0].Text + (worst.Hint switch
@@ -263,6 +283,29 @@ public partial class MainViewModel : ObservableObject
                   _ => "",
               })
             : "All quiet.";
+    }
+
+    private void UpdateFanNote(ComponentScore? worst)
+    {
+        if (_hasFanSensor)
+        {
+            if (worst is null)
+            {
+                FanNote = "";
+                FanNoteActive = false;
+            }
+            else
+            {
+                (FanNote, FanNoteActive) = ScoreViewModel.DescribeFan(worst);
+            }
+        }
+        else
+        {
+            FanNote = _monitor.Latest is not null
+                ? "Fan speed isn't exposed on this machine (often locked behind vendor software), so airflow can't be scored - the verdict rests on weather-corrected rise."
+                : "";
+            FanNoteActive = false;
+        }
     }
 
     public void OnRemark(Remark remark)

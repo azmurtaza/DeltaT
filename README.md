@@ -17,7 +17,7 @@ Fan speed is also factored in, so switching between silent and performance fan m
 - **SSD, battery, and board** - thermal health and wear readouts (SMART wear level, battery wear) alongside the paste scores
 - **Dust vs. paste insight** - fast heat spikes read as paste degradation; high steady temps with elevated fans at normal soak rate read as dust or airflow. DeltaT tells you which pattern it sees, so you know whether to grab compressed air or open the machine
 - **Repaste verdict** - after you log a repaste and the new baseline settles, DeltaT compares before and after like-for-like (same load bucket, same ambient band, fan-normalized) and calls it Improved, Unchanged, Worse, or Inconclusive. A worse result (air bubble, bad mount, pump-out) raises a visible warning, not just a quiet note
-- **History and trends** - full local history with 24h, 7d, 30d, and all-time graphs, plus a monthly score readout so you can see how this month compares to 30 days ago
+- **History and trends** - full local history with 24h, 7d, 30d, and all-time graphs (scroll to zoom, drag to pan), plus a monthly score readout so you can see how this month compares to 30 days ago
 - **Staleness detection** - if DeltaT has not run for 45 days or more with a locked baseline, it flags the score as unverified and offers a one-click Recalibrate in Settings. Your old baseline is never auto-deleted
 - **Provisional score while it learns** - instead of a blank dial for the first week, DeltaT shows an estimated score with a confidence readout the moment there is enough load to compare, and it locks the real score by statistical confidence rather than a fixed countdown
 - **Automatic updates** - DeltaT checks its own GitHub releases on startup and installs new versions quietly, so you are never stuck on an old build. Turn it off in Settings, or check on demand with a button
@@ -32,7 +32,7 @@ While it calibrates it still shows a provisional estimate the moment there is re
 ## Requirements
 
 - Windows 10 or 11 (64-bit)
-- Intel or AMD (Ryzen) CPU - DeltaT reads the hottest core temperature either vendor exposes
+- Intel or AMD (Ryzen) CPU, including recent parts like Intel Core Ultra and AMD Ryzen 7040/8040 series - DeltaT reads the hottest core temperature either vendor exposes
 - Administrator rights - CPU temperature registers and storage SMART data require a kernel driver, the same as HWiNFO or HWMonitor. Non-elevated runs will miss CPU package temps and drive health
 
 ## Install

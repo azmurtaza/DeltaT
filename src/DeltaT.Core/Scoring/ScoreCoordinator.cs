@@ -278,7 +278,8 @@ public sealed class ScoreCoordinator
             CalibrationProgress: progress,
             BaselineStale: BaselineStale,
             DormantDays: DormantDays,
-            CalibrationConstraint: cal.Constraint);
+            CalibrationConstraint: cal.Constraint,
+            CalibrationDataConfidence: cal.DataConfidence);
 
         return ScoringEngine.Score(input, _fmtTemp);
     }

@@ -23,13 +23,14 @@ public class ScoringEngineTests
         double progress = 1.0,
         double recentHours = 7 * 24,
         bool stale = false,
-        int dormantDays = 0) =>
+        int dormantDays = 0,
+        double dataConfidence = 1.0) =>
         new(ComponentKind.Cpu, "Test CPU",
             recent ?? Array.Empty<RecentBucketObs>(),
             baseline ?? Array.Empty<BaselineBucket>(),
             recentHours, throttleEvents, soakRecent, soakBaseline,
             LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress,
-            BaselineStale: stale, DormantDays: dormantDays);
+            BaselineStale: stale, DormantDays: dormantDays, CalibrationDataConfidence: dataConfidence);
 
     private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
         new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
@@ -67,6 +68,21 @@ public class ScoringEngineTests
         Assert.Equal(0.55, score.CalibrationProgress, 2);
         Assert.True(score.Value is > 0 and < 100);   // a real number, not the calibrating zero
         Assert.NotEqual(Verdict.Calibrating, score.Verdict);
+    }
+
+    [Fact]
+    public void Provisional_Suppressed_WhenDataConfidenceLow()
+    {
+        // Comparable load exists, but the baseline is still thin (low data confidence),
+        // so no provisional number is shown - it would only whipsaw as more data lands.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 68) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            ready: false, progress: 0.3, dataConfidence: 0.3), Fmt);
+
+        Assert.False(score.Provisional);
+        Assert.Equal(0, score.Value);
+        Assert.Equal(Verdict.Calibrating, score.Verdict);
     }
 
     [Fact]
