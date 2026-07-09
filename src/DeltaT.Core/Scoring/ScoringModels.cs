@@ -64,7 +64,11 @@ public sealed record BaselineBucket(
     double DeltaAvg,
     double? DeltaP95,
     double? FanAvg,
-    int Minutes);
+    int Minutes,
+    // Mean absolute die temperature (°C) learned for this cell. The physical anchor
+    // that lets scoring compare across ambient bands without inflating the rise:
+    // ambient of this cell ≈ TempAvg − DeltaAvg. Null on legacy rows (pre-rebuild).
+    double? TempAvg = null);
 
 /// <summary>Everything the engine needs. Assembled by ScoreCoordinator from the
 /// database; the engine itself never touches clocks, sensors or storage.</summary>

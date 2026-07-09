@@ -220,5 +220,21 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 4)
+        {
+            // Each baseline cell now also stores its mean ABSOLUTE die temperature, not
+            // just its rise-over-ambient. That absolute anchor is what lets scoring reason
+            // across ambient bands physically (a colder outdoors can't make a healthy die
+            // hotter) instead of naively borrowing another band's rise — the fix for
+            // cold-weather false "Aging". Additive/nullable; legacy rows read as unknown
+            // and are refilled on the next baseline rebuild.
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE baseline ADD COLUMN temp_avg REAL;
+                PRAGMA user_version = 4;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }

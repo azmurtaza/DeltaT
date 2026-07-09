@@ -267,7 +267,7 @@ public sealed class ScoreCoordinator
             // baseline lets the engine put an estimated number on the score before
             // lock. Idle-only history yields no rows, so this stays empty until real
             // load appears — exactly when a provisional score would be meaningless.
-            Baseline: BuildBaseline(c, epochStartTs, learningEndTs, baselineStats, soakBaseline, nowUtc),
+            Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null, baselineStats, soakBaseline, nowUtc),
             RecentWindowHours: recentHours,
             ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs),
             SoakRateRecent: _repo.GetAverageSoakRate(c.Kind, recentFromTs, nowTs),
@@ -285,15 +285,39 @@ public sealed class ScoreCoordinator
     }
 
     private List<BaselineBucket> BuildBaseline(
-        ComponentReading c, long fromTs, long toTs, IReadOnlyList<BucketStat> stats, double? soakAvg, DateTimeOffset nowUtc)
+        ComponentReading c, long fromTs, long lockedToTs, long nowTs, bool locked,
+        IReadOnlyList<BucketStat> frozenStats, double? soakAvg, DateTimeOffset nowUtc)
     {
+        // Primary reference: learned up to the lock point and then frozen, so the trusted
+        // baseline never drifts over newer (possibly degraded) data.
         List<BaselineRow> rows = BaselineBuilder.Build(
-            Epoch, c.Kind, c.Name, stats,
-            (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs),
-            (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs, BaselineBuilder.SessionGapSeconds),
+            Epoch, c.Kind, c.Name, frozenStats,
+            (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs),
+            (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs, BaselineBuilder.SessionGapSeconds),
             soakAvg, nowUtc);
+
+        // After lock, keep the baseline honest about weather it has since met: learn a
+        // reference for any (bucket, band) the frozen window never saw, drawn from the
+        // whole epoch. This is the proper cure for cross-band "Aging" — a winter cold
+        // snap after a summer baseline now gets its own like-for-like reference instead
+        // of being judged against a warmer band. Crucially it never re-touches (and so
+        // never relaxes) a band that was already locked: a new band is a fresh reference,
+        // not a re-judgement of the trusted ones.
+        if (locked && nowTs > lockedToTs)
+        {
+            var known = rows.Select(r => (r.Bucket, r.Band)).ToHashSet();
+            List<BucketStat> newBandStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, fromTs, nowTs))
+                .Where(s => !known.Contains((s.Bucket, s.Band))).ToList();
+            if (newBandStats.Count > 0)
+                rows.AddRange(BaselineBuilder.Build(
+                    Epoch, c.Kind, c.Name, newBandStats,
+                    (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, nowTs),
+                    (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, nowTs, BaselineBuilder.SessionGapSeconds),
+                    soakAvg, nowUtc));
+        }
+
         _repo.UpsertBaseline(rows);
-        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes)).ToList();
+        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg)).ToList();
     }
 
     /// <summary>Paste scoring only trusts samples on AC power with known ambient —

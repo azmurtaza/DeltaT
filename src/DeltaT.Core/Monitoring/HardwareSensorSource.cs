@@ -24,6 +24,8 @@ public sealed class HardwareSensorSource : ISensorSource
     private Computer _computer;
     private readonly UpdateVisitor _visitor = new();
     private double? _cpuTjMax;
+    private readonly BatteryCycleReader _batteryCycles = new();
+    private bool _cpuTempEverMissingLogged;
 
     // Resolved sensor references, so each Read() is direct value access instead
     // of repeated name scans. Keyed by hardware instance: a reopen creates new
@@ -171,7 +173,11 @@ public sealed class HardwareSensorSource : ISensorSource
 
     private CpuSensors ResolveCpu(IHardware hw)
     {
-        if (_cpuCache.TryGetValue(hw, out CpuSensors? s))
+        // Re-resolve if a cached entry captured no temperature sensors at all: some LHM
+        // drivers populate the CPU's sensor list lazily over the first few updates, so a
+        // set resolved too early can be permanently empty. Rescanning until at least one
+        // temperature sensor appears makes cold-start detection reliable across vendors.
+        if (_cpuCache.TryGetValue(hw, out CpuSensors? s) && s.AllTemps.Count > 0)
             return s;
         s = new CpuSensors();
         foreach (ISensor sensor in hw.Sensors)
@@ -244,6 +250,21 @@ public sealed class HardwareSensorSource : ISensorSource
                 temp = MaxOf(temp, Temp(t));
         }
 
+        // Last resort: on many desktops the CPU's MSR temperatures need the kernel driver
+        // (admin), but the board's SuperIO chip exposes a "CPU"/"CPU Socket" temperature
+        // that reads without it. Borrow that so a non-elevated or unusual machine still
+        // shows a CPU temperature instead of a blank card.
+        temp ??= FallbackCpuTempFromBoard();
+
+        if (temp is null && !_cpuTempEverMissingLogged)
+        {
+            _cpuTempEverMissingLogged = true;
+            string names = string.Join(", ", hw.Sensors
+                .Where(x => x.SensorType == SensorType.Temperature)
+                .Select(x => x.Name));
+            Diagnostic?.Invoke($"no CPU temperature from '{hw.Name}' (admin needed for package temps?). Temp sensors seen: [{names}]");
+        }
+
         _cpuTjMax ??= DetectTjMax(hw, s);
 
         // The chip reports how close each core is to its throttle point — the most
@@ -265,6 +286,35 @@ public sealed class HardwareSensorSource : ISensorSource
             null,
             throttling,
             _cpuTjMax);
+    }
+
+    /// <summary>Hottest board/SuperIO temperature whose name looks like a CPU sensor
+    /// ("CPU", "CPU Socket", "CPU Core"…). Used only when the CPU hardware itself gives
+    /// no temperature, so an accurate MSR reading always wins when it's available.</summary>
+    private double? FallbackCpuTempFromBoard()
+    {
+        double? best = null;
+        foreach (IHardware hw in _computer.Hardware)
+        {
+            if (hw.HardwareType != HardwareType.Motherboard)
+                continue;
+            best = MaxOf(best, CpuNamedTemp(hw));
+            foreach (IHardware sub in hw.SubHardware)
+                best = MaxOf(best, CpuNamedTemp(sub));
+        }
+        return best;
+    }
+
+    private static double? CpuNamedTemp(IHardware hw)
+    {
+        double? best = null;
+        foreach (ISensor s in hw.Sensors)
+        {
+            if (s.SensorType == SensorType.Temperature
+                && s.Name.Contains("CPU", StringComparison.OrdinalIgnoreCase))
+                best = MaxOf(best, Temp(s));
+        }
+        return best;
     }
 
     private static double DetectTjMax(IHardware hw, CpuSensors s)
@@ -349,13 +399,14 @@ public sealed class HardwareSensorSource : ISensorSource
         Percent(Find(hw, SensorType.Level, "Percentage Used")),
         false, null);
 
-    private static ComponentReading MapBattery(IHardware hw) => new(
+    private ComponentReading MapBattery(IHardware hw) => new(
         ComponentKind.Battery, CleanName(hw.Name),
         Temp(FirstOfType(hw, SensorType.Temperature)),
         null, null, null,
         Watts(Find(hw, SensorType.Power, "Charge/Discharge Rate")),
         Percent(Find(hw, SensorType.Level, "Degradation Level")),
-        false, null);
+        false, null,
+        BatteryCycles: _batteryCycles.CurrentCycles);
 
     private static ComponentReading? MapMotherboard(IHardware hw)
     {
@@ -443,7 +494,11 @@ public sealed class HardwareSensorSource : ISensorSource
         public int BatteryFullLifeTime;
     }
 
-    public void Dispose() => _computer.Close();
+    public void Dispose()
+    {
+        _batteryCycles.Dispose();
+        _computer.Close();
+    }
 
     private sealed class UpdateVisitor : IVisitor
     {

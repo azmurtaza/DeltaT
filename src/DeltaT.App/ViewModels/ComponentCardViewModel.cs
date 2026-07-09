@@ -73,6 +73,7 @@ public partial class ComponentCardViewModel : ObservableObject
         if (r.HotspotC is { } h) meta.Add($"hotspot {Conv(h):0}°");
         if (r.FanRpm is { } f) meta.Add($"{f:0} rpm");
         if (r.WearPercent is { } w) meta.Add($"wear {w:0.#}%");
+        if (r.BatteryCycles is { } cyc) meta.Add($"{cyc:0} cycles");
         if (r.IsThrottling) meta.Add("THROTTLING");
         MetaText = string.Join("  ·  ", meta);
 

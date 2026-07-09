@@ -239,7 +239,7 @@ public static class BaselineBuilder
             rows.Add(new BaselineRow(
                 epoch, kind, name, s.Band, s.Bucket,
                 deltaAvg, p95, soakRateAvg, s.FanAvg, s.Minutes,
-                now.ToUnixTimeSeconds(), se));
+                now.ToUnixTimeSeconds(), se, s.TempAvg));
         }
         return rows;
     }

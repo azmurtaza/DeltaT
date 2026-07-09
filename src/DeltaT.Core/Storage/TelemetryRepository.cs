@@ -42,7 +42,10 @@ public sealed record BaselineRow(
     double DeltaAvg, double? DeltaP95, double? SoakRate, double? FanAvg, int Minutes, long Updated,
     // Standard error of the cell's mean delta, from independent session means.
     // Null for cells (or legacy rows) without enough sessions to estimate it.
-    double? DeltaSe = null);
+    double? DeltaSe = null,
+    // Mean absolute die temperature (°C) for this cell — the physical anchor behind
+    // cross-band scoring. Null for legacy rows until the next baseline rebuild refills it.
+    double? TempAvg = null);
 
 /// <summary>All reads/writes of telemetry. SQL lives here and nowhere else.</summary>
 public sealed class TelemetryRepository
@@ -476,11 +479,12 @@ public sealed class TelemetryRepository
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se)
-            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd,$dse)
+            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg)
+            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd,$dse,$tavg)
             ON CONFLICT(epoch,kind,name,band,bucket) DO UPDATE SET
                 delta_avg=excluded.delta_avg, delta_p95=excluded.delta_p95, soak_rate=excluded.soak_rate,
-                fan_avg=excluded.fan_avg, minutes=excluded.minutes, updated=excluded.updated, delta_se=excluded.delta_se;
+                fan_avg=excluded.fan_avg, minutes=excluded.minutes, updated=excluded.updated,
+                delta_se=excluded.delta_se, temp_avg=excluded.temp_avg;
             """;
         foreach (BaselineRow r in rows)
         {
@@ -497,6 +501,7 @@ public sealed class TelemetryRepository
             cmd.Parameters.AddWithValue("$min", r.Minutes);
             cmd.Parameters.AddWithValue("$upd", r.Updated);
             cmd.Parameters.AddWithValue("$dse", (object?)r.DeltaSe ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tavg", (object?)r.TempAvg ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
@@ -506,7 +511,7 @@ public sealed class TelemetryRepository
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se FROM baseline WHERE epoch=$e;";
+        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg FROM baseline WHERE epoch=$e;";
         cmd.Parameters.AddWithValue("$e", epoch);
         var list = new List<BaselineRow>();
         using var reader = cmd.ExecuteReader();
@@ -521,7 +526,8 @@ public sealed class TelemetryRepository
                 reader.IsDBNull(7) ? null : reader.GetDouble(7),
                 reader.IsDBNull(8) ? null : reader.GetDouble(8),
                 reader.GetInt32(9), reader.GetInt64(10),
-                reader.IsDBNull(11) ? null : reader.GetDouble(11)));
+                reader.IsDBNull(11) ? null : reader.GetDouble(11),
+                reader.IsDBNull(12) ? null : reader.GetDouble(12)));
         }
         return list;
     }

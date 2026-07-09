@@ -437,6 +437,11 @@ public sealed class TimeSeriesChart : FrameworkElement
             }
         }
 
+        // Interaction hint, top-right — only while idle, so it guides a new user but
+        // never fights the crosshair/readout once they start exploring the chart.
+        if (!_dragging && _hover is null)
+            DrawZoomHint(dc, w, dip);
+
         // No crosshair while panning.
         if (_dragging || _hover is not { } hover || hover.X < MarginLeft || hover.X > w - MarginRight)
             return;
@@ -575,6 +580,18 @@ public sealed class TimeSeriesChart : FrameworkElement
         }
         geo.Freeze();
         dc.DrawGeometry(null, pen, geo);
+    }
+
+    /// <summary>Faint tracked-caps hint in the top-right telling the user the chart is
+    /// interactive (scroll to zoom, drag to pan, double-click to reset). Shown only when
+    /// idle; it clears the moment a crosshair or pan takes over.</summary>
+    private void DrawZoomHint(DrawingContext dc, double w, double dip)
+    {
+        const string text = "SCROLL ZOOM  ·  DRAG PAN  ·  DBL-CLICK RESET";
+        string tracked = string.Join(((char)0x200A).ToString(), text.ToCharArray());
+        var txt = new FormattedText(tracked, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            MonoFace, 8.5, LabelBrush, dip);
+        dc.DrawText(txt, new Point(w - MarginRight - txt.Width, 1));
     }
 
     /// <summary>Empty state as an instrument would print it: tracked caps on

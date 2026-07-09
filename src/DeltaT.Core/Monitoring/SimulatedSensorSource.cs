@@ -117,7 +117,7 @@ public sealed class SimulatedSensorSource : ISensorSource
                 Math.Round(_ssdTemp, 1), null, Math.Round(Math.Min(100, _cpuLoad * 0.3 + 1), 1), null, null,
                 5, false, null),
             new(ComponentKind.Battery, "Simulated Battery",
-                null, null, null, null, null, 7.0, false, null),
+                null, null, null, null, null, 7.0, false, null, BatteryCycles: 214),
         };
 
         return new SensorSnapshot(_now, true, components);

@@ -12,7 +12,10 @@ public sealed record ComponentReading(
     double? PowerW,
     double? WearPercent,
     bool IsThrottling,
-    double? ThrottleLimitC)
+    double? ThrottleLimitC,
+    // Battery charge/discharge cycle count, when the firmware exposes it (most do
+    // not — then it stays null and is shown as "--", never faked as 0).
+    double? BatteryCycles = null)
 {
     /// <summary>Stable identity for storage/UI (a machine can have several drives).
     /// Materialized once — it gets used as a dictionary key on every sample.</summary>

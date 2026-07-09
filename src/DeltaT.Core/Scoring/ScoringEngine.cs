@@ -212,12 +212,9 @@ public static class ScoringEngine
 
             foreach (RecentBucketObs r in recentRows)
             {
-                BaselineBucket? baseline =
-                    input.Baseline.FirstOrDefault(b => b.Bucket == bucket && b.Band == r.Band)
-                    ?? input.Baseline
-                        .Where(b => b.Bucket == bucket && Math.Abs(b.Band - r.Band) == 1)
-                        .OrderByDescending(b => b.Minutes)
-                        .FirstOrDefault();
+                // Prefer the exact same weather band: a like-for-like rise comparison.
+                BaselineBucket? sameBand = input.Baseline.FirstOrDefault(b => b.Bucket == bucket && b.Band == r.Band);
+                BaselineBucket? baseline = sameBand ?? NearestBaselineBand(input.Baseline, bucket, r);
                 if (baseline is null)
                     continue;
 
@@ -243,7 +240,15 @@ public static class ScoringEngine
                     fanWeights += w;
                 }
 
-                double excess = delta + correction - baseline.DeltaAvg;
+                // Same band → compare the rise directly. Different band → don't borrow the
+                // other band's rise (that's what inflates a cold-weather reading into false
+                // "Aging"). Instead anchor on ABSOLUTE die temperature: paste degradation can
+                // only make the die hotter, and colder outdoor air can't make a healthy die
+                // hotter, so a reading at or below the healthy die temp for this load is
+                // provably not degraded — whatever its rise-over-outside works out to.
+                double excess = (sameBand is not null || baseline.TempAvg is not { } baseTemp || r.TempAvg <= 0)
+                    ? delta + correction - baseline.DeltaAvg
+                    : CrossBandExcess(r, baseline, baseTemp) + correction;
                 fanCorrWeighted += correction * w;
 
                 sumWeighted += excess * w;
@@ -268,6 +273,43 @@ public static class ScoringEngine
 
         bool broad = bucketsCompared >= 3 && bucketsInExcess >= 3;
         return (sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent, fan);
+    }
+
+    /// <summary>Nearest baseline cell in a *different* weather band for the same load
+    /// bucket, chosen by how close its learned ambient (TempAvg − DeltaAvg) sits to the
+    /// recent reading's ambient. Falls back to nearest band index for legacy rows that
+    /// carry no absolute-temp anchor yet.</summary>
+    private static BaselineBucket? NearestBaselineBand(IReadOnlyList<BaselineBucket> baseline, LoadBucket bucket, RecentBucketObs r)
+    {
+        BaselineBucket? best = null;
+        double bestDist = double.MaxValue;
+        double recentAmbient = r.TempAvg - (r.DeltaAvg ?? 0);
+        foreach (BaselineBucket b in baseline)
+        {
+            if (b.Bucket != bucket)
+                continue;
+            double dist = b.TempAvg is { } t
+                ? Math.Abs((t - b.DeltaAvg) - recentAmbient)
+                : Math.Abs(b.Band - r.Band) * 100.0; // band-index proximity when no anchor
+            if (dist < bestDist) { bestDist = dist; best = b; }
+        }
+        return best;
+    }
+
+    /// <summary>Excess for a reading whose exact weather band was never learned, judged on
+    /// ABSOLUTE die temperature instead of rise-over-outside. Two physical facts make this
+    /// bulletproof against the cold-weather false alarm: paste can only make the die hotter,
+    /// and colder outdoor air can't make a healthy die hotter. So the healthy ceiling is the
+    /// reference band's learned die temp, allowed to climb only when the current weather is
+    /// *warmer* than that band (an expected, real rise); in colder weather the ceiling holds,
+    /// and any reading at or below it reads as on-baseline-or-better — never a false Aging.
+    /// Genuine degradation still pushes the die above the ceiling and is caught.</summary>
+    private static double CrossBandExcess(RecentBucketObs r, BaselineBucket baseline, double baseTemp)
+    {
+        double recentAmbient = r.TempAvg - (r.DeltaAvg ?? 0);
+        double baseAmbient = baseTemp - baseline.DeltaAvg;
+        double ceiling = baseTemp + Math.Max(0, recentAmbient - baseAmbient);
+        return r.TempAvg - ceiling;
     }
 
     private static double AddAbsoluteObservations(ScoreInput input, List<ScoreReason> reasons, Func<double, string> fmtTemp, bool calibrating)

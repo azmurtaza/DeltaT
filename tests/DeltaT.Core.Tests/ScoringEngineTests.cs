@@ -8,6 +8,7 @@ namespace DeltaT.Core.Tests;
 public class ScoringEngineTests
 {
     private static readonly Func<double, string> Fmt = t => $"{t:0} °C";
+    private const int Cold = (int)AmbientBand.Cold;
     private const int Warm = (int)AmbientBand.Warm;
     private const int Hot = (int)AmbientBand.Hot;
 
@@ -35,8 +36,8 @@ public class ScoringEngineTests
     private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
         new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
 
-    private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null) =>
-        new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200);
+    private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null, double? tempAvg = null) =>
+        new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200, tempAvg);
 
     // ------------------------------------------------------------------ core behaviours
 
@@ -147,6 +148,36 @@ public class ScoringEngineTests
 
         Assert.Contains(score.Reasons, r => r.Code == "delta-excess" && r.Text.Contains("nearest weather band"));
         Assert.True(score.Value < 85);
+    }
+
+    [Fact]
+    public void ColdWeather_UnseenBand_DoesNotFalseAlarm_OnInflatedRise()
+    {
+        // Baseline learned in warm weather: die 45°C over a 30°C ambient (rise 15°C).
+        // Now a cold snap: outdoors 0°C, die a healthy 40°C — so the rise-over-outside
+        // balloons to +40°C. Naively borrowing the warm band's 15°C rise would read a
+        // false +25°C "Aging". The absolute-temperature guard sees the die is actually
+        // *cooler* than its warm-weather healthy temp and refuses to penalize.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 40, band: Cold, tempAvg: 40, tempMax: 44) },
+            baseline: new[] { HeavyBase(delta: 15, band: Warm, tempAvg: 45) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value >= 85, $"cold-weather healthy die must not read Aging, got {score.Value}");
+    }
+
+    [Fact]
+    public void ColdWeather_UnseenBand_StillCatchesRealDegradation()
+    {
+        // Same unseen cold band, but the die runs 58°C at a 0°C ambient — hotter than the
+        // warm-weather healthy die (45°C) despite cooler air. That can only be degradation,
+        // and the absolute guard flags it even though no cold baseline was ever learned.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 58, band: Cold, tempAvg: 58, tempMax: 62) },
+            baseline: new[] { HeavyBase(delta: 15, band: Warm, tempAvg: 45) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value < 85, $"a genuinely hotter die must still drop the score, got {score.Value}");
     }
 
     [Fact]
