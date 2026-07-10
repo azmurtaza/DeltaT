@@ -45,7 +45,7 @@ public partial class MainViewModel : ObservableObject
     public bool IsFirstRun { get; }
 
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
-    [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. First verdict lands after about a week of normal use.";
+    [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. The first verdict lands as soon as it has seen enough real load to be sure - games and heavy work teach it fastest.";
     [ObservableProperty] private string _scoringBasis = "Normalized for weather · load";
     [ObservableProperty] private string _fanNote = "";
     [ObservableProperty] private bool _fanNoteActive;

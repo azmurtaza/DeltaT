@@ -27,8 +27,10 @@ public sealed class HardwareSensorSource : ISensorSource
     private double? _cpuTjMax;
     private readonly BatteryCycleReader _batteryCycles = new();
     private readonly AcpiThermalZoneReader _acpiZone = new();
+    private readonly CpuMsrTemperatureReader _msrReader = new();
     private bool _cpuTempEverMissingLogged;
     private bool _acpiFallbackLogged;
+    private bool _msrFallbackLogged;
 
     // Resolved sensor references, so each Read() is direct value access instead
     // of repeated name scans. Keyed by hardware instance: a reopen creates new
@@ -279,16 +281,33 @@ public sealed class HardwareSensorSource : ISensorSource
                 temp = MaxOf(temp, Temp(t));
         }
 
-        // Last resort: on many desktops the CPU's MSR temperatures need the kernel driver
-        // (admin), but the board's SuperIO chip exposes a "CPU"/"CPU Socket" temperature
-        // that reads without it. Borrow that so a non-elevated or unusual machine still
+        // A CPU newer than the pinned LHM build (Arrow/Lunar/Panther Lake, post-Zen-5)
+        // exposes NO sensors above — read the die's architectural thermal registers
+        // directly instead. Full sampling rate and 1 °C DTS precision, unlike the ACPI
+        // zone below (EC-paced: 10–20 s stale, coarse) which stays as the true last
+        // resort. Also yields the real TjMax and live throttle state.
+        bool msrThrottling = false;
+        if (temp is null && _msrReader.TryRead(hw.Name) is { } msr)
+        {
+            temp = msr.TemperatureC;
+            _cpuTjMax ??= msr.TjMaxC;
+            msrThrottling = msr.Throttling;
+            if (!_msrFallbackLogged)
+            {
+                _msrFallbackLogged = true;
+                Diagnostic?.Invoke($"reading the CPU's thermal registers directly ({temp:0.#} °C) - this CPU model is newer than the bundled sensor library");
+            }
+        }
+
+        // On many desktops the CPU's MSR temperatures need the kernel driver (admin),
+        // but the board's SuperIO chip exposes a "CPU"/"CPU Socket" temperature that
+        // reads without it. Borrow that so a non-elevated or unusual machine still
         // shows a CPU temperature instead of a blank card.
         temp ??= FallbackCpuTempFromBoard();
 
-        // Truly-last resort for a CPU LHM can't parse at all (e.g. a brand-new part):
-        // the ACPI thermal zone. Not the exact die, but real and roughly CPU-tracking,
-        // and available on almost any Windows machine when elevated. Only consulted when
-        // everything above came up empty, so an accurate LHM reading always wins.
+        // Truly-last resort: the ACPI thermal zone. Not the exact die, but real and
+        // roughly CPU-tracking, and available on almost any Windows machine when
+        // elevated. Only consulted when everything above came up empty.
         if (temp is null && _acpiZone.CurrentCelsius is { } zone)
         {
             temp = zone;
@@ -318,7 +337,7 @@ public sealed class HardwareSensorSource : ISensorSource
             if (d.Value is { } v && (minDistance is not { } m || v < m))
                 minDistance = v;
         }
-        bool throttling = minDistance is { } dist && dist <= 1;
+        bool throttling = minDistance is { } dist && dist <= 1 || msrThrottling;
 
         return new ComponentReading(
             ComponentKind.Cpu, hw.Name,
@@ -514,7 +533,10 @@ public sealed class HardwareSensorSource : ISensorSource
 
     private static double? Temp(ISensor? s) => s?.Value is { } v && v is > 1 and < 119 ? Math.Round(v, 1) : null;
 
-    private static double? Percent(ISensor? s) => s?.Value is { } v && v is >= 0 and <= 100 ? Math.Round(v, 1) : null;
+    // Loads occasionally read a hair over 100 (driver rounding); clamp those instead of
+    // discarding them — a discarded load reading would drop the whole minute from paste
+    // telemetry. Beyond 105 it's a glitch, not rounding.
+    private static double? Percent(ISensor? s) => s?.Value is { } v && v is >= 0 and <= 105 ? Math.Min(100, Math.Round(v, 1)) : null;
 
     private static double? Watts(ISensor? s) => s?.Value is { } v && v is >= 0 and < 500 ? Math.Round(v, 1) : null;
 

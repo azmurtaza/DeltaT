@@ -11,10 +11,12 @@ using DeltaT.Core.Monitoring;
 
 namespace DeltaT.App.Services;
 
-/// <summary>The always-there part of DeltaT: a tray icon that literally shows the
-/// hottest paste-relevant temperature as its glyph, tinted by the thermal palette,
-/// with a heat bar underneath. Icon redraws are throttled and skipped when
-/// nothing changed.</summary>
+/// <summary>The always-there part of DeltaT: a tray icon whose glyph is the CPU
+/// temperature (the number people actually watch — an idle NVMe often runs hotter
+/// than an idle CPU, so "hottest" used to headline the SSD), falling back to GPU
+/// then SSD when the CPU can't be read. Tinted by the thermal palette, heat bar
+/// underneath, full component list in the tooltip. Icon redraws are throttled and
+/// skipped when nothing changed.</summary>
 public sealed class TrayManager : IDisposable
 {
     private readonly TaskbarIcon _tray;
@@ -96,22 +98,29 @@ public sealed class TrayManager : IDisposable
         if (now - _lastIconUpdate < TimeSpan.FromSeconds(5))
             return;
 
-        double hottestC = double.MinValue;
+        // Glyph priority: CPU first, GPU then SSD only when the CPU is unreadable.
+        ComponentReading? shown = null;
         var sb = new StringBuilder("DeltaT ");
-        foreach (ComponentReading c in snap.Components)
+        foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete, ComponentKind.Storage })
         {
-            if (c.Kind is not (ComponentKind.Cpu or ComponentKind.GpuDiscrete or ComponentKind.Storage)
-                || c.TemperatureC is not { } temp)
-                continue;
-            sb.Append(' ').Append(Short(c.Kind)).Append(' ').Append(temp.ToString("0", CultureInfo.InvariantCulture)).Append('°');
-            if (temp > hottestC)
-                hottestC = temp;
+            foreach (ComponentReading c in snap.Components)
+            {
+                if (c.Kind != kind || c.TemperatureC is not { } temp)
+                    continue;
+                sb.Append(' ').Append(Short(c.Kind)).Append(' ').Append(temp.ToString("0", CultureInfo.InvariantCulture)).Append('°');
+                shown ??= c;
+            }
         }
-        if (hottestC == double.MinValue)
+        if (shown?.TemperatureC is not { } shownC)
             return;
 
-        int hottest = (int)Math.Round(hottestC);
-        double limit = snap.Find(ComponentKind.Cpu)?.ThrottleLimitC ?? 100;
+        int hottest = (int)Math.Round(shownC);
+        double limit = shown.ThrottleLimitC ?? (shown.Kind switch
+        {
+            ComponentKind.GpuDiscrete => 87,
+            ComponentKind.Storage => 70,
+            _ => 100,
+        });
         string tooltip = sb.ToString();
         _lastIconUpdate = now;
 

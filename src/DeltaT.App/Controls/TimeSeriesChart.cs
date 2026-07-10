@@ -18,7 +18,14 @@ public readonly record struct ChartMarker(long Ts, string Label, Color Color);
 /// resets to the full range. The visible window and the Y axis both ease toward
 /// their targets (a CompositionTarget frame loop that stops once settled), and the
 /// Y axis auto-scales to whatever is on screen so a zoomed-in stretch fills the
-/// plot. Long ranges are downsampled to keep the geometry cheap.</summary>
+/// plot. Long ranges are downsampled to keep the geometry cheap.
+///
+/// Rendering is cache-aware because pans and crosshair moves redraw dozens of times
+/// a second: the downsample buckets are anchored to absolute time (index-anchored
+/// buckets re-cut differently every panned frame and made the trace shimmer), the
+/// visible series / trace geometries are rebuilt only when the view actually moves,
+/// and axis label text is cached. The crosshair dot and readout come from the SAME
+/// smoothed series the trace is drawn from, so the dot always sits on the line.</summary>
 public sealed class TimeSeriesChart : FrameworkElement
 {
     public static readonly DependencyProperty PointsProperty = DependencyProperty.Register(
@@ -79,6 +86,26 @@ public sealed class TimeSeriesChart : FrameworkElement
     private bool _dragging;
     private double _dragAnchorX, _dragStartView, _dragEndView;
     private bool _ticking;
+
+    // ---- render caches -----------------------------------------------------
+    // Visible (downsampled) series + its smoothed trace. Valid for one (source,
+    // lo, hi, bucketSpan) combination; panning inside the same buckets reuses it.
+    private ChartPoint[] _vis = Array.Empty<ChartPoint>();
+    private double[] _visSmooth = Array.Empty<double>();
+    private object? _visSource;
+    private int _visLo = -1, _visHi = -1;
+    private double _visBucketSpan = -1;
+
+    // Trace/band/ambient geometries bake the view transform, so they're valid for
+    // one exact (view, y-range, size) tuple — which is every frame while animating,
+    // but crucially every crosshair-only redraw reuses them untouched.
+    private StreamGeometry? _bandGeo, _lineGeo, _ambientGeo;
+    private Point _lineEndDot;
+    private object? _geoVis, _geoAmbient;
+    private double _geoT0, _geoT1, _geoYMin, _geoYMax, _geoW, _geoH;
+
+    // FormattedText is expensive to construct; axis labels repeat across frames.
+    private readonly Dictionary<string, FormattedText> _textCache = new();
 
     public TimeSeriesChart()
     {
@@ -145,6 +172,8 @@ public sealed class TimeSeriesChart : FrameworkElement
         chart._viewStart = chart._viewEnd = chart._targetStart = chart._targetEnd = double.NaN;
         chart._curYMin = chart._curYMax = chart._targetYMin = chart._targetYMax = double.NaN;
         chart._hover = null;
+        chart._visSource = null;
+        chart._geoVis = chart._geoAmbient = null;
     }
 
     private bool TryDataRange(out double a, out double b)
@@ -364,8 +393,7 @@ public sealed class TimeSeriesChart : FrameworkElement
             double y = Y(v);
             if (y < MarginTop || y > h - MarginBottom + 1) continue;
             dc.DrawLine(GridPen, new Point(MarginLeft, y), new Point(w - MarginRight, y));
-            var txt = new FormattedText($"{v:0}°", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                MonoFace, 9.5, LabelBrush, dip);
+            FormattedText txt = Label($"{v:0}°", MonoFace, 9.5, LabelBrush, dip);
             dc.DrawText(txt, new Point(MarginLeft - txt.Width - 7, y - txt.Height / 2));
         }
 
@@ -381,46 +409,27 @@ public sealed class TimeSeriesChart : FrameworkElement
             double tickX = X(ts);
             dc.DrawLine(AxisPen, new Point(tickX, axisY), new Point(tickX, axisY + 3));
             string label = DateTimeOffset.FromUnixTimeSeconds((long)ts).ToLocalTime().ToString(fmt, CultureInfo.InvariantCulture);
-            var txt = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                MonoFace, 9.5, LabelBrush, dip);
+            FormattedText txt = Label(label, MonoFace, 9.5, LabelBrush, dip);
             double x = Math.Clamp(tickX - txt.Width / 2, 0, w - txt.Width);
             dc.DrawText(txt, new Point(x, axisY + 7));
         }
 
-        // Downsample the visible slice so wide ranges stay cheap to draw.
+        // Downsample the visible slice so wide ranges stay cheap to draw, then bake
+        // the trace geometries. Both steps are cached: hover-only redraws reuse them.
         int maxPoints = Math.Max(2, (int)(plotW / 2.5));
-        IReadOnlyList<ChartPoint> vis = Downsample(points, lo, hi, maxPoints);
+        EnsureVisibleSeries(points, lo, hi, maxPoints, t0, t1);
+        EnsureGeometries(t0, t1, yMin, yMax, w, h, X, Y);
 
-        // Min/max band.
-        var band = new StreamGeometry();
-        using (StreamGeometryContext ctx = band.Open())
+        if (_bandGeo is not null)
+            dc.DrawGeometry(BandBrush, null, _bandGeo);
+        if (_ambientGeo is not null)
+            dc.DrawGeometry(null, AmbientPen, _ambientGeo);
+        if (_lineGeo is not null)
         {
-            ctx.BeginFigure(new Point(X(vis[0].Ts), Y(vis[0].Max)), true, true);
-            foreach (ChartPoint p in vis.Skip(1))
-                ctx.LineTo(new Point(X(p.Ts), Y(p.Max)), false, false);
-            for (int i = vis.Count - 1; i >= 0; i--)
-                ctx.LineTo(new Point(X(vis[i].Ts), Y(vis[i].Min)), false, false);
+            dc.DrawGeometry(null, GlowPen, _lineGeo);
+            dc.DrawGeometry(null, LinePen, _lineGeo);
+            dc.DrawEllipse(AccentBrush, null, _lineEndDot, 2.6, 2.6);
         }
-        band.Freeze();
-        dc.DrawGeometry(BandBrush, null, band);
-
-        // Ambient overlay (dashed slate), same visible window.
-        if (AmbientPoints is { Count: > 1 } amb)
-        {
-            int alo = Math.Max(0, LowerBound(amb, (long)Math.Floor(t0)) - 1);
-            int ahi = Math.Min(amb.Count - 1, LowerBound(amb, (long)Math.Ceiling(t1)));
-            if (ahi > alo)
-                DrawLine(dc, AmbientPen, Downsample(amb, alo, ahi, maxPoints).Select(p => new Point(X(p.Ts), Y(p.Avg))));
-        }
-
-        // Average trace (3-point smoothed) with a soft glow beneath — the one loud element.
-        double[] smooth = SmoothAvg(vis);
-        var line = new Point[vis.Count];
-        for (int i = 0; i < vis.Count; i++)
-            line[i] = new Point(X(vis[i].Ts), Y(smooth[i]));
-        DrawLine(dc, GlowPen, line);
-        DrawLine(dc, LinePen, line);
-        dc.DrawEllipse(AccentBrush, null, line[^1], 2.6, 2.6);
 
         // Event markers.
         if (Markers is { Count: > 0 } markers)
@@ -431,8 +440,7 @@ public sealed class TimeSeriesChart : FrameworkElement
                 double x = X(m.Ts);
                 (Pen pen, SolidColorBrush brush) = MarkerStyle(m.Color);
                 dc.DrawLine(pen, new Point(x, MarginTop), new Point(x, axisY));
-                var txt = new FormattedText(m.Label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                    MonoBoldFace, 9, brush, dip);
+                FormattedText txt = Label(m.Label, MonoBoldFace, 9, brush, dip);
                 dc.DrawText(txt, new Point(Math.Clamp(x - txt.Width / 2, 0, w - txt.Width), MarginTop - 13));
             }
         }
@@ -445,24 +453,30 @@ public sealed class TimeSeriesChart : FrameworkElement
         // No crosshair while panning.
         if (_dragging || _hover is not { } hover || hover.X < MarginLeft || hover.X > w - MarginRight)
             return;
+        if (_vis.Length == 0)
+            return;
 
+        // The dot and the headline number come from the SAME downsampled+smoothed
+        // series the trace is drawn from — snapping to the raw data put the dot
+        // visibly off the line whenever downsampling or smoothing moved it.
         double hts = t0 + (hover.X - MarginLeft) / plotW * (t1 - t0);
-        ChartPoint nearest = NearestInRange(points, lo, hi, hts);
-        double? ambientAt = AmbientPoints is { Count: > 0 } a2
-            ? NearestInRange(a2, 0, a2.Count - 1, hts).Avg : null;
+        int vi = NearestIndex(_vis, hts);
+        ChartPoint nearest = _vis[vi];
+        double traceValue = _visSmooth[vi];
+        double? ambientAt = null;
+        if (AmbientPoints is { Count: > 0 } a2)
+            ambientAt = a2[NearestIndex(a2, hts)].Avg;
 
         double cx = X(nearest.Ts);
         dc.DrawLine(CrossPen, new Point(cx, MarginTop), new Point(cx, axisY));
-        dc.DrawEllipse(AccentBrush, null, new Point(cx, Y(nearest.Avg)), 2.5, 2.5);
+        dc.DrawEllipse(AccentBrush, null, new Point(cx, Y(traceValue)), 2.5, 2.5);
 
         string when = DateTimeOffset.FromUnixTimeSeconds(nearest.Ts).ToLocalTime()
             .ToString(span.TotalHours <= 26 ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture);
-        string line1 = $"{when}   {nearest.Avg:0.#}°  ({nearest.Min:0}–{nearest.Max:0}°)";
-        string line2 = ambientAt is { } av ? $"outside {av:0.#}°   Δ {nearest.Avg - av:+0.#;-0.#}°" : "";
-        var t1f = new FormattedText(line1, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            MonoSemiFace, 11, TextBrush, dip);
-        var t2f = new FormattedText(line2, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            MonoFace, 10.5, TextDimBrush, dip);
+        string line1 = $"{when}   {traceValue:0.#}°  ({nearest.Min:0}–{nearest.Max:0}°)";
+        string line2 = ambientAt is { } av ? $"outside {av:0.#}°   Δ {traceValue - av:+0.#;-0.#}°" : "";
+        FormattedText t1f = Label(line1, MonoSemiFace, 11, TextBrush, dip);
+        FormattedText t2f = Label(line2, MonoFace, 10.5, TextDimBrush, dip);
 
         double boxW = Math.Max(t1f.Width, t2f.Width) + 20;
         double boxH = 14 + t1f.Height + (line2.Length > 0 ? t2f.Height + 3 : 0);
@@ -473,6 +487,108 @@ public sealed class TimeSeriesChart : FrameworkElement
         if (line2.Length > 0)
             dc.DrawText(t2f, new Point(bx + 10, by + 10 + t1f.Height));
     }
+
+    // ------------------------------------------------------------- caches
+
+    /// <summary>Rebuilds the visible downsampled series + its smoothed trace only when
+    /// the visible slice or bucket size actually changed.</summary>
+    private void EnsureVisibleSeries(IReadOnlyList<ChartPoint> points, int lo, int hi, int maxPoints, double t0, double t1)
+    {
+        double bucketSpan = (t1 - t0) / maxPoints;
+        if (ReferenceEquals(_visSource, points) && _visLo == lo && _visHi == hi
+            && Math.Abs(_visBucketSpan - bucketSpan) < 1e-9)
+            return;
+        _vis = Downsample(points, lo, hi, maxPoints, bucketSpan);
+        _visSmooth = SmoothAvg(_vis);
+        _visSource = points;
+        _visLo = lo;
+        _visHi = hi;
+        _visBucketSpan = bucketSpan;
+        _geoVis = null; // geometries were built from the old series
+    }
+
+    /// <summary>Rebuilds the frozen band/trace/ambient geometries only when the view
+    /// transform or the series changed. A crosshair move hits none of those, so hover
+    /// redraws just re-emit frozen geometry — that's what makes scrubbing cheap.</summary>
+    private void EnsureGeometries(double t0, double t1, double yMin, double yMax, double w, double h,
+        Func<double, double> X, Func<double, double> Y)
+    {
+        object? ambientSrc = AmbientPoints;
+        if (ReferenceEquals(_geoVis, _vis) && ReferenceEquals(_geoAmbient, ambientSrc)
+            && _geoT0 == t0 && _geoT1 == t1 && _geoYMin == yMin && _geoYMax == yMax && _geoW == w && _geoH == h)
+            return;
+
+        _geoVis = _vis;
+        _geoAmbient = ambientSrc;
+        _geoT0 = t0; _geoT1 = t1; _geoYMin = yMin; _geoYMax = yMax; _geoW = w; _geoH = h;
+        _bandGeo = _lineGeo = _ambientGeo = null;
+        if (_vis.Length < 2)
+            return;
+
+        // Min/max band.
+        var band = new StreamGeometry();
+        using (StreamGeometryContext ctx = band.Open())
+        {
+            ctx.BeginFigure(new Point(X(_vis[0].Ts), Y(_vis[0].Max)), true, true);
+            for (int i = 1; i < _vis.Length; i++)
+                ctx.LineTo(new Point(X(_vis[i].Ts), Y(_vis[i].Max)), false, false);
+            for (int i = _vis.Length - 1; i >= 0; i--)
+                ctx.LineTo(new Point(X(_vis[i].Ts), Y(_vis[i].Min)), false, false);
+        }
+        band.Freeze();
+        _bandGeo = band;
+
+        // Average trace (3-point smoothed); the glow pen re-draws the same geometry.
+        var line = new Point[_vis.Length];
+        for (int i = 0; i < _vis.Length; i++)
+            line[i] = new Point(X(_vis[i].Ts), Y(_visSmooth[i]));
+        _lineGeo = BuildPolyline(line);
+        _lineEndDot = line[^1];
+
+        // Ambient overlay (dashed slate), same visible window.
+        if (AmbientPoints is { Count: > 1 } amb)
+        {
+            int alo = Math.Max(0, LowerBound(amb, (long)Math.Floor(t0)) - 1);
+            int ahi = Math.Min(amb.Count - 1, LowerBound(amb, (long)Math.Ceiling(t1)));
+            if (ahi > alo)
+            {
+                ChartPoint[] avis = Downsample(amb, alo, ahi, Math.Max(2, (int)((w - MarginLeft - MarginRight) / 2.5)),
+                    (t1 - t0) / Math.Max(2, (int)((w - MarginLeft - MarginRight) / 2.5)));
+                var pts = new Point[avis.Length];
+                for (int i = 0; i < avis.Length; i++)
+                    pts[i] = new Point(X(avis[i].Ts), Y(avis[i].Avg));
+                _ambientGeo = BuildPolyline(pts);
+            }
+        }
+    }
+
+    private static StreamGeometry? BuildPolyline(Point[] pts)
+    {
+        if (pts.Length < 2)
+            return null;
+        var geo = new StreamGeometry();
+        using (StreamGeometryContext ctx = geo.Open())
+        {
+            ctx.BeginFigure(pts[0], false, false);
+            ctx.PolyLineTo(pts.Skip(1).ToList(), true, true);
+        }
+        geo.Freeze();
+        return geo;
+    }
+
+    private FormattedText Label(string text, Typeface face, double size, Brush brush, double dip)
+    {
+        string key = $"{text}{size}{face.GetHashCode()}{brush.GetHashCode()}{dip}";
+        if (_textCache.TryGetValue(key, out FormattedText? cached))
+            return cached;
+        if (_textCache.Count > 400)
+            _textCache.Clear(); // axis labels churn while zooming; keep the cache bounded
+        var txt = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, face, size, brush, dip);
+        _textCache[key] = txt;
+        return txt;
+    }
+
+    // ------------------------------------------------------------- helpers
 
     /// <summary>First index whose timestamp is >= <paramref name="ts"/> (points are sorted).</summary>
     private static int LowerBound(IReadOnlyList<ChartPoint> pts, long ts)
@@ -487,16 +603,14 @@ public sealed class TimeSeriesChart : FrameworkElement
         return lo;
     }
 
-    private static ChartPoint NearestInRange(IReadOnlyList<ChartPoint> pts, int lo, int hi, double ts)
+    /// <summary>Index of the point nearest to <paramref name="ts"/>, by binary search —
+    /// the old linear scan walked the entire series on every mouse move.</summary>
+    private static int NearestIndex(IReadOnlyList<ChartPoint> pts, double ts)
     {
-        ChartPoint best = pts[lo];
-        double bestD = Math.Abs(best.Ts - ts);
-        for (int i = lo + 1; i <= hi; i++)
-        {
-            double d = Math.Abs(pts[i].Ts - ts);
-            if (d < bestD) { bestD = d; best = pts[i]; }
-        }
-        return best;
+        int i = LowerBound(pts, (long)Math.Ceiling(ts));
+        if (i >= pts.Count) return pts.Count - 1;
+        if (i == 0) return 0;
+        return Math.Abs(pts[i].Ts - ts) < Math.Abs(pts[i - 1].Ts - ts) ? i : i - 1;
     }
 
     /// <summary>Min/max across the visible slice (plus any ambient points in range),
@@ -511,11 +625,13 @@ public sealed class TimeSeriesChart : FrameworkElement
         }
         if (AmbientPoints is { Count: > 0 } amb)
         {
-            foreach (ChartPoint a in amb)
+            int alo = Math.Max(0, LowerBound(amb, (long)Math.Floor(t0)) - 1);
+            int ahi = Math.Min(amb.Count - 1, LowerBound(amb, (long)Math.Ceiling(t1)));
+            for (int i = alo; i <= ahi; i++)
             {
-                if (a.Ts < t0 || a.Ts > t1) continue;
-                if (a.Avg < min) min = a.Avg;
-                if (a.Avg > max) max = a.Avg;
+                if (amb[i].Ts < t0 || amb[i].Ts > t1) continue;
+                if (amb[i].Avg < min) min = amb[i].Avg;
+                if (amb[i].Avg > max) max = amb[i].Avg;
             }
         }
         if (min > max) { min = 20; max = 60; }
@@ -524,34 +640,40 @@ public sealed class TimeSeriesChart : FrameworkElement
         return (min, Math.Max(min + 5, max));
     }
 
-    /// <summary>Bucket a long slice down to <paramref name="maxPoints"/> columns, keeping
-    /// min/max envelope and mean per bucket so spikes survive downsampling.</summary>
-    private static IReadOnlyList<ChartPoint> Downsample(IReadOnlyList<ChartPoint> src, int lo, int hi, int maxPoints)
+    /// <summary>Bucket a long slice down to columns, keeping the min/max envelope and
+    /// mean per bucket so spikes survive downsampling. Buckets are anchored to absolute
+    /// time (boundaries at fixed multiples of <paramref name="bucketSpan"/>): an
+    /// index-anchored version re-cut the buckets differently on every panned frame,
+    /// which made the whole trace shimmer under drag.</summary>
+    private static ChartPoint[] Downsample(IReadOnlyList<ChartPoint> src, int lo, int hi, int maxPoints, double bucketSpan)
     {
         int n = hi - lo + 1;
-        if (maxPoints < 2 || n <= maxPoints)
+        if (maxPoints < 2 || n <= maxPoints || bucketSpan <= 0)
         {
             var copy = new ChartPoint[n];
             for (int i = 0; i < n; i++) copy[i] = src[lo + i];
             return copy;
         }
 
-        var outp = new List<ChartPoint>(maxPoints);
-        double bucket = (double)n / maxPoints;
-        for (int j = 0; j < maxPoints; j++)
+        var outp = new List<ChartPoint>(maxPoints + 2);
+        int k = lo;
+        while (k <= hi)
         {
-            int from = lo + (int)(j * bucket);
-            int to = Math.Min(hi + 1, lo + Math.Max((int)(j * bucket) + 1, (int)((j + 1) * bucket)));
+            double bucketEnd = (Math.Floor(src[k].Ts / bucketSpan) + 1) * bucketSpan;
+            long ts = src[k].Ts;
             double min = double.MaxValue, max = double.MinValue, sum = 0;
-            for (int k = from; k < to; k++)
+            int cnt = 0;
+            while (k <= hi && src[k].Ts < bucketEnd)
             {
                 if (src[k].Min < min) min = src[k].Min;
                 if (src[k].Max > max) max = src[k].Max;
                 sum += src[k].Avg;
+                cnt++;
+                k++;
             }
-            outp.Add(new ChartPoint(src[from].Ts, sum / (to - from), min, max));
+            outp.Add(new ChartPoint(ts, sum / cnt, min, max));
         }
-        return outp;
+        return outp.ToArray();
     }
 
     private static double[] SmoothAvg(IReadOnlyList<ChartPoint> pts)
@@ -568,20 +690,6 @@ public sealed class TimeSeriesChart : FrameworkElement
         return outp;
     }
 
-    private static void DrawLine(DrawingContext dc, Pen pen, IEnumerable<Point> pts)
-    {
-        var list = pts.ToList();
-        if (list.Count < 2) return;
-        var geo = new StreamGeometry();
-        using (StreamGeometryContext ctx = geo.Open())
-        {
-            ctx.BeginFigure(list[0], false, false);
-            ctx.PolyLineTo(list.Skip(1).ToList(), true, true);
-        }
-        geo.Freeze();
-        dc.DrawGeometry(null, pen, geo);
-    }
-
     /// <summary>Faint tracked-caps hint in the top-right telling the user the chart is
     /// interactive (scroll to zoom, drag to pan, double-click to reset). Shown only when
     /// idle; it clears the moment a crosshair or pan takes over.</summary>
@@ -589,8 +697,7 @@ public sealed class TimeSeriesChart : FrameworkElement
     {
         const string text = "SCROLL ZOOM  ·  DRAG PAN  ·  DBL-CLICK RESET";
         string tracked = string.Join(((char)0x200A).ToString(), text.ToCharArray());
-        var txt = new FormattedText(tracked, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-            MonoFace, 8.5, LabelBrush, dip);
+        FormattedText txt = Label(tracked, MonoFace, 8.5, LabelBrush, dip);
         dc.DrawText(txt, new Point(w - MarginRight - txt.Width, 1));
     }
 

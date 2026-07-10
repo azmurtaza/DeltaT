@@ -114,7 +114,10 @@ public sealed class RemarksCoordinator : IDisposable
     private IReadOnlyDictionary<ComponentKind, (double, double, bool)>? BuildShortTrend()
     {
         IReadOnlyList<SensorSnapshot> hour = _monitor.RecentWindow(TimeSpan.FromHours(1));
-        if (hour.Count < 900) // need most of an hour of 2 s samples
+        // Sample counts scale with the configured interval (1–10 s) — the old fixed
+        // thresholds assumed 2 s and silently disabled this rule at slower rates.
+        double interval = Math.Max(1, _monitor.Interval.TotalSeconds);
+        if (hour.Count < (int)(1800 / interval)) // need most of an hour of samples
             return null;
 
         DateTimeOffset cut = hour[^1].TimestampUtc - TimeSpan.FromMinutes(10);
@@ -130,7 +133,7 @@ public sealed class RemarksCoordinator : IDisposable
                 if (snap.TimestampUtc >= cut) recent.Add((t, l));
                 else earlier.Add((t, l));
             }
-            if (recent.Count < 60 || earlier.Count < 300)
+            if (recent.Count < (int)(120 / interval) || earlier.Count < (int)(600 / interval))
                 continue;
             bool similarLoad = Math.Abs(recent.Average(x => x.Load) - earlier.Average(x => x.Load)) <= 15;
             result[kind] = (recent.Average(x => x.Temp), earlier.Average(x => x.Temp), similarLoad);

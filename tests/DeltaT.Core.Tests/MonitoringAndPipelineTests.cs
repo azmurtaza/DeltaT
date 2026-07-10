@@ -103,6 +103,7 @@ public class TelemetryPipelineTests : IDisposable
     private sealed class FixedAmbient : IAmbientProvider
     {
         public double? CurrentAmbientC { get; set; } = 30; // Warm band
+        public bool IsStale { get; set; }
     }
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"deltat-test-{Guid.NewGuid():N}.db");
@@ -180,8 +181,10 @@ public class TelemetryPipelineTests : IDisposable
         pipeline.Flush();
         _repo.RollupHour(hourStart.ToUnixTimeSeconds());
 
+        // Flush now also rolls the hour in progress, so the 61st minute's hour exists
+        // too — query just the first hour.
         var hourly = _repo.GetSeries(ComponentKind.Cpu, "CPU",
-            hourStart.ToUnixTimeSeconds(), hourStart.AddHours(1).ToUnixTimeSeconds(), "hour");
+            hourStart.ToUnixTimeSeconds(), hourStart.AddMinutes(59).ToUnixTimeSeconds(), "hour");
         SeriesPoint hour = Assert.Single(hourly);
         Assert.Equal(65, hour.TempAvg!.Value, 0.5);
     }
@@ -209,6 +212,93 @@ public class TelemetryPipelineTests : IDisposable
             Assert.Equal(-1, s.Band);
             Assert.Null(s.DeltaAvg);
         });
+    }
+
+    [Fact]
+    public void StaleAmbient_IsTreatedAsUnknown_NotBandedWithYesterdaysWeather()
+    {
+        // Weather unreachable for hours: the cached value must not band new samples —
+        // a day-old 20° stamped onto a heatwave poisons the learned deltas.
+        var source = new ScriptedSource();
+        var ambient = new FixedAmbient { CurrentAmbientC = 20, IsStale = true };
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, ambient, _repo);
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 90, load: 95));
+        source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
+        while (source.Remaining > 0)
+            monitor.Capture();
+        pipeline.Flush();
+
+        var stats = _repo.GetBucketStats(ComponentKind.Cpu, "CPU",
+            Snap.T0.AddMinutes(-1).ToUnixTimeSeconds(), Snap.T0.AddMinutes(10).ToUnixTimeSeconds());
+        Assert.All(stats.Where(s => s.Bucket == LoadBucket.Heavy), s =>
+        {
+            Assert.Equal(-1, s.Band);
+            Assert.Null(s.DeltaAvg);
+        });
+    }
+
+    [Fact]
+    public void PasteComponentWithoutLoadReading_IsNotFiledAsIdle()
+    {
+        // A CPU minute with no load sensor can't be attributed to a bucket; filing it
+        // under Idle would teach the idle baseline gaming temperatures.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
+        {
+            source.Enqueue(new SensorSnapshot(t, true, new[]
+            {
+                new ComponentReading(ComponentKind.Cpu, "CPU", 90, null, LoadPercent: null, null, null, null, false, 100),
+                new ComponentReading(ComponentKind.Storage, "SSD", 45, null, LoadPercent: null, null, null, null, false, null),
+            }));
+        }
+        source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
+        while (source.Remaining > 0)
+            monitor.Capture();
+        pipeline.Flush();
+
+        long from = Snap.T0.AddMinutes(-1).ToUnixTimeSeconds();
+        long to = Snap.T0.AddMinutes(10).ToUnixTimeSeconds();
+        // CPU minutes with unknown load were skipped entirely…
+        Assert.DoesNotContain(_repo.GetBucketStats(ComponentKind.Cpu, "CPU", from, to),
+            s => s.Bucket == LoadBucket.Idle && s.TempAvg > 80);
+        // …while the SSD (no load sensor by design) still accumulates history.
+        Assert.NotEmpty(_repo.GetBucketStats(ComponentKind.Storage, "SSD", from, to));
+    }
+
+    [Fact]
+    public void HourRollup_RepairsHolesFromEarlierSessions_OnRestart()
+    {
+        // Session 1 ends mid-hour and disposes without a rollup for that hour (a crash
+        // wouldn't even flush); session 2 must repair it so 7d/30d charts have no hole.
+        DateTimeOffset hourStart = new(2026, 7, 1, 13, 0, 0, TimeSpan.Zero);
+        var source1 = new ScriptedSource();
+        var monitor1 = new MonitoringService(source1);
+        var pipeline1 = new TelemetryPipeline(monitor1, new FixedAmbient(), _repo);
+        DateTimeOffset t = hourStart;
+        for (int i = 0; i < 20 * 6; i++, t += TimeSpan.FromSeconds(10)) // 20 min of samples…
+            source1.Enqueue(Snap.Cpu(t, 65, load: 25));
+        while (source1.Remaining > 0)
+            monitor1.Capture();
+        GC.KeepAlive(pipeline1); // …then "crash": no Dispose, no Flush, no hour rollup
+
+        var source2 = new ScriptedSource();
+        var monitor2 = new MonitoringService(source2);
+        using var pipeline2 = new TelemetryPipeline(monitor2, new FixedAmbient(), _repo);
+        source2.Enqueue(Snap.Cpu(hourStart.AddHours(3), 60, load: 20)); // next launch
+        monitor2.Capture();
+
+        var hourly = _repo.GetSeries(ComponentKind.Cpu, "CPU",
+            hourStart.ToUnixTimeSeconds(), hourStart.AddHours(1).ToUnixTimeSeconds(), "hour");
+        SeriesPoint hour = Assert.Single(hourly);
+        Assert.Equal(65, hour.TempAvg!.Value, 0.5);
     }
 
     [Fact]

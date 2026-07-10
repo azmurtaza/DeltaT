@@ -41,11 +41,22 @@ public sealed class TelemetryPipeline : IDisposable
     {
         try
         {
-            double? ambient = _ambient.CurrentAmbientC;
+            // A stale reading (weather unreachable for hours) is treated as unknown:
+            // banding today's samples with yesterday's temperature would quietly poison
+            // the learned deltas. Unknown ambient lands in band -1, which scoring skips.
+            double? ambient = _ambient.IsStale ? null : _ambient.CurrentAmbientC;
             long ts = snap.TimestampUtc.ToUnixTimeSeconds();
             long minute = ts / 60 * 60;
             long hour = ts / 3600 * 3600;
             long day = ts / 86400;
+
+            // First snapshot after a start: repair hour rollups over the whole minute
+            // retention. A shutdown (or crash) mid-hour left that hour permanently
+            // unrolled — nothing later ever triggered its rollover — which punched
+            // holes in the 7d/30d/ALL charts at every quit ("my trends are gone").
+            // Idempotent rebuild from agg_minute; runs once per launch, off the UI thread.
+            if (_currentHour < 0)
+                _repo.RollupHours(hour - (long)MinuteRetention.TotalSeconds, hour);
 
             // Chassis fan proxy: laptops rarely expose the CPU fan directly, but
             // the fans they do expose (GPU, board) share the heatsink assembly
@@ -100,6 +111,13 @@ public sealed class TelemetryPipeline : IDisposable
     private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan)
     {
         if (c.TemperatureC is not { } temp)
+            return;
+        // A paste component with no load reading can't be attributed to a bucket.
+        // Defaulting it to Idle would teach the idle baseline gaming temperatures
+        // (and judge idle against them later) — skip the minute instead. Non-paste
+        // parts (SSD, battery, board) have no meaningful load; they keep the Idle
+        // default so their thermal history still accumulates.
+        if (c.Bucket is null && c.Kind.HasPaste())
             return;
         LoadBucket bucket = c.Bucket ?? LoadBucket.Idle;
         int band = ambient is { } a ? (int)AmbientBands.FromCelsius(a) : -1;
@@ -180,13 +198,16 @@ public sealed class TelemetryPipeline : IDisposable
         catch (Exception ex) { Error?.Invoke("soak event write failed", ex); }
     }
 
-    /// <summary>Flush everything buffered (call on shutdown).</summary>
+    /// <summary>Flush everything buffered (call on shutdown). Also rolls up the hour in
+    /// progress — without this, the hour a session ends in never reached agg_hour.</summary>
     public void Flush()
     {
         try
         {
             FlushRaw();
             FlushClosedMinutes(long.MaxValue);
+            if (_currentHour >= 0)
+                _repo.RollupHour(_currentHour);
         }
         catch (Exception ex) { Error?.Invoke("final flush failed", ex); }
     }

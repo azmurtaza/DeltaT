@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -12,6 +13,9 @@
          LibreHardwareMonitor the app actually ships. A mismatch here once masked a
          0.9.6 CPU-temp regression on Raptor Lake - see deltat-gotchas. -->
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+    <!-- For the msr diagnostic mode: exercises the same CpuMsrTemperatureReader the
+         app ships, against this machine's silicon. -->
+    <ProjectReference Include="..\DeltaT.Core\DeltaT.Core.csproj" />
   </ItemGroup>
 
 </Project>

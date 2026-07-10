@@ -9,6 +9,13 @@ namespace DeltaT.Core.Weather;
 public interface IAmbientProvider
 {
     double? CurrentAmbientC { get; }
+
+    /// <summary>True when the reading is too old to describe the weather outside right
+    /// now (service unreachable for hours, offline start on a cached value). Consumers
+    /// that LEARN from ambient (banding, deltas) must treat a stale reading as unknown —
+    /// yesterday's 20° stamped onto today's heatwave poisons the baseline. Display may
+    /// still show it, flagged.</summary>
+    bool IsStale => false;
 }
 
 public sealed record GeoLocation(double Latitude, double Longitude, string City, string Country, string Source)
@@ -109,11 +116,18 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
             _ = RefreshAsync();
     }
 
-    /// <summary>IP geolocation is flaky terrain (providers rate-limit and block),
-    /// so we walk a chain of free keyless providers until one answers. Coarse
-    /// results are fine — weather barely changes across a city.</summary>
+    /// <summary>Best location we can get without asking the user. Windows' own
+    /// positioning comes first: it's WiFi/GNSS-based and lands in the right city,
+    /// where IP geolocation regularly reports the ISP's hub a hundred kilometres away
+    /// (a Sialkot connection "located" in Lahore shifts every weather reading). Only
+    /// when Windows can't answer — location service off, no radios, older OS — does
+    /// the IP-provider chain take over. Coarse is survivable for weather; wrong-city
+    /// is not.</summary>
     public async Task<GeoLocation?> TryAutoLocateAsync()
     {
+        if (await TryWindowsLocateAsync().ConfigureAwait(false) is { } precise)
+            return precise;
+
         Exception? lastError = null;
         foreach ((string url, Func<JsonElement, GeoLocation?> parse) in LocationProviders)
         {
@@ -132,6 +146,62 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
             Error?.Invoke("auto-locate failed on all providers", lastError);
         return null;
     }
+
+    /// <summary>Windows positioning (WinRT Geolocator). Returns null when the system
+    /// location switch is off, access is denied, no position source exists, or the OS
+    /// predates the API — callers then fall back to IP lookup. City-level accuracy is
+    /// requested so laptops without GPS still resolve fast off WiFi.</summary>
+    private async Task<GeoLocation?> TryWindowsLocateAsync()
+    {
+        try
+        {
+            var access = await Windows.Devices.Geolocation.Geolocator.RequestAccessAsync();
+            if (access != Windows.Devices.Geolocation.GeolocationAccessStatus.Allowed)
+                return null;
+
+            var locator = new Windows.Devices.Geolocation.Geolocator { DesiredAccuracyInMeters = 1500 };
+            var position = await locator.GetGeopositionAsync(
+                    maximumAge: TimeSpan.FromHours(1), timeout: TimeSpan.FromSeconds(12))
+                .AsTask().ConfigureAwait(false);
+
+            var p = position.Coordinate.Point.Position;
+            if (double.IsNaN(p.Latitude) || double.IsNaN(p.Longitude)
+                || (Math.Abs(p.Latitude) < 0.0001 && Math.Abs(p.Longitude) < 0.0001))
+                return null;
+
+            (string city, string country) = await TryReverseGeocodeAsync(p.Latitude, p.Longitude).ConfigureAwait(false);
+            return new GeoLocation(p.Latitude, p.Longitude, city, country, "windows");
+        }
+        catch
+        {
+            return null; // any failure here just hands over to the IP chain
+        }
+    }
+
+    /// <summary>Coordinates → a human city name for the titlebar. Cosmetic only — the
+    /// weather fetch runs on the coordinates either way — so failures degrade to a
+    /// generic label rather than blocking the location.</summary>
+    private async Task<(string City, string Country)> TryReverseGeocodeAsync(double lat, double lon)
+    {
+        try
+        {
+            string url = string.Create(CultureInfo.InvariantCulture,
+                $"https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={lat:0.####}&longitude={lon:0.####}&localityLanguage=en");
+            using JsonDocument doc = JsonDocument.Parse(await _http.GetStringAsync(url).ConfigureAwait(false));
+            JsonElement root = doc.RootElement;
+            string? city = FirstNonEmpty(StringProp(root, "city"), StringProp(root, "locality"),
+                StringProp(root, "principalSubdivision"));
+            string country = StringProp(root, "countryName") ?? "";
+            return (city ?? "Detected location", country);
+        }
+        catch
+        {
+            return ("Detected location", "");
+        }
+    }
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
     private static readonly (string Url, Func<JsonElement, GeoLocation?> Parse)[] LocationProviders =
     {

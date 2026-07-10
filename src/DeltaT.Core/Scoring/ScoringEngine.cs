@@ -142,7 +142,9 @@ public static class ScoringEngine
         // 2) Thermal throttling — the paste failing at its actual job.
         if (input.ThrottleEvents > 0 && input.RecentWindowHours > 0)
         {
-            double perDay = input.ThrottleEvents / (input.RecentWindowHours / 24.0);
+            // Floor the window at one day: right after a lock the recent window can be
+            // an hour, and extrapolating one event to "24 a day" maxed the penalty.
+            double perDay = input.ThrottleEvents / Math.Max(1.0, input.RecentWindowHours / 24.0);
             double p = perDay * ThrottlePointsPerDailyEvent;
             p = Math.Max(p, input.ThrottleEvents >= 2 ? 8 : 4); // even rare throttling matters
             p = Math.Min(MaxThrottlePenalty, p);
@@ -246,9 +248,14 @@ public static class ScoringEngine
                 // only make the die hotter, and colder outdoor air can't make a healthy die
                 // hotter, so a reading at or below the healthy die temp for this load is
                 // provably not degraded — whatever its rise-over-outside works out to.
+                // Cross-band readings are clamped at "not degraded" (0): sitting below
+                // the physical ceiling proves health but can't quantify improvement, so
+                // letting a very negative cross-band number into the weighted sum would
+                // mask genuine same-band excess elsewhere (e.g. a cold-snap idle hiding
+                // a hot heavy bucket).
                 double excess = (sameBand is not null || baseline.TempAvg is not { } baseTemp || r.TempAvg <= 0)
                     ? delta + correction - baseline.DeltaAvg
-                    : CrossBandExcess(r, baseline, baseTemp) + correction;
+                    : Math.Max(0, CrossBandExcess(r, baseline, baseTemp) + correction);
                 fanCorrWeighted += correction * w;
 
                 sumWeighted += excess * w;

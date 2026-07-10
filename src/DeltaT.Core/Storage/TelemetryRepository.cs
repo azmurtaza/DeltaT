@@ -170,6 +170,42 @@ public sealed class TelemetryRepository
         cmd.Parameters["$thn"].Value = a.ThrottleN;
     }
 
+    /// <summary>Rebuilds every hour row in a range from its minutes, in one statement.
+    /// Called at pipeline start: an app shutdown (or crash) mid-hour leaves that hour
+    /// unrolled forever — no later snapshot in it ever triggers the rollover — which
+    /// punched a permanent hole in the 7d/30d charts at every quit. Idempotent.</summary>
+    public void RollupHours(long fromHourUnix, long toHourUnixExclusive)
+    {
+        long from = fromHourUnix / 3600 * 3600;
+        using var conn = _db.Open();
+        using var tx = conn.BeginTransaction();
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM agg_hour WHERE hour >= $from AND hour < $to;";
+            del.Parameters.AddWithValue("$from", from);
+            del.Parameters.AddWithValue("$to", toHourUnixExclusive);
+            del.ExecuteNonQuery();
+        }
+        using (var ins = conn.CreateCommand())
+        {
+            ins.Transaction = tx;
+            ins.CommandText = """
+                INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n)
+                SELECT minute / 3600 * 3600, kind, name, bucket, band, on_ac,
+                       SUM(n), SUM(temp_sum), MIN(temp_min), MAX(temp_max), SUM(load_sum),
+                       SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n)
+                FROM agg_minute
+                WHERE minute >= $from AND minute < $to
+                GROUP BY minute / 3600 * 3600, kind, name, bucket, band, on_ac;
+                """;
+            ins.Parameters.AddWithValue("$from", from);
+            ins.Parameters.AddWithValue("$to", toHourUnixExclusive);
+            ins.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
     /// <summary>Rebuilds one hour row from its minutes. Delete-then-insert keeps it idempotent.</summary>
     public void RollupHour(long hourStartUnix)
     {
@@ -402,6 +438,42 @@ public sealed class TelemetryRepository
         return sessionMeans;
     }
 
+    /// <summary>Distinct loaded (heavy/medium) usage bouts in a window, deduplicated
+    /// across load buckets and ambient bands. A single gaming session oscillates between
+    /// Heavy and Medium (and can straddle an ambient-band boundary), so counting each
+    /// cell's sessions separately would overstate how many independent observations the
+    /// calibration model really has — one evening of play must count as one bout.</summary>
+    public int CountLoadedSessions(ComponentKind kind, string name, bool onAc, long fromTs, long toTs, int gapSeconds)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT DISTINCT minute FROM agg_minute
+            WHERE kind=$kind AND name=$name AND bucket IN ($med,$heavy) AND band >= 0 AND on_ac=$onac
+              AND delta_n > 0 AND minute BETWEEN $from AND $to
+            ORDER BY minute;
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$med", (int)LoadBucket.Medium);
+        cmd.Parameters.AddWithValue("$heavy", (int)LoadBucket.Heavy);
+        cmd.Parameters.AddWithValue("$onac", onAc ? 1 : 0);
+        cmd.Parameters.AddWithValue("$from", fromTs);
+        cmd.Parameters.AddWithValue("$to", toTs);
+
+        int sessions = 0;
+        long prevMinute = long.MinValue;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            long minute = reader.GetInt64(0);
+            if (prevMinute == long.MinValue || minute - prevMinute > gapSeconds)
+                sessions++;
+            prevMinute = minute;
+        }
+        return sessions;
+    }
+
     /// <summary>Chart series. Resolution: "raw" (samples), "minute" or "hour" (aggregates).</summary>
     public IReadOnlyList<SeriesPoint> GetSeries(ComponentKind kind, string? name, long fromTs, long toTs, string resolution)
     {
@@ -505,6 +577,20 @@ public sealed class TelemetryRepository
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
+    }
+
+    /// <summary>Drops one component's learned rows for an epoch. Used when a baseline
+    /// lock turns out to have been bogus (frozen by the old backfill bug): the rows it
+    /// wrote were never confidence-earned, so the relearn starts from a clean slate.</summary>
+    public void DeleteBaseline(int epoch, ComponentKind kind, string name)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM baseline WHERE epoch=$e AND kind=$kind AND name=$name;";
+        cmd.Parameters.AddWithValue("$e", epoch);
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.ExecuteNonQuery();
     }
 
     public IReadOnlyList<BaselineRow> GetBaseline(int epoch)

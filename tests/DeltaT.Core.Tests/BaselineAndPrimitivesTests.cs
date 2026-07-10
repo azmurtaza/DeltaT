@@ -24,14 +24,27 @@ public class BaselineBuilderTests
     [Fact]
     public void NotReady_WhileCuring_EvenWithPerfectData()
     {
-        // Great, tight data on day one — but the paste hasn't settled, so confidence is capped.
+        // Great, tight data on day one — but the freshly applied paste hasn't settled,
+        // so confidence is capped. Only applies to repaste epochs (pasteIsFresh).
         var stats = new[] { Stat(LoadBucket.Heavy, 500) };
         CalibrationState cal = BaselineBuilder.Assess(Start, Start.AddHours(24), stats,
-            HeavyMeans(60, 60.1, 59.9, 60.05));
+            HeavyMeans(60, 60.1, 59.9, 60.05), independentLoadedSessions: 4, pasteIsFresh: true);
 
         Assert.False(cal.Ready);
         Assert.True(cal.Confidence <= 0.11);           // held down by the cure floor
         Assert.Contains("settling", cal.Constraint);
+    }
+
+    [Fact]
+    public void Ready_OnDayOne_WhenPasteIsNotFresh()
+    {
+        // First install / recalibration: the paste is as cured as it will ever be, so
+        // the clock must not gate an otherwise-earned lock.
+        var stats = new[] { Stat(LoadBucket.Heavy, 500) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Start.AddHours(24), stats,
+            HeavyMeans(60, 60.1, 59.9, 60.05), independentLoadedSessions: 4, pasteIsFresh: false);
+
+        Assert.True(cal.Ready);
     }
 
     [Fact]
@@ -40,7 +53,7 @@ public class BaselineBuilderTests
         // Idle-only history can never define a paste baseline.
         var stats = new[] { Stat(LoadBucket.Idle, 5000) };
         CalibrationState cal = BaselineBuilder.Assess(Start, Start.AddDays(31), stats,
-            (_, _) => Array.Empty<double>());
+            (_, _) => Array.Empty<double>(), independentLoadedSessions: 0, pasteIsFresh: true);
 
         Assert.False(cal.Ready);
         Assert.Equal(0, cal.DataConfidence);
@@ -53,7 +66,7 @@ public class BaselineBuilderTests
         // Cured and tight, but only two independent sessions — variance can't be trusted yet.
         var stats = new[] { Stat(LoadBucket.Heavy, 200) };
         CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
-            HeavyMeans(60, 60.1));
+            HeavyMeans(60, 60.1), independentLoadedSessions: 2, pasteIsFresh: true);
 
         Assert.False(cal.Ready);
         Assert.Equal(2, cal.LoadedSessions);
@@ -65,18 +78,34 @@ public class BaselineBuilderTests
     {
         var stats = new[] { Stat(LoadBucket.Heavy, 200) };
         CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
-            HeavyMeans(60, 60.2, 59.8, 60.1, 59.9)); // 5 tight sessions
+            HeavyMeans(60, 60.2, 59.8, 60.1, 59.9), independentLoadedSessions: 5, pasteIsFresh: true); // 5 tight sessions
 
         Assert.True(cal.Ready);
         Assert.True(cal.Confidence >= BaselineBuilder.ReadyConfidence);
     }
 
     [Fact]
+    public void SessionGate_UsesDeduplicatedCount_NotPerCellSums()
+    {
+        // One evening of gaming shows up as sessions in BOTH the Heavy and Medium
+        // cells; the independence gate must count it once. With only one real bout,
+        // even tight per-cell means can't unlock.
+        var stats = new[] { Stat(LoadBucket.Heavy, 200), Stat(LoadBucket.Medium, 200) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
+            (_, _) => new[] { 60.0, 60.1, 59.9 }, independentLoadedSessions: 1, pasteIsFresh: true);
+
+        Assert.False(cal.Ready);
+        Assert.Equal(1, cal.LoadedSessions);
+    }
+
+    [Fact]
     public void Confidence_IsHigherForTighterData()
     {
         var stats = new[] { Stat(LoadBucket.Heavy, 200) };
-        double tight = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(60, 60.2, 59.8, 60.1)).DataConfidence;
-        double noisy = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(50, 60, 70, 55)).DataConfidence;
+        double tight = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(60, 60.2, 59.8, 60.1),
+            independentLoadedSessions: 4, pasteIsFresh: true).DataConfidence;
+        double noisy = BaselineBuilder.Assess(Start, Cured, stats, HeavyMeans(50, 60, 70, 55),
+            independentLoadedSessions: 4, pasteIsFresh: true).DataConfidence;
 
         Assert.True(tight > noisy);
         Assert.True(noisy < BaselineBuilder.ReadyConfidence); // scattered readings never lock

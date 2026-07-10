@@ -82,17 +82,30 @@ public static class BaselineBuilder
     /// <summary>Assess whether the epoch's baseline can be trusted yet, and by how much.
     /// Pure: the caller supplies the per-cell session means (segmentation lives in
     /// storage, which owns the timestamps) exactly as it supplies minute deltas to
-    /// <see cref="Build"/>.</summary>
+    /// <see cref="Build"/>.
+    ///
+    /// <paramref name="independentLoadedSessions"/> is the number of distinct loaded
+    /// usage bouts, deduplicated across buckets and bands — one gaming session that
+    /// oscillates Heavy↔Medium (or straddles an ambient-band edge) is one observation,
+    /// not four. Per-cell session means still drive each cell's standard error; this
+    /// count only gates overall independence.
+    ///
+    /// <paramref name="pasteIsFresh"/>: the cure ramp models a physical process — fresh
+    /// TIM settling over its first days of thermal cycling. That only exists when the
+    /// epoch began with an actual repaste. A first install or a recalibration is watching
+    /// paste that is already as cured as it will ever be, so gating those epochs on the
+    /// clock would just delay an honest lock for no physical reason.</summary>
     public static CalibrationState Assess(
         DateTimeOffset epochStart,
         DateTimeOffset now,
         IReadOnlyList<BucketStat> statsInWindow,
-        Func<LoadBucket, int, IReadOnlyList<double>> sessionMeansFor)
+        Func<LoadBucket, int, IReadOnlyList<double>> sessionMeansFor,
+        int independentLoadedSessions,
+        bool pasteIsFresh)
     {
-        double cure = CureMaturity(epochStart, now);
+        double cure = pasteIsFresh ? CureMaturity(epochStart, now) : 1.0;
 
         var cells = new List<CellConfidence>();
-        int totalLoadedSessions = 0;
         foreach (BucketStat s in statsInWindow)
         {
             if (!LoadedBuckets.Contains(s.Bucket) || s.Band < 0 || s.Minutes < MinBucketMinutes || s.DeltaAvg is null)
@@ -100,9 +113,9 @@ public static class BaselineBuilder
 
             IReadOnlyList<double> means = sessionMeansFor(s.Bucket, s.Band);
             double? se = StandardError(means);
-            totalLoadedSessions += means.Count;
             cells.Add(new CellConfidence(s.Bucket, s.Band, means.Count, se, CellScore(means.Count, se)));
         }
+        int totalLoadedSessions = independentLoadedSessions;
 
         double dataConf;
         string dataConstraint;

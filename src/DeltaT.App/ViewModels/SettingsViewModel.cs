@@ -208,12 +208,13 @@ public partial class SettingsViewModel : ObservableObject
     {
         MessageBoxResult answer = MessageBox.Show(
             "Tell DeltaT you just replaced the thermal paste?\n\n"
-            + "The learned baseline resets and a fresh learning week starts. "
-            + "Once the new baseline locks, DeltaT reports exactly what the repaste bought you.",
+            + "The learned baseline resets and relearning starts (fresh paste needs a few days "
+            + "to settle, so the lock waits for that). Once the new baseline locks, DeltaT "
+            + "reports exactly what the repaste bought you. History and trends stay put.",
             "DeltaT - repaste", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
         _scores.RegisterRepaste(DateTimeOffset.UtcNow);
-        StatusText = "Repaste logged. New baseline learning started - verdict in about a week.";
+        StatusText = "Repaste logged. New baseline learning started - verdict lands once the fresh paste settles and enough load is seen.";
     }
 
     [RelayCommand]
@@ -222,13 +223,14 @@ public partial class SettingsViewModel : ObservableObject
         MessageBoxResult answer = MessageBox.Show(
             "Recalibrate the learned baseline?\n\n"
             + "Use this when the cooling changed but the paste didn't - new fans, a clean-out, "
-            + "a moved rig - or after DeltaT has been off for a long stretch. The current baseline "
-            + "is retired and a fresh learning week begins. This is not a repaste, so there's no "
-            + "before/after verdict.",
+            + "a moved rig - or after DeltaT has been off for a long stretch. DeltaT re-checks "
+            + "the machine against its old baseline under real load: if nothing actually changed, "
+            + "the old reference is kept and scoring resumes within the hour; only genuine change "
+            + "is relearned. History and trends are never touched.",
             "DeltaT - recalibrate", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
         _scores.Recalibrate(DateTimeOffset.UtcNow);
-        StatusText = "Recalibration started. Scoring pauses for about a week while DeltaT relearns.";
+        StatusText = "Recalibration started. DeltaT verifies against the old baseline under load and relearns only what changed.";
     }
 
     [RelayCommand]
