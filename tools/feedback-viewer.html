@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeltaT feedback</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0E0A07; color: #F2E8DC;
+         font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 26px 18px 70px; }
+  h1 { font-size: 16px; letter-spacing: 3px; font-weight: 700; margin: 0 0 4px; }
+  .accent { color: #F26A1B; }
+  .tag { color: #9A8B7C; font-size: 12px; letter-spacing: 1px; margin-bottom: 20px; }
+  #gate { display: none; min-height: 66vh; align-items: center; justify-content: center;
+          flex-direction: column; gap: 13px; }
+  #gate input { background: #17100A; border: 1px solid #3A2A1C; color: #F2E8DC;
+                padding: 12px 14px; width: 380px; max-width: 82vw; border-radius: 2px;
+                font-size: 13px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .btn { background: #F26A1B; border: 0; color: #160E07; font-weight: 700; letter-spacing: 1px;
+         padding: 12px 20px; border-radius: 2px; cursor: pointer; }
+  #err { color: #E93A2B; font-size: 12px; min-height: 16px; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+         margin-bottom: 16px; border-bottom: 1px solid #241A12; padding-bottom: 12px; }
+  .stat { color: #9A8B7C; font-size: 12px; letter-spacing: 1px; margin-right: auto;
+          font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .filt { background: transparent; border: 1px solid #3A2A1C; color: #9A8B7C; padding: 5px 12px;
+          border-radius: 2px; cursor: pointer; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+  .filt.on { border-color: #F26A1B; color: #F26A1B; }
+  .card { background: #17100A; border: 1px solid #241A12; border-left: 2px solid #F26A1B;
+          padding: 13px 15px; margin-bottom: 10px; border-radius: 2px; }
+  .card.done { opacity: .5; border-left-color: #57C465; }
+  .top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .badge { font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 2px 7px; border-radius: 2px; }
+  .badge.bug { background: rgba(233,58,43,.16); color: #E93A2B; }
+  .badge.idea { background: rgba(127,162,184,.16); color: #7FA2B8; }
+  .when { color: #7C6E60; font-size: 12px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .mark { margin-left: auto; background: transparent; border: 1px solid #3A2A1C; color: #9A8B7C;
+          font-size: 11px; padding: 3px 10px; border-radius: 2px; cursor: pointer; }
+  .msg { white-space: pre-wrap; word-break: break-word; color: #EADFD2; }
+  .meta { margin-top: 9px; color: #8A7B6C; font-size: 11.5px;
+          font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .contact { margin-top: 5px; color: #B79A6E; font-size: 12px; }
+  .empty { color: #7C6E60; text-align: center; padding: 55px 0; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="gate">
+    <h1><span class="accent">&#916;</span>T FEEDBACK</h1>
+    <div style="color:#9A8B7C;font-size:12px;">Paste your admin token to read reports.</div>
+    <input id="tok" type="password" placeholder="admin token" autocomplete="off">
+    <button class="btn" onclick="save()">UNLOCK</button>
+    <div id="err"></div>
+  </div>
+
+  <div id="main" style="display:none;">
+    <h1><span class="accent">&#916;</span>T FEEDBACK</h1>
+    <div class="tag">Bug reports and ideas from the app</div>
+    <div class="bar">
+      <span class="stat" id="stat"></span>
+      <button class="filt on" id="f_all"  onclick="setFilter('all')">All</button>
+      <button class="filt"    id="f_open" onclick="setFilter('open')">Open</button>
+      <button class="filt"    id="f_bug"  onclick="setFilter('bug')">Bugs</button>
+      <button class="filt"    id="f_idea" onclick="setFilter('idea')">Ideas</button>
+      <button class="filt" onclick="lock()">Lock</button>
+    </div>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script>
+  var API = 'https://gslnypazsjkbrvjjycfr.functions.supabase.co/feedback-admin';
+  var KEY = 'deltat_admin_token';
+  var FILTER = 'all';
+
+  function token() { return sessionStorage.getItem(KEY) || ''; }
+  function esc(s) { var d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+  function fmt(ts) { try { return new Date(ts).toLocaleString(); } catch (e) { return String(ts); } }
+  function show(id, on) { document.getElementById(id).style.display = on; }
+  function save() { var v = document.getElementById('tok').value.trim(); if (v) { sessionStorage.setItem(KEY, v); document.getElementById('err').textContent = ''; load(); } }
+  function lock() { sessionStorage.removeItem(KEY); location.reload(); }
+
+  function setFilter(f) {
+    FILTER = f;
+    var b = document.querySelectorAll('.filt');
+    for (var i = 0; i < b.length; i++) b[i].classList.remove('on');
+    var el = document.getElementById('f_' + f); if (el) el.classList.add('on');
+    load();
+  }
+
+  async function mark(id, handled) {
+    await fetch(API + '?data=1', {
+      method: 'POST',
+      headers: { 'x-admin-token': token(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, handled: handled })
+    });
+    load();
+  }
+
+  async function load() {
+    var t = token();
+    if (!t) { show('gate', 'flex'); show('main', 'none'); return; }
+    var r;
+    try { r = await fetch(API + '?data=1', { headers: { 'x-admin-token': t } }); }
+    catch (e) { document.getElementById('err').textContent = 'Network error - check your connection.'; show('gate', 'flex'); show('main', 'none'); return; }
+    if (r.status === 401) {
+      sessionStorage.removeItem(KEY);
+      document.getElementById('err').textContent = 'That token was rejected.';
+      show('gate', 'flex'); show('main', 'none'); return;
+    }
+    show('gate', 'none'); show('main', 'block');
+    var j = await r.json();
+    render(j.rows || []);
+  }
+
+  function render(rows) {
+    var bugs = 0, ideas = 0, open = 0;
+    for (var i = 0; i < rows.length; i++) { if (rows[i].kind === 'bug') bugs++; else ideas++; if (!rows[i].handled) open++; }
+    document.getElementById('stat').textContent = rows.length + ' total  /  ' + bugs + ' bugs  /  ' + ideas + ' ideas  /  ' + open + ' open';
+
+    var html = '', shown = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var f = rows[i];
+      if (FILTER === 'bug'  && f.kind !== 'bug')  continue;
+      if (FILTER === 'idea' && f.kind !== 'idea') continue;
+      if (FILTER === 'open' && f.handled) continue;
+      shown++;
+      var meta = [f.machine, f.cpu, f.os, f.app_version ? ('v' + f.app_version) : '',
+                  f.elevated === true ? 'admin' : (f.elevated === false ? 'standard' : '')]
+                 .filter(Boolean).map(esc).join('  /  ');
+      html += '<div class="card ' + (f.handled ? 'done' : '') + '">';
+      html += '<div class="top"><span class="badge ' + (f.kind === 'bug' ? 'bug' : 'idea') + '">' + (f.kind === 'bug' ? 'BUG' : 'IDEA') + '</span>';
+      html += '<span class="when">' + esc(fmt(f.created_at)) + '</span>';
+      html += '<button class="mark" onclick="mark(' + f.id + ',' + (f.handled ? 'false' : 'true') + ')">' + (f.handled ? 'reopen' : 'mark handled') + '</button></div>';
+      html += '<div class="msg">' + esc(f.message) + '</div>';
+      if (meta) html += '<div class="meta">' + meta + '</div>';
+      if (f.contact) html += '<div class="contact">reply to: ' + esc(f.contact) + '</div>';
+      html += '</div>';
+    }
+    document.getElementById('list').innerHTML = shown ? html : '<div class="empty">Nothing here yet.</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>
