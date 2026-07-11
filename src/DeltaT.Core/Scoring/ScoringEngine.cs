@@ -52,6 +52,7 @@ public static class ScoringEngine
     /// <summary>Minimum minutes of recent data in a bucket before it may judge.</summary>
     public static int MinMinutes(LoadBucket b) => b switch
     {
+        LoadBucket.Max => 8,
         LoadBucket.Heavy => 8,
         LoadBucket.Medium => 10,
         LoadBucket.Light => 15,
@@ -59,9 +60,10 @@ public static class ScoringEngine
     };
 
     /// <summary>Heavier load buckets say more about paste (that's when the heat
-    /// actually has to cross it).</summary>
+    /// actually has to cross it). Full load says the most of all.</summary>
     public static double Weight(LoadBucket b) => b switch
     {
+        LoadBucket.Max => 0.55,
         LoadBucket.Heavy => 0.50,
         LoadBucket.Medium => 0.30,
         LoadBucket.Light => 0.15,
@@ -203,7 +205,7 @@ public static class ScoringEngine
         bool usedAdjacent = false;
         double fanCorrWeighted = 0, fanRecentWeighted = 0, fanBaseWeighted = 0, fanWeights = 0;
 
-        foreach (LoadBucket bucket in new[] { LoadBucket.Heavy, LoadBucket.Medium, LoadBucket.Light, LoadBucket.Idle })
+        foreach (LoadBucket bucket in new[] { LoadBucket.Max, LoadBucket.Heavy, LoadBucket.Medium, LoadBucket.Light, LoadBucket.Idle })
         {
             // Recent rows for this bucket (possibly several ambient bands) with enough data.
             var recentRows = input.Recent
@@ -263,7 +265,7 @@ public static class ScoringEngine
                 bucketsCompared++;
                 if (excess > 2.5) bucketsInExcess++;
 
-                if (bucket == LoadBucket.Heavy)
+                if (bucket is LoadBucket.Heavy or LoadBucket.Max)
                     heavyExcess = Math.Max(heavyExcess ?? double.MinValue, excess);
                 if (bucket == LoadBucket.Idle)
                     idleExcess = Math.Max(idleExcess ?? double.MinValue, excess);
@@ -323,7 +325,7 @@ public static class ScoringEngine
     {
         double penalty = 0;
 
-        var heavyRows = input.Recent.Where(r => r.Bucket == LoadBucket.Heavy && r.Minutes >= 5).ToList();
+        var heavyRows = input.Recent.Where(r => r.Bucket is LoadBucket.Heavy or LoadBucket.Max && r.Minutes >= 5).ToList();
         double? heavyAvg = heavyRows.Count > 0 ? heavyRows.Average(r => r.TempAvg) : null;
         double? heavyMax = heavyRows.Count > 0 ? heavyRows.Max(r => r.TempMax) : null;
 

@@ -77,7 +77,7 @@ public static class BaselineBuilder
 
     /// <summary>Buckets whose heat actually has to cross the paste — the ones that
     /// define a paste-health baseline. Idle/light are recorded but never gate readiness.</summary>
-    private static readonly LoadBucket[] LoadedBuckets = { LoadBucket.Heavy, LoadBucket.Medium };
+    private static readonly LoadBucket[] LoadedBuckets = { LoadBucket.Max, LoadBucket.Heavy, LoadBucket.Medium };
 
     /// <summary>Assess whether the epoch's baseline can be trusted yet, and by how much.
     /// Pure: the caller supplies the per-cell session means (segmentation lives in

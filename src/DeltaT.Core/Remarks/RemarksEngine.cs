@@ -181,7 +181,7 @@ public sealed class RemarksEngine
                 : Enumerable.Empty<Remark>()),
 
         new Rule("on-battery", TimeSpan.FromHours(4), ctx =>
-            !ctx.OnAcPower && ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket == LoadBucket.Heavy
+            !ctx.OnAcPower && ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket is LoadBucket.Heavy or LoadBucket.Max
                 ? One("on-battery", ctx, RemarkSeverity.Info,
                     "Heavy load on battery - these readings don't count toward paste scoring (battery power limits change the physics).")
                 : Enumerable.Empty<Remark>()),

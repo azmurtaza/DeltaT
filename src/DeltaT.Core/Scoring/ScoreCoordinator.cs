@@ -476,7 +476,7 @@ public sealed class ScoreCoordinator
         // Too old to re-judge fairly: heal only a reference that never learned any
         // loaded cell — it can't score paste, so there is nothing to lose.
         return !_repo.GetBaseline(Epoch).Any(r =>
-            r.Kind == c.Kind && r.Name == c.Name && r.Bucket is LoadBucket.Heavy or LoadBucket.Medium);
+            r.Kind == c.Kind && r.Name == c.Name && r.Bucket is LoadBucket.Heavy or LoadBucket.Medium or LoadBucket.Max);
     }
 
     private List<BaselineBucket> BuildBaseline(

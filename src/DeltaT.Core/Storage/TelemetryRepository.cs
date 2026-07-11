@@ -438,9 +438,9 @@ public sealed class TelemetryRepository
         return sessionMeans;
     }
 
-    /// <summary>Distinct loaded (heavy/medium) usage bouts in a window, deduplicated
+    /// <summary>Distinct loaded (medium/heavy/full) usage bouts in a window, deduplicated
     /// across load buckets and ambient bands. A single gaming session oscillates between
-    /// Heavy and Medium (and can straddle an ambient-band boundary), so counting each
+    /// Medium, Heavy and Max (and can straddle an ambient-band boundary), so counting each
     /// cell's sessions separately would overstate how many independent observations the
     /// calibration model really has — one evening of play must count as one bout.</summary>
     public int CountLoadedSessions(ComponentKind kind, string name, bool onAc, long fromTs, long toTs, int gapSeconds)
@@ -449,7 +449,7 @@ public sealed class TelemetryRepository
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT DISTINCT minute FROM agg_minute
-            WHERE kind=$kind AND name=$name AND bucket IN ($med,$heavy) AND band >= 0 AND on_ac=$onac
+            WHERE kind=$kind AND name=$name AND bucket IN ($med,$heavy,$max) AND band >= 0 AND on_ac=$onac
               AND delta_n > 0 AND minute BETWEEN $from AND $to
             ORDER BY minute;
             """;
@@ -457,6 +457,7 @@ public sealed class TelemetryRepository
         cmd.Parameters.AddWithValue("$name", name);
         cmd.Parameters.AddWithValue("$med", (int)LoadBucket.Medium);
         cmd.Parameters.AddWithValue("$heavy", (int)LoadBucket.Heavy);
+        cmd.Parameters.AddWithValue("$max", (int)LoadBucket.Max);
         cmd.Parameters.AddWithValue("$onac", onAc ? 1 : 0);
         cmd.Parameters.AddWithValue("$from", fromTs);
         cmd.Parameters.AddWithValue("$to", toTs);

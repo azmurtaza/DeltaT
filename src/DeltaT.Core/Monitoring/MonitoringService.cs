@@ -201,7 +201,7 @@ public sealed class MonitoringService : IAsyncDisposable
                         }
                         return null;
                     }
-                    if (bucket == LoadBucket.Heavy && ts - _calmSince >= CalmRequired)
+                    if (bucket >= LoadBucket.Heavy && ts - _calmSince >= CalmRequired)
                     {
                         _phase = Phase.Measuring;
                         _measureStart = ts;
@@ -210,7 +210,7 @@ public sealed class MonitoringService : IAsyncDisposable
                         _peakAt = ts;
                         return null;
                     }
-                    _phase = Phase.Watching; // medium load, or heavy without enough calm — not a clean edge
+                    _phase = Phase.Watching; // medium load, or heavy/full without enough calm — not a clean edge
                     return null;
 
                 case Phase.Measuring:

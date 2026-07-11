@@ -126,7 +126,7 @@ public class TelemetryPipelineTests : IDisposable
         DateTimeOffset t = Snap.T0;
         // 3 full minutes at heavy load, 90 °C, ambient 30 → delta 60.
         for (int i = 0; i < 90; i++, t += TimeSpan.FromSeconds(2))
-            source.Enqueue(Snap.Cpu(t, 90, load: 95));
+            source.Enqueue(Snap.Cpu(t, 90, load: 80));
         // One extra sample to roll the last minute over.
         source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
         while (source.Remaining > 0)
@@ -199,7 +199,7 @@ public class TelemetryPipelineTests : IDisposable
 
         DateTimeOffset t = Snap.T0;
         for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
-            source.Enqueue(Snap.Cpu(t, 90, load: 95));
+            source.Enqueue(Snap.Cpu(t, 90, load: 80));
         source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
         while (source.Remaining > 0)
             monitor.Capture();
@@ -226,7 +226,7 @@ public class TelemetryPipelineTests : IDisposable
 
         DateTimeOffset t = Snap.T0;
         for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
-            source.Enqueue(Snap.Cpu(t, 90, load: 95));
+            source.Enqueue(Snap.Cpu(t, 90, load: 80));
         source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
         while (source.Remaining > 0)
             monitor.Capture();
@@ -315,7 +315,7 @@ public class TelemetryPipelineTests : IDisposable
         {
             source.Enqueue(new SensorSnapshot(t, true, new[]
             {
-                new ComponentReading(ComponentKind.Cpu, "CPU", 90, null, 95, null, null, null, false, 100),
+                new ComponentReading(ComponentKind.Cpu, "CPU", 90, null, 80, null, null, null, false, 100),
                 new ComponentReading(ComponentKind.GpuDiscrete, "GPU", 70, null, 40, 5000, null, null, false, 87),
             }));
         }
@@ -348,7 +348,7 @@ public class SimulatedSourceTests
         {
             SensorSnapshot snap = sim.Read();
             ComponentReading cpu = snap.Find(ComponentKind.Cpu)!;
-            if (cpu.Bucket == LoadBucket.Heavy && cpu.TemperatureC is { } temp)
+            if (cpu.Bucket >= LoadBucket.Heavy && cpu.TemperatureC is { } temp)
                 deltas.Add(temp - 32);
         }
         Assert.True(deltas.Count > 50, "simulation never reached heavy load");

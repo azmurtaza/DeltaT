@@ -11,13 +11,25 @@ public enum ComponentKind
 }
 
 /// <summary>Utilization bands. All per-component statistics are kept per bucket
-/// so "temp under 100% load" and "temp at idle" never get mixed together.</summary>
+/// so "temp under 100% load" and "temp at idle" never get mixed together.
+///
+/// <b>Heavy is split from Max at 90%.</b> Temp-rise-over-ambient scales with load,
+/// so pooling everything ≥70% into one bucket mixed a 100%-pinned load (a stress
+/// test, the fingerprint's CpuBurner, or a GPU-bound game that pegs the card at 99%)
+/// with organic 70–90% work. Those run at genuinely different temperatures, so their
+/// per-session mean deltas scatter — which the calibration model reads as "I don't
+/// know this machine's normal", inflating the standard error and collapsing
+/// confidence (the "CPU won't calibrate / confidence fell" bug). Keeping full load in
+/// its own cell restores a true like-for-like comparison. GPUs mostly live in Max
+/// (they peg in load); CPUs spread across both, which is exactly why the CPU used to
+/// look stuck while the GPU locked instantly.</summary>
 public enum LoadBucket
 {
     Idle = 0,   // < 10 %
     Light = 1,  // 10–40 %
     Medium = 2, // 40–70 %
-    Heavy = 3,  // ≥ 70 %
+    Heavy = 3,  // 70–90 %
+    Max = 4,    // ≥ 90 % (pinned / full load)
 }
 
 /// <summary>Outside-temperature bands. Baselines are learned per band so a July
@@ -37,7 +49,8 @@ public static class LoadBuckets
         < 10 => LoadBucket.Idle,
         < 40 => LoadBucket.Light,
         < 70 => LoadBucket.Medium,
-        _ => LoadBucket.Heavy,
+        < 90 => LoadBucket.Heavy,
+        _ => LoadBucket.Max,
     };
 
     public static string Label(this LoadBucket bucket) => bucket switch
@@ -45,7 +58,8 @@ public static class LoadBuckets
         LoadBucket.Idle => "idle",
         LoadBucket.Light => "light load",
         LoadBucket.Medium => "medium load",
-        _ => "heavy load",
+        LoadBucket.Heavy => "heavy load",
+        _ => "full load",
     };
 }
 

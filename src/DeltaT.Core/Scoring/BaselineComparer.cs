@@ -54,7 +54,7 @@ public static class BaselineComparer
 
             int cellMinutes = Math.Min(a.Minutes, b.Minutes);
             matchedMinutes += cellMinutes;
-            if (a.Bucket is LoadBucket.Heavy or LoadBucket.Medium)
+            if (a.Bucket is LoadBucket.Heavy or LoadBucket.Medium or LoadBucket.Max)
                 loadedMatchedMinutes += cellMinutes;
 
             // Express the newer delta at the older baseline's airflow before diffing,

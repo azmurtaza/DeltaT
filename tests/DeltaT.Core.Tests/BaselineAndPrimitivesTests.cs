@@ -168,7 +168,9 @@ public class PrimitivesTests
     [InlineData(40, LoadBucket.Medium)]
     [InlineData(69.9, LoadBucket.Medium)]
     [InlineData(70, LoadBucket.Heavy)]
-    [InlineData(100, LoadBucket.Heavy)]
+    [InlineData(89.9, LoadBucket.Heavy)]
+    [InlineData(90, LoadBucket.Max)]
+    [InlineData(100, LoadBucket.Max)]
     public void LoadBuckets_EdgesLandWhereDocumented(double pct, LoadBucket expected) =>
         Assert.Equal(expected, LoadBuckets.FromPercent(pct));
 
