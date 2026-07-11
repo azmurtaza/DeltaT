@@ -307,6 +307,21 @@ public partial class App : Application
             }
         };
 
+        // Fill the score dials the instant the first sensor snapshot lands, so a reinstall
+        // shows its already-learned calibration as fast as it shows trends - not blank at 0%
+        // until the periodic timer's first tick (up to 30 s of staring at "CAL 0%"). One-shot:
+        // it unsubscribes itself after the first compute.
+        void ComputeOnFirstSnapshot(SensorSnapshot _)
+        {
+            _monitor!.SnapshotCaptured -= ComputeOnFirstSnapshot;
+            Task.Run(() =>
+            {
+                try { _scores!.Compute(DateTimeOffset.UtcNow); }
+                catch (Exception ex) { Log("score", ex); }
+            });
+        }
+        _monitor.SnapshotCaptured += ComputeOnFirstSnapshot;
+
         _monitor.Start();
         // Screenshot runs keep the seeded weather; a live fetch would overwrite it
         // (and possibly shift the ambient band) mid-capture.
