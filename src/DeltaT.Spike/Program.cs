@@ -19,6 +19,59 @@ Line($"DeltaT sensor spike - {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Line($"Elevated: {elevated}{(elevated ? "" : "   << CPU package temps + storage SMART need admin")}");
 Line(new string('=', 78));
 
+// `--geo`: what does automatic location actually resolve to on this machine? Prints the
+// raw Windows Geolocator coordinates (current app params vs a high-accuracy fresh fix)
+// and how BigDataCloud names each, so a "wrong city" report can be pinned to either the
+// coordinate (positioning limit) or the name (reverse-geocode choice).
+if (args.Contains("--geo", StringComparer.OrdinalIgnoreCase))
+{
+    using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+    http.DefaultRequestHeaders.UserAgent.ParseAdd("DeltaT/1.0");
+
+    string Prop(System.Text.Json.JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+    string Inv(double d) => d.ToString("0.#####", System.Globalization.CultureInfo.InvariantCulture);
+
+    async Task Name(double lat, double lon, string tag)
+    {
+        try
+        {
+            string u = $"https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={Inv(lat)}&longitude={Inv(lon)}&localityLanguage=en";
+            using var d = System.Text.Json.JsonDocument.Parse(await http.GetStringAsync(u));
+            var r = d.RootElement;
+            Line($"     name[{tag}]: raw city='{Prop(r, "city")}'  ->  DeltaT resolves: '{DeltaT.Core.Weather.AmbientService.ResolvePlaceName(r)}, {Prop(r, "countryName")}'");
+        }
+        catch (Exception ex) { Line($"     reverse-geocode error: {ex.Message}"); }
+    }
+
+    async Task Geo()
+    {
+        Line("Windows Geolocator auto-detect diagnostic:");
+        try
+        {
+            var access = await Windows.Devices.Geolocation.Geolocator.RequestAccessAsync();
+            Line($"  access: {access}");
+            if (access != Windows.Devices.Geolocation.GeolocationAccessStatus.Allowed) { Line("  denied/off -> app would fall back to IP providers"); return; }
+
+            var coarse = new Windows.Devices.Geolocation.Geolocator { DesiredAccuracyInMeters = 1500 };
+            var pc = (await coarse.GetGeopositionAsync(TimeSpan.FromHours(1), TimeSpan.FromSeconds(12)).AsTask()).Coordinate;
+            Line($"  [current app: 1500m, 1h cache]  lat {Inv(pc.Point.Position.Latitude)}  lon {Inv(pc.Point.Position.Longitude)}  accuracy {pc.Accuracy:0} m  source {pc.PositionSource}");
+            await Name(pc.Point.Position.Latitude, pc.Point.Position.Longitude, "current");
+
+            var hi = new Windows.Devices.Geolocation.Geolocator { DesiredAccuracy = Windows.Devices.Geolocation.PositionAccuracy.High };
+            var ph = (await hi.GetGeopositionAsync(TimeSpan.Zero, TimeSpan.FromSeconds(15)).AsTask()).Coordinate;
+            Line($"  [high accuracy, fresh fix]      lat {Inv(ph.Point.Position.Latitude)}  lon {Inv(ph.Point.Position.Longitude)}  accuracy {ph.Accuracy:0} m  source {ph.PositionSource}");
+            await Name(ph.Point.Position.Latitude, ph.Point.Position.Longitude, "high");
+        }
+        catch (Exception ex) { Line($"  geolocator error: {ex.Message}"); }
+    }
+    Geo().GetAwaiter().GetResult();
+    Line("");
+    Line("Reference: real Sialkot city center is ~32.4927, 74.5313; Daska ~32.3242, 74.3500.");
+    System.IO.File.WriteAllText("geo-dump.txt", sb.ToString());
+    return;
+}
+
 // `--msr`: compare LibreHardwareMonitor's native CPU reading against the direct
 // MSR/SMN reader the app falls back to on CPUs newer than the pinned LHM build
 // (Arrow/Lunar/Panther Lake, post-Zen-5). On a natively supported CPU the two

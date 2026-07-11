@@ -44,4 +44,7 @@ public partial class SettingsView : UserControl
         if (e.Key == Key.Enter && Vm is { } vm && vm.SearchCityCommand.CanExecute(null))
             vm.SearchCityCommand.Execute(null);
     }
+
+    private void OnSendFeedback(object sender, RoutedEventArgs e) =>
+        ((App)Application.Current).OpenFeedbackWindow();
 }

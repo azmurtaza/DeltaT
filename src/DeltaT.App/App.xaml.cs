@@ -37,6 +37,7 @@ public partial class App : Application
     private ScoreCoordinator? _scores;
     private RemarksCoordinator? _remarks;
     private UpdateService? _updates;
+    private FeedbackService? _feedback;
     private TrayManager? _tray;
     private MainViewModel? _vm;
     private MainWindow? _window;
@@ -282,6 +283,7 @@ public partial class App : Application
         var trends = new TrendsViewModel(_repo);
         var remarksFeed = new RemarksViewModel(_repo);
         _updates = new UpdateService(_settings);
+        _feedback = new FeedbackService(machine, IsElevated());
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
             _updates, () => _monitor.Latest, simulate);
         var deviceVm = new DeviceViewModel(machine, profile, () => _monitor.Latest, _ambient, _settings);
@@ -464,6 +466,14 @@ public partial class App : Application
             _repo,
             onBattery: _monitor.Latest is { OnAcPower: false });
         new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();
+    }
+
+    public void OpenFeedbackWindow()
+    {
+        if (_feedback is null)
+            return;
+        var vm = new FeedbackViewModel(_feedback);
+        new FeedbackWindow { DataContext = vm, Owner = _window }.ShowDialog();
     }
 
     public void Quit()

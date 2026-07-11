@@ -21,7 +21,8 @@ Fan speed is also factored in, so switching between silent and performance fan m
 - **Staleness detection** - if DeltaT has not run for 45 days or more with a locked baseline, it flags the score as unverified and offers a one-click Recalibrate in Settings. Your old baseline is never auto-deleted
 - **Provisional score while it learns** - instead of a blank dial for the first week, DeltaT shows an estimated score with a confidence readout the moment there is enough load to compare, and it locks the real score by statistical confidence rather than a fixed countdown
 - **Automatic updates** - DeltaT checks its own GitHub releases on startup and installs new versions quietly, so you are never stuck on an old build. Turn it off in Settings, or check on demand with a button
-- **Weather-aware** - outside temp refreshes every 3 hours via Open-Meteo. No account needed
+- **Weather-aware** - outside temp refreshes every 3 hours via Open-Meteo. Location resolves from Windows positioning first (falls back to IP), and names the nearest recognizable city rather than a small nearby village. No account needed
+- **Report a bug or idea** - a Feedback button in Settings sends your note straight to the developer, no account and no public thread. Your app version, Windows version, and PC model ride along so a report is reproducible; nothing else about your machine is sent
 
 ## How the score works
 

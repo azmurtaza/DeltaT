@@ -431,7 +431,9 @@ public sealed class TimeSeriesChart : FrameworkElement
             dc.DrawEllipse(AccentBrush, null, _lineEndDot, 2.6, 2.6);
         }
 
-        // Event markers.
+        // Event markers. The label sits just inside the plot (not in the top gutter)
+        // so it clears the top-right interaction hint — the two used to collide when a
+        // marker landed under the "SCROLL ZOOM · …" text.
         if (Markers is { Count: > 0 } markers)
         {
             foreach (ChartMarker m in markers)
@@ -441,7 +443,7 @@ public sealed class TimeSeriesChart : FrameworkElement
                 (Pen pen, SolidColorBrush brush) = MarkerStyle(m.Color);
                 dc.DrawLine(pen, new Point(x, MarginTop), new Point(x, axisY));
                 FormattedText txt = Label(m.Label, MonoBoldFace, 9, brush, dip);
-                dc.DrawText(txt, new Point(Math.Clamp(x - txt.Width / 2, 0, w - txt.Width), MarginTop - 13));
+                dc.DrawText(txt, new Point(Math.Clamp(x - txt.Width / 2, 0, w - txt.Width), MarginTop + 3));
             }
         }
 

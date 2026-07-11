@@ -46,11 +46,25 @@ public sealed class FingerprintTest
         var gpuSamples = new List<(double Temp, double Load)>();
         bool onAc = true;
 
+        // The active phase and when it ends, so a snapshot arriving mid-phase can report
+        // an accurate countdown alongside its reading. Written on the run thread at each
+        // phase change, read on the monitor thread in Collect — stable within a phase, so
+        // a torn read at worst mislabels a single frame's countdown by a tick.
+        string phase = "";
+        DateTimeOffset phaseEnd = DateTimeOffset.UtcNow;
+
         void Collect(SensorSnapshot snap)
         {
             onAc = snap.OnAcPower;
             if (snap.Find(ComponentKind.Cpu) is { TemperatureC: { } ct_ } cpu)
+            {
                 cpuSamples.Add((snap.TimestampUtc, ct_, cpu.IsThrottling));
+                // Push the reading the instant it lands — the same snapshot the main
+                // window renders from — so the fingerprint gauge can't trail it by a tick.
+                if (phase.Length > 0)
+                    progress?.Report(new FingerprintProgress(
+                        phase, Math.Max(0, (phaseEnd - DateTimeOffset.UtcNow).TotalSeconds), ct_, null));
+            }
             if (snap.Find(ComponentKind.GpuDiscrete) is { TemperatureC: { } gt, LoadPercent: { } gl })
                 gpuSamples.Add((gt, gl));
         }
@@ -101,8 +115,10 @@ public sealed class FingerprintTest
                 GpuWasLoaded: gpuLoaded.Count > 0,
                 OnAcPower: onAc);
 
-            progress?.Report(new FingerprintProgress("Cooling down", Cooldown.TotalSeconds, null, null));
-            try { await Task.Delay(Cooldown, ct).ConfigureAwait(false); } catch (OperationCanceledException) { }
+            // Cooldown ticks like any other phase — the countdown counts down and the
+            // gauge keeps tracking the CPU as it falls — but a Stop here just ends the
+            // wait and still returns the finished result: the numbers are already in hand.
+            await TickPhase("Cooling down", Cooldown, progress, ct, cancelable: false).ConfigureAwait(false);
             return result;
         }
         finally
@@ -110,19 +126,25 @@ public sealed class FingerprintTest
             _monitor.SnapshotCaptured -= Collect;
         }
 
-        async Task TickPhase(string phase, TimeSpan duration, IProgress<FingerprintProgress>? prog, CancellationToken token)
+        async Task TickPhase(string phaseName, TimeSpan duration, IProgress<FingerprintProgress>? prog,
+            CancellationToken token, bool cancelable = true)
         {
+            phase = phaseName;
             DateTimeOffset end = DateTimeOffset.UtcNow + duration;
+            phaseEnd = end;
             while (DateTimeOffset.UtcNow < end)
             {
-                token.ThrowIfCancellationRequested();
-                var last = cpuSamples.Count > 0 ? cpuSamples[^1] : default;
-                prog?.Report(new FingerprintProgress(
-                    phase,
-                    (end - DateTimeOffset.UtcNow).TotalSeconds,
-                    cpuSamples.Count > 0 ? last.Temp : null,
-                    null));
-                await Task.Delay(1000, token).ConfigureAwait(false);
+                if (token.IsCancellationRequested)
+                {
+                    if (cancelable) token.ThrowIfCancellationRequested();
+                    return;
+                }
+                // Countdown tick every half second so the timer never stalls. The
+                // temperature rides in live from Collect; null here means "unchanged",
+                // so the gauge holds the last reading between snapshots.
+                prog?.Report(new FingerprintProgress(phaseName, (end - DateTimeOffset.UtcNow).TotalSeconds, null, null));
+                try { await Task.Delay(500, token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { if (cancelable) throw; return; }
             }
         }
 

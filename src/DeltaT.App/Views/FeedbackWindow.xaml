@@ -1,0 +1,104 @@
+<Window x:Class="DeltaT.App.Views.FeedbackWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:DeltaT.App.Ui"
+        Title="DeltaT - feedback" Width="500" Height="560"
+        Icon="pack://application:,,,/Assets/deltat.ico"
+        Background="{StaticResource Brush.BgGlow}" Foreground="{StaticResource Brush.Text}"
+        FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="38" ResizeBorderThickness="0"
+                            GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="38"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Rectangle Grid.RowSpan="2" Fill="{StaticResource Brush.BgDots}"/>
+
+        <!-- chrome bar -->
+        <Border Grid.Row="0" Background="{StaticResource Brush.Rail}"
+                BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
+            <DockPanel Margin="16,0,4,0">
+                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Font.Display}"
+                           FontSize="15" FontWeight="Bold" VerticalAlignment="Center">
+                    <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
+                </TextBlock>
+                <Button DockPanel.Dock="Right" Style="{StaticResource Button.Caption}" Content="&#xE8BB;"
+                        Click="OnCloseChrome" ToolTip="Close"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" VerticalAlignment="Center"
+                           Margin="14,1,0,0" ui:Tracking.Text="FEEDBACK"/>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="30,20,30,24">
+
+            <!-- ============ compose ============ -->
+            <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=compose}">
+                <TextBlock Style="{StaticResource Text.H1}" Text="Found a bug? Got an idea?" Margin="0,4,0,8"/>
+                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap"
+                           Text="Tell me what happened or what you'd like to see. It comes straight to me - no account, no public thread."/>
+
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="WHAT IS THIS" Margin="0,18,0,8"/>
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Style="{StaticResource Seg}" Content="BUG" GroupName="kind"
+                                 IsChecked="{Binding IsBug}"/>
+                    <RadioButton Style="{StaticResource Seg}" Content="IDEA" GroupName="kind"
+                                 IsChecked="{Binding IsIdea}"/>
+                </StackPanel>
+
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="DETAILS" Margin="0,16,0,8"/>
+                <TextBox Style="{StaticResource Input}" Height="120" TextWrapping="Wrap"
+                         AcceptsReturn="True" VerticalContentAlignment="Top"
+                         VerticalScrollBarVisibility="Auto"
+                         Text="{Binding Message, UpdateSourceTrigger=PropertyChanged}"/>
+
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="EMAIL (OPTIONAL)" Margin="0,14,0,8"/>
+                <TextBox Style="{StaticResource Input}"
+                         Text="{Binding Contact, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="Only if you want a reply. Left blank otherwise."/>
+
+                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" LineHeight="16" Margin="0,12,0,0" TextWrapping="Wrap"
+                           Text="DeltaT attaches your app version, Windows version, and PC model so the report is reproducible. Nothing else about your machine is sent."/>
+
+                <TextBlock Foreground="{StaticResource Brush.Hot}" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
+                           Text="{Binding StatusText}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding StatusText}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                    <Button Style="{StaticResource Button.Primary}" Content="SEND" Padding="24,9"
+                            Command="{Binding SendCommand}"/>
+                    <Button Style="{StaticResource Button.Ghost}" Content="CANCEL" Margin="10,0,0,0"
+                            Click="OnCloseChrome"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- ============ done ============ -->
+            <StackPanel VerticalAlignment="Center"
+                        Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=done}">
+                <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Sent"/>
+                <TextBlock Style="{StaticResource Text.H1}" FontSize="20" Text="Thanks - it's in." Margin="0,10,0,10"/>
+                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap"
+                           Text="Your note landed with me directly. If you left an email and it needs a follow-up, I'll be in touch."/>
+                <Button Style="{StaticResource Button.Primary}" Content="DONE" Padding="24,9"
+                        HorizontalAlignment="Left" Margin="0,20,0,0" Click="OnCloseChrome"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

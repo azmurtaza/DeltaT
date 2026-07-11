@@ -189,15 +189,63 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
                 $"https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={lat:0.####}&longitude={lon:0.####}&localityLanguage=en");
             using JsonDocument doc = JsonDocument.Parse(await _http.GetStringAsync(url).ConfigureAwait(false));
             JsonElement root = doc.RootElement;
-            string? city = FirstNonEmpty(StringProp(root, "city"), StringProp(root, "locality"),
-                StringProp(root, "principalSubdivision"));
-            string country = StringProp(root, "countryName") ?? "";
-            return (city ?? "Detected location", country);
+            return (ResolvePlaceName(root) ?? "Detected location", StringProp(root, "countryName") ?? "");
         }
         catch
         {
             return ("Detected location", "");
         }
+    }
+
+    /// <summary>Pick the most *recognizable* place name from a BigDataCloud reverse-geocode
+    /// response. Its <c>city</c> field is often a tiny union-council/settlement — a clean
+    /// 100 m WiFi fix in Citi Housing, Sialkot comes back "Daska Kalan", a village 8 km off
+    /// that reads as "wrong city" even though the coordinate is good. The district-level
+    /// administrative unit is almost always named for its principal city ("Sialkot District"
+    /// → Sialkot), so prefer that. The weather is always fetched from the exact coordinate,
+    /// so this only changes the label, never the reading. Falls back to the literal
+    /// city/locality when no district-like unit is present. Public + pure for testing.</summary>
+    public static string? ResolvePlaceName(JsonElement root)
+    {
+        if (root.TryGetProperty("localityInfo", out JsonElement info)
+            && info.TryGetProperty("administrative", out JsonElement admin)
+            && admin.ValueKind == JsonValueKind.Array)
+        {
+            // The principal populated unit between province and settlement: its description
+            // reads district/county/prefecture/metropolitan. Prefer the most specific such
+            // unit (highest order) and strip the administrative suffix off its name.
+            string? best = null;
+            int bestOrder = int.MinValue;
+            foreach (JsonElement a in admin.EnumerateArray())
+            {
+                string desc = (StringProp(a, "description") ?? "").ToLowerInvariant();
+                bool cityLike = desc.Contains("district") || desc.Contains("county")
+                             || desc.Contains("prefecture") || desc.Contains("metropolitan");
+                if (!cityLike || StringProp(a, "name") is not { Length: > 0 } name)
+                    continue;
+                int order = a.TryGetProperty("order", out JsonElement o) && o.ValueKind == JsonValueKind.Number ? o.GetInt32() : 0;
+                if (order >= bestOrder)
+                {
+                    best = CleanAdminName(name);
+                    bestOrder = order;
+                }
+            }
+            if (best is { Length: > 0 })
+                return best;
+        }
+        return FirstNonEmpty(StringProp(root, "city"), StringProp(root, "locality"),
+            StringProp(root, "principalSubdivision"));
+    }
+
+    private static string CleanAdminName(string name)
+    {
+        foreach (string suffix in new[]
+                 { " District", " County", " Prefecture", " Metropolitan City", " Metropolitan Municipality" })
+        {
+            if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return name[..^suffix.Length].Trim();
+        }
+        return name.Trim();
     }
 
     private static string? FirstNonEmpty(params string?[] values) =>
