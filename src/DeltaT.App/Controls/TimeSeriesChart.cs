@@ -441,9 +441,14 @@ public sealed class TimeSeriesChart : FrameworkElement
                 if (m.Ts < t0 || m.Ts > t1) continue;
                 double x = X(m.Ts);
                 (Pen pen, SolidColorBrush brush) = MarkerStyle(m.Color);
-                dc.DrawLine(pen, new Point(x, MarginTop), new Point(x, axisY));
                 FormattedText txt = Label(m.Label, MonoBoldFace, 9, brush, dip);
-                dc.DrawText(txt, new Point(Math.Clamp(x - txt.Width / 2, 0, w - txt.Width), MarginTop + 3));
+                double labelTop = MarginTop + 3;
+                // Start the dotted line just below the label, not at the top of the plot,
+                // so it never runs up through the letter - the R/F/T sits cleanly above its
+                // own line with a small gap instead of being crossed by it.
+                double lineTop = labelTop + txt.Height + 2;
+                dc.DrawLine(pen, new Point(x, lineTop), new Point(x, axisY));
+                dc.DrawText(txt, new Point(Math.Clamp(x - txt.Width / 2, 0, w - txt.Width), labelTop));
             }
         }
 
