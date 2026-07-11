@@ -116,27 +116,9 @@
                             </Grid>
                         </StackPanel>
                     </HeaderedContentControl>
-                </StackPanel>
-
-                <!-- ================= right column -->
-                <StackPanel Grid.Column="1" Margin="7,0,0,0">
-
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Paste lifecycle"
-                                            Margin="0,0,0,14">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12"
-                                       Text="Just repasted? Tell DeltaT. The baseline resets, and once the new one locks you get a before/after verdict - weather-corrected."/>
-                            <Button Style="{StaticResource Button.Primary}" Content="I REPASTED THIS MACHINE"
-                                    HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,16,0,12"
-                                       Text="Changed the cooling but not the paste - new fans, a clean-out, a moved rig - or DeltaT sat idle for months? Recalibrate to relearn the baseline. No before/after claim, just a fresh reference."/>
-                            <Button Style="{StaticResource Button.Ghost}" Content="RECALIBRATE BASELINE"
-                                    HorizontalAlignment="Left" Command="{Binding RecalibrateCommand}"/>
-                        </StackPanel>
-                    </HeaderedContentControl>
 
                     <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Updates"
-                                            Margin="0,0,0,14" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
+                                            Margin="0,14,0,0" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
                             <Grid Style="{StaticResource SettingRow}">
                                 <Grid.ColumnDefinitions>
@@ -158,6 +140,24 @@
                                 <Button Style="{StaticResource Button.Ghost}" Content="CHECK FOR UPDATES"
                                         HorizontalAlignment="Right" Command="{Binding CheckForUpdatesCommand}"/>
                             </Grid>
+                        </StackPanel>
+                    </HeaderedContentControl>
+                </StackPanel>
+
+                <!-- ================= right column -->
+                <StackPanel Grid.Column="1" Margin="7,0,0,0">
+
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Paste lifecycle"
+                                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12"
+                                       Text="Just repasted? Tell DeltaT. The baseline resets, and once the new one locks you get a before/after verdict - weather-corrected."/>
+                            <Button Style="{StaticResource Button.Primary}" Content="I REPASTED THIS MACHINE"
+                                    HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,16,0,12"
+                                       Text="Changed the cooling but not the paste - new fans, a clean-out, a moved rig - or DeltaT sat idle for months? Recalibrate to relearn the baseline. No before/after claim, just a fresh reference."/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="RECALIBRATE BASELINE"
+                                    HorizontalAlignment="Left" Command="{Binding RecalibrateCommand}"/>
                         </StackPanel>
                     </HeaderedContentControl>
 
