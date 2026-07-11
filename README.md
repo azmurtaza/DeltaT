@@ -8,7 +8,7 @@ DeltaT sits in your system tray, watches your CPU, GPU, and SSD temperatures rel
 
 Raw temperatures are misleading. A 45 C summer afternoon can make healthy paste look dead, while an air-conditioned room can hide paste that is quietly drying out. DeltaT scores paste health based on temperature rise over outside ambient at a given load, compared to your machine's own learned baseline. That is the number that actually tracks paste degradation over time.
 
-Fan speed is also factored in, so switching between silent and performance fan modes does not get misread as paste health changing.
+Fan speed is also factored in, so switching between silent and performance fan modes does not get misread as paste health changing. On laptops the fans usually hide behind the embedded controller where standard sensor tools cannot see them; on supported gaming machines (Acer Nitro and Predator, Lenovo Legion and LOQ) DeltaT reads CPU and GPU fan RPM straight from the vendor firmware, read-only, so it never touches your fan curves.
 
 ## What it does
 

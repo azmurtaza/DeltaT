@@ -1,3 +1,4 @@
+using System.Management;
 using System.Security.Principal;
 using System.Text;
 using LibreHardwareMonitor.Hardware;
@@ -48,6 +49,80 @@ if (args.Contains("--msr", StringComparer.OrdinalIgnoreCase))
         Thread.Sleep(700);
     }
     msrComputer.Close();
+    return;
+}
+
+// `--acer`: probe the Acer gaming WMI interface (the NitroSense channel) that
+// AcerWmiFanReader rides: a raw GetGamingSysInfo sweep over sensor ids, then live
+// CPU/GPU fan RPM beside the LHM CPU temperature — load the machine while it runs
+// and the RPMs should ramp with the heat. Read-only throughout; needs admin
+// (root\wmi denies standard users). Leaves acer-wmi-dump.txt next to the exe.
+if (args.Contains("--acer", StringComparer.OrdinalIgnoreCase))
+{
+    try
+    {
+        using var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT * FROM AcerGamingFunction");
+        ManagementObject? inst = searcher.Get().Cast<ManagementObject>().FirstOrDefault();
+        if (inst is null)
+        {
+            Line("AcerGamingFunction: class exists but no instance - not Acer gaming firmware?");
+        }
+        else
+        {
+            using (inst)
+            {
+                Line($"AcerGamingFunction instance: {inst["InstanceName"]}");
+                Line();
+                Line("GetGamingSysInfo sweep (input = id<<8 | 0x01; status 0 = sensor answered):");
+                Line("  id    raw                   status  value(bits 8-23)");
+                for (uint id = 0; id <= 0x14; id++)
+                {
+                    using ManagementBaseObject ip = inst.GetMethodParameters("GetGamingSysInfo");
+                    ip["gmInput"] = (id << 8) | 0x01u;
+                    using ManagementBaseObject op = inst.InvokeMethod("GetGamingSysInfo", ip, null);
+                    ulong raw = Convert.ToUInt64(op["gmOutput"]);
+                    Line($"  0x{id:X2}  0x{raw:X16}  {raw & 0xFF,4}  {(raw >> 8) & 0xFFFF,8}");
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Line($"sweep failed: {ex.Message}{(elevated ? "" : "   << root\\wmi needs admin")}");
+    }
+
+    Line();
+    Line("live fan RPM (LaptopFanReader: Acer ids 0x02/0x06, Lenovo FanID 1/2) vs LHM CPU temp:");
+    using (var fans = new DeltaT.Core.Monitoring.LaptopFanReader())
+    {
+        var acerComputer = new Computer { IsCpuEnabled = true };
+        acerComputer.Open();
+        var acerVisitor = new UpdateVisitor();
+        for (int i = 0; i < 12; i++)
+        {
+            acerComputer.Accept(acerVisitor);
+            float? lhmMax = null;
+            foreach (IHardware hw in acerComputer.Hardware)
+            {
+                if (hw.HardwareType != HardwareType.Cpu)
+                    continue;
+                foreach (ISensor s in hw.Sensors)
+                {
+                    if (s.SensorType == SensorType.Temperature && !s.Name.Contains("Distance") && s.Value is { } v)
+                        lhmMax = lhmMax is { } m && m > v ? m : v;
+                }
+            }
+            DeltaT.Core.Monitoring.LaptopFanSample r = fans.Read();
+            Line($"  [{i,2}] CPU fan {(r.CpuRpm is { } c ? $"{c,5:0} rpm" : "   --   ")}   GPU fan {(r.GpuRpm is { } g ? $"{g,5:0} rpm" : "   --   ")}   CPU {(lhmMax?.ToString("0.0") ?? "--"),5} °C   [{fans.ActiveVendor ?? "probing"}]");
+            Thread.Sleep(1000);
+        }
+        acerComputer.Close();
+    }
+
+    string acerOut = Path.Combine(AppContext.BaseDirectory, "acer-wmi-dump.txt");
+    File.WriteAllText(acerOut, sb.ToString());
+    Console.WriteLine();
+    Console.WriteLine($"Saved to {acerOut}");
     return;
 }
 

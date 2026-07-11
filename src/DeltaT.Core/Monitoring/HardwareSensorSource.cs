@@ -19,7 +19,12 @@ namespace DeltaT.Core.Monitoring;
 /// session wedges (often when a vendor tool touches the same EC/SMBus) and every
 /// sensor silently repeats its last value forever: if the CPU reading is
 /// bit-identical for 90 s, or its temperature vanishes after having been present,
-/// the whole Computer session is torn down and reopened.</summary>
+/// the whole Computer session is torn down and reopened.
+///
+/// Laptop fans sit behind the EC where LHM sees nothing; on supported gaming machines
+/// (Acer Nitro/Predator, Lenovo Legion/LOQ) a read-only vendor WMI interface supplies
+/// CPU/GPU fan RPM instead (<see cref="LaptopFanReader"/>) — real laptop airflow data
+/// for fan normalization at last.</summary>
 public sealed class HardwareSensorSource : ISensorSource
 {
     private Computer _computer;
@@ -28,9 +33,11 @@ public sealed class HardwareSensorSource : ISensorSource
     private readonly BatteryCycleReader _batteryCycles = new();
     private readonly AcpiThermalZoneReader _acpiZone = new();
     private readonly CpuMsrTemperatureReader _msrReader = new();
+    private readonly LaptopFanReader _laptopFans = new();
     private bool _cpuTempEverMissingLogged;
     private bool _acpiFallbackLogged;
     private bool _msrFallbackLogged;
+    private bool _laptopFansLogged;
 
     // Resolved sensor references, so each Read() is direct value access instead
     // of repeated name scans. Keyed by hardware instance: a reopen creates new
@@ -98,12 +105,20 @@ public sealed class HardwareSensorSource : ISensorSource
         var components = new List<ComponentReading>();
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
+        // Laptop EC fans are invisible to LHM; a supported vendor's gaming WMI answers.
+        LaptopFanSample ecFans = _laptopFans.Read();
+        if (!_laptopFansLogged && ecFans.HasAny)
+        {
+            _laptopFansLogged = true;
+            Diagnostic?.Invoke($"fan telemetry active via {_laptopFans.ActiveVendor} gaming WMI (CPU {FmtRpm(ecFans.CpuRpm)}, GPU {FmtRpm(ecFans.GpuRpm)})");
+        }
+
         foreach (IHardware hw in _computer.Hardware)
         {
             ComponentReading? reading = hw.HardwareType switch
             {
-                HardwareType.Cpu => MapCpu(hw),
-                HardwareType.GpuNvidia or HardwareType.GpuAmd => MapDiscreteGpu(hw),
+                HardwareType.Cpu => MapCpu(hw, ecFans.CpuRpm),
+                HardwareType.GpuNvidia or HardwareType.GpuAmd => MapDiscreteGpu(hw, ecFans.GpuRpm),
                 HardwareType.GpuIntel => MapIntelGpu(hw),
                 HardwareType.Storage => MapStorage(hw),
                 HardwareType.Battery => MapBattery(hw),
@@ -257,7 +272,7 @@ public sealed class HardwareSensorSource : ISensorSource
         return s;
     }
 
-    private ComponentReading MapCpu(IHardware hw)
+    private ComponentReading MapCpu(IHardware hw, double? ecFanRpm)
     {
         CpuSensors s = ResolveCpu(hw);
 
@@ -343,7 +358,7 @@ public sealed class HardwareSensorSource : ISensorSource
             ComponentKind.Cpu, hw.Name,
             temp, null,
             Percent(s.Load),
-            null,
+            ecFanRpm,
             Watts(s.Power ?? s.PowerCores),
             null,
             throttling,
@@ -418,7 +433,7 @@ public sealed class HardwareSensorSource : ISensorSource
         return s;
     }
 
-    private ComponentReading MapDiscreteGpu(IHardware hw)
+    private ComponentReading MapDiscreteGpu(IHardware hw, double? ecFanRpm)
     {
         GpuSensors s = ResolveGpu(hw);
         double limit = hw.HardwareType == HardwareType.GpuAmd ? AmdGpuLimitC : NvidiaGpuLimitC;
@@ -429,6 +444,7 @@ public sealed class HardwareSensorSource : ISensorSource
             if (f.Value is { } v && v is > 0 and < 10000)
                 fan = MaxOf(fan, v);
         }
+        fan ??= ecFanRpm; // laptop dGPU fans live behind the EC — LHM's list is empty there
         return new ComponentReading(
             ComponentKind.GpuDiscrete, hw.Name,
             temp,
@@ -528,6 +544,8 @@ public sealed class HardwareSensorSource : ISensorSource
         return max;
     }
 
+    private static string FmtRpm(double? rpm) => rpm is { } v ? $"{v:0} rpm" : "--";
+
     private static double? MaxOf(double? a, double? b) =>
         a is { } x ? (b is { } y && y > x ? y : x) : b;
 
@@ -573,6 +591,7 @@ public sealed class HardwareSensorSource : ISensorSource
     {
         _batteryCycles.Dispose();
         _acpiZone.Dispose();
+        _laptopFans.Dispose();
         _computer.Close();
     }
 
