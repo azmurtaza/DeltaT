@@ -370,7 +370,10 @@ public sealed class ScoreCoordinator
         long epochStartTs = epochStart.ToUnixTimeSeconds();
         long nowTs = nowUtc.ToUnixTimeSeconds();
 
-        double progress = cal.Confidence;
+        // The meter shows the smoothed, evidence-driven progress — not raw Confidence,
+        // which is gated and steps (sits at 0, then teleports). Readiness/lock above still
+        // keys off cal.Ready, so this only changes what the user watches, never when it locks.
+        double progress = cal.DisplayProgress;
         double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs);
 
         // Recent pool. Once the baseline is locked, "recent" is data AFTER the frozen

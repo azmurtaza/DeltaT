@@ -313,16 +313,21 @@ public partial class App : Application
         if (_uishotDir is null)
             _ = _ambient.StartAsync();
 
-        // Scores: one early pass (so the dashboard fills in), then every 5 minutes.
+        // Scores: one early pass (so the dashboard fills in), then an adaptive cadence.
+        // While any component is still calibrating we recompute often so the calibration
+        // meter visibly climbs as load lands; once everything is locked a score barely
+        // changes between passes, so we back off to the cheap 5-minute cadence.
         _scoreTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _scoreTimer.Tick += (_, _) =>
         {
-            _scoreTimer!.Interval = TimeSpan.FromMinutes(5);
             Task.Run(() =>
             {
                 try { _scores!.Compute(DateTimeOffset.UtcNow); }
                 catch (Exception ex) { Log("score", ex); }
             });
+            bool calibrating = _scores!.Latest.Count == 0
+                || _scores.Latest.Values.Any(s => s.Calibrating);
+            _scoreTimer!.Interval = calibrating ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(5);
         };
         _scoreTimer.Start();
 

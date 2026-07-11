@@ -31,7 +31,7 @@ public sealed record ComponentScore(
     int Value,
     Verdict Verdict,
     bool Calibrating,
-    double CalibrationProgress,     // 0..1, meaningful while calibrating — the honest confidence meter
+    double CalibrationProgress,     // 0..1, meaningful while calibrating — the smoothed, evidence-driven meter value (BaselineBuilder.MeterProgress), not raw confidence
     IReadOnlyList<ScoreReason> Reasons,
     PatternHint Hint,
     // While calibrating: the one thing holding the baseline back (empty once ready).

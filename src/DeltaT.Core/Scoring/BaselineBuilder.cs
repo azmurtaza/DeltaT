@@ -5,15 +5,16 @@ namespace DeltaT.Core.Scoring;
 
 /// <summary>How confident DeltaT is that the learned baseline describes this
 /// machine's real "normal" — and, when it isn't yet, the one thing holding it
-/// back. This is what the calibration meter shows.</summary>
+/// back.</summary>
 public sealed record CalibrationState(
     bool Ready,
-    double Confidence,       // 0..1 — the honest meter: how much you can trust the eventual score
+    double Confidence,       // 0..1 — the lock signal: how much you can trust the eventual score. Gated, so it can sit at 0 then step up sharply — do NOT bind the meter to this.
     string Constraint,       // human phrasing of the binding limiter
     double DataConfidence,   // 0..1 — statistical precision × coverage × independence
     double CureMaturity,     // 0..1 — paste break-in progress (the only wall-clock term)
     int LoadedSessions,      // independent heavy/medium sessions observed so far
-    double? BindingSeC);     // standard error of the weakest loaded cell, if known
+    double? BindingSeC,      // standard error of the weakest loaded cell, if known
+    double DisplayProgress); // 0..1 — the smoothed, evidence-driven value the calibration meter shows (see BaselineBuilder.MeterProgress)
 
 /// <summary>Builds the "what healthy looks like" reference for an epoch, and — more
 /// importantly — decides when that reference is trustworthy.
@@ -71,6 +72,26 @@ public static class BaselineBuilder
     /// <summary>Confidence floor while the paste is still within the break-in window —
     /// low enough to keep the score honest, non-zero so the meter still moves.</summary>
     private const double CureFloorConfidence = 0.10;
+
+    // --- meter shaping (display only — none of these touch readiness or the score) ---
+
+    /// <summary>Ceiling for the sample-driven "warm-up" nub: enough that a machine DeltaT
+    /// is actively watching never shows a dead 0, low enough that idle-only data (which
+    /// can't calibrate paste) never pretends to be real progress.</summary>
+    private const double WarmupDisplayCap = 0.08;
+
+    /// <summary>Minutes of any observed data at which the warm-up nub is ~63% filled.</summary>
+    private const double WarmupMinuteScale = 45;
+
+    /// <summary>Loaded minutes at which the meter's minute-coverage term is ~63% filled —
+    /// tuned so the first loaded cell (8 min) already reads as visible motion and a couple
+    /// of good sessions approach full.</summary>
+    private const double LoadedMinuteScale = 20;
+
+    /// <summary>Ceiling for the data-accumulation ramp. The final approach to 100% is
+    /// reserved for genuine confidence, so the meter can't sit "almost done" on a machine
+    /// that has gathered plenty of load but is too noisy to actually lock.</summary>
+    private const double AccumDisplayCap = 0.8;
 
     /// <summary>Minutes a single (bucket, band) cell needs to earn a baseline row.</summary>
     public const int MinBucketMinutes = 8;
@@ -149,9 +170,62 @@ public static class BaselineBuilder
         string constraint = cure < dataConf ? DescribeCure(epochStart, now) : dataConstraint;
         bool ready = confidence >= ReadyConfidence;
 
+        double display = MeterProgress(statsInWindow, totalLoadedSessions, confidence, cure, pasteIsFresh);
+
         return new CalibrationState(
             ready, Round3(confidence), constraint,
-            Round3(dataConf), Round3(cure), totalLoadedSessions, bindingSe);
+            Round3(dataConf), Round3(cure), totalLoadedSessions, bindingSe,
+            Round3(display));
+    }
+
+    /// <summary>The value the calibration meter actually shows. It is deliberately NOT
+    /// <see cref="CalibrationState.Confidence"/>: confidence is a gated statistic that is
+    /// legitimately 0 until the first loaded cell exists and then steps up sharply, which
+    /// a user reads as "stuck, then teleported to 100". This is its smooth companion —
+    /// still fully backed by real evidence (idle time alone barely moves it, and it moves
+    /// on observed samples, never the clock), but continuous: it starts climbing the moment
+    /// DeltaT sees loaded data, rises with accumulated loaded minutes and independent
+    /// sessions, and converges to 1.0 exactly as real confidence earns the lock. Because it
+    /// is capped below "done" until confidence itself crosses the bar, it can never overstate
+    /// readiness — it just refuses to look dead while the honest work is happening.</summary>
+    public static double MeterProgress(
+        IReadOnlyList<BucketStat> statsInWindow, int loadedSessions,
+        double confidence, double cure, bool pasteIsFresh)
+    {
+        double totalMinutes = 0, loadedMinutes = 0;
+        foreach (BucketStat s in statsInWindow)
+        {
+            if (s.Band < 0)
+                continue;
+            totalMinutes += s.Minutes;
+            if (LoadedBuckets.Contains(s.Bucket))
+                loadedMinutes += s.Minutes;
+        }
+
+        // Sample-driven warm-up so an actively-watched machine never shows a flat 0. Tops
+        // out low and tracks observed samples, not elapsed time (app off ⇒ no samples ⇒
+        // no motion), so it never masquerades as real calibration progress.
+        double warmup = WarmupDisplayCap * (1 - Math.Exp(-totalMinutes / WarmupMinuteScale));
+
+        // The real climb: loaded-minute coverage (moves from the first loaded minute) and
+        // independent-session coverage, blended so the meter rises smoothly through a
+        // single session instead of stepping only when a session closes.
+        double minuteFrac = 1 - Math.Exp(-loadedMinutes / LoadedMinuteScale);
+        double sessionFrac = Math.Min(1.0, loadedSessions / (double)MinLoadedSessions);
+        double accum = AccumDisplayCap * (0.6 * minuteFrac + 0.4 * sessionFrac);
+
+        // Real confidence, normalized so the lock threshold reads as a full meter. This is
+        // what carries the final stretch to 100% and pins completion to the actual lock.
+        double confShown = Math.Min(1.0, confidence / ReadyConfidence);
+
+        double display = Math.Max(warmup, Math.Max(accum, confShown));
+
+        // A fresh repaste genuinely cannot finish calibrating before the paste cures, so
+        // never let the data ramp claim more than the (already gradual) cure ramp allows.
+        if (pasteIsFresh)
+            display = Math.Min(display, Math.Max(cure, warmup));
+
+        return Math.Clamp(display, 0, 1);
     }
 
     private readonly record struct CellConfidence(LoadBucket Bucket, int Band, int Sessions, double? SeC, double Score);

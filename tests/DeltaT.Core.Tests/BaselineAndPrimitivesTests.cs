@@ -120,6 +120,82 @@ public class BaselineBuilderTests
         Assert.Equal(expected, BaselineBuilder.CureMaturity(Start, Start.AddHours(hours)), 2);
 
     [Fact]
+    public void FullLoadSession_DoesNotPoisonHeavyBaseline()
+    {
+        // The regression that cratered CPU confidence: a 100%-pinned load (fingerprint /
+        // stress / GPU-bound game) used to pool into the same Heavy bucket as organic
+        // 70-90% gaming, and its hotter mean blew up the standard error. With Max split
+        // out, the two are separate cells — the hot full-load session can't touch the
+        // Heavy cell's spread, so an otherwise-confident baseline stays confident.
+        var stats = new[] { Stat(LoadBucket.Heavy, 200), Stat(LoadBucket.Max, 40) };
+        Func<LoadBucket, int, IReadOnlyList<double>> means = (b, band) =>
+            band != 2 ? Array.Empty<double>()
+            : b == LoadBucket.Heavy ? new[] { 46.0, 46.5, 45.5 }       // organic gaming, tight
+            : b == LoadBucket.Max ? new[] { 55.0, 55.4, 54.6 }         // fingerprint, hotter but tight
+            : Array.Empty<double>();
+
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats, means,
+            independentLoadedSessions: 4, pasteIsFresh: false);
+
+        Assert.True(cal.Ready, $"split baseline should stay confident, got {cal.Confidence}");
+    }
+
+    [Fact]
+    public void MeterProgress_MovesOffZero_AsSoonAsLoadedDataArrives()
+    {
+        // The old meter (raw Confidence) sat at exactly 0 until a full loaded cell +
+        // sessions existed. A few loaded minutes with no confidence yet must already show
+        // visible motion — this is the "don't look stuck" fix.
+        var stats = new[] { Stat(LoadBucket.Heavy, 4) };
+        double p = BaselineBuilder.MeterProgress(stats, loadedSessions: 1,
+            confidence: 0, cure: 1.0, pasteIsFresh: false);
+        Assert.True(p > 0.10, $"expected visible early motion, got {p}");
+        Assert.True(p < 0.5, "but not near-done on four minutes of data");
+    }
+
+    [Fact]
+    public void MeterProgress_ClimbsMonotonically_ThenCompletesAtLock()
+    {
+        // Same machine, increasing evidence: a few minutes → a couple of sessions →
+        // fully confident. The meter must rise at each step and only hit 1.0 when real
+        // confidence reaches the lock threshold, never before.
+        var early = new[] { Stat(LoadBucket.Heavy, 8) };
+        var mid = new[] { Stat(LoadBucket.Heavy, 40) };
+        var late = new[] { Stat(LoadBucket.Heavy, 60) };
+
+        double a = BaselineBuilder.MeterProgress(early, 1, confidence: 0.05, cure: 1.0, pasteIsFresh: false);
+        double b = BaselineBuilder.MeterProgress(mid, 2, confidence: 0.30, cure: 1.0, pasteIsFresh: false);
+        double c = BaselineBuilder.MeterProgress(late, 3, confidence: 0.60, cure: 1.0, pasteIsFresh: false);
+        double locked = BaselineBuilder.MeterProgress(late, 3, confidence: BaselineBuilder.ReadyConfidence, cure: 1.0, pasteIsFresh: false);
+
+        Assert.True(a < b && b < c, $"expected a monotone climb, got {a}, {b}, {c}");
+        Assert.True(c < 1.0, "must not read 100% before the baseline actually locks");
+        Assert.Equal(1.0, locked, 3);
+    }
+
+    [Fact]
+    public void MeterProgress_IdleOnly_ShowsOnlyTheWarmupNub()
+    {
+        // Idle history can never calibrate paste, so the meter stays near a small
+        // warm-up floor — alive, but honestly nowhere near done.
+        var stats = new[] { Stat(LoadBucket.Idle, 5000) };
+        double p = BaselineBuilder.MeterProgress(stats, loadedSessions: 0,
+            confidence: 0, cure: 1.0, pasteIsFresh: false);
+        Assert.True(p > 0 && p <= 0.09, $"expected a small warm-up nub, got {p}");
+    }
+
+    [Fact]
+    public void MeterProgress_FreshPaste_TracksCureDuringBreakIn()
+    {
+        // Plenty of loaded data, but the paste is still curing: the meter must not claim
+        // more progress than the cure ramp allows (it can't finish before the paste does).
+        var stats = new[] { Stat(LoadBucket.Heavy, 500) };
+        double p = BaselineBuilder.MeterProgress(stats, loadedSessions: 4,
+            confidence: 0.10, cure: 0.10, pasteIsFresh: true);
+        Assert.True(p <= 0.11, $"fresh paste should be gated by cure, got {p}");
+    }
+
+    [Fact]
     public void StandardError_NullBelowTwoSamples_ElseShrinksWithN()
     {
         Assert.Null(BaselineBuilder.StandardError(Array.Empty<double>()));

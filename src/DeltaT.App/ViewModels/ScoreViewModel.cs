@@ -27,12 +27,27 @@ public partial class ScoreViewModel : ObservableObject
 
     public ScoreViewModel(string label) => Label = label;
 
+    // A backward-sliding meter reads as "broken/random", so the displayed calibration
+    // progress only ever climbs within an epoch. A large drop means a new epoch started
+    // (repaste/recalibrate reset the window), so we follow it back down and re-climb.
+    private double _progressFloor;
+    private const double EpochResetDrop = 0.15;
+
     public void Update(ComponentScore score)
     {
         Value = score.Value;
         Calibrating = score.Calibrating;
         Provisional = score.Provisional;
-        Progress = score.CalibrationProgress;
+
+        double incoming = score.CalibrationProgress;
+        if (!score.Calibrating)
+            _progressFloor = 0;                                  // locked: meter retired, reset for a future epoch
+        else if (incoming < _progressFloor - EpochResetDrop)
+            _progressFloor = incoming;                           // new epoch — restart the climb
+        else
+            _progressFloor = Math.Max(_progressFloor, incoming); // otherwise never regress
+        Progress = score.Calibrating ? _progressFloor : incoming;
+
         VerdictLabel = score.Verdict.Label();
         VerdictShort = score.Verdict.ShortLabel();
         TopReason = score.Reasons.Count > 0 ? score.Reasons[0].Text : "";

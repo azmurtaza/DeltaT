@@ -189,7 +189,7 @@ public sealed class RemarksEngine
         new Rule("learning-daily", TimeSpan.FromHours(20), ctx =>
             !ctx.BaselineReady && ctx.LearningDay >= 1
                 ? One("learning-daily", ctx, RemarkSeverity.Info,
-                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% confident"
+                    $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% calibrated"
                     + (string.IsNullOrWhiteSpace(ctx.CalibrationConstraint)
                         ? ". Use the machine normally - games and heavy work teach DeltaT the most."
                         : $" - {ctx.CalibrationConstraint}."))
