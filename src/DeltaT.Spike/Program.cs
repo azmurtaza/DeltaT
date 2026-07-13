@@ -105,6 +105,49 @@ if (args.Contains("--msr", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+// `--gpuburn`: prove the OpenCL burner (the GPU fingerprint's load engine) works on
+// this machine: pick the compute device, burn ~12 s, and watch the GPU temp/load
+// ramp through LHM. Heat comes purely from math; Dispose ends the load instantly.
+if (args.Contains("--gpuburn", StringComparer.OrdinalIgnoreCase))
+{
+    var gpuComputer = new Computer { IsGpuEnabled = true };
+    gpuComputer.Open();
+    var gpuVisitor = new UpdateVisitor();
+    try
+    {
+        using var burner = new DeltaT.Core.Diagnostics.GpuBurner(null);
+        Line($"burning on: {burner.DeviceName}");
+        for (int i = 1; i <= 12; i++)
+        {
+            Thread.Sleep(1000);
+            gpuComputer.Accept(gpuVisitor);
+            foreach (IHardware hw in gpuComputer.Hardware)
+            {
+                if (hw.HardwareType is not (HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel))
+                    continue;
+                // Core and hotspot printed separately: DeltaT (and NitroSense) headline
+                // "GPU Core"; the hotspot runs several degrees above it by design, so a
+                // max-of-all-sensors readout would look inflated next to the app.
+                float? core = null, hotspot = null, load = null;
+                foreach (ISensor s in hw.Sensors)
+                {
+                    if (s is { SensorType: SensorType.Temperature, Name: "GPU Core", Value: { } t }) core = t;
+                    if (s is { SensorType: SensorType.Temperature, Name: "GPU Hot Spot", Value: { } h }) hotspot = h;
+                    if (s is { SensorType: SensorType.Load, Name: "GPU Core", Value: { } l }) load = l;
+                }
+                Line($"[{i,2}s] {hw.Name}: core {core?.ToString("0.0") ?? "--"} °C   hotspot {hotspot?.ToString("0.0") ?? "--"} °C   {load?.ToString("0") ?? "--"}% load");
+            }
+        }
+        Line("stopping burner - load should vanish instantly");
+    }
+    catch (Exception ex)
+    {
+        Line($"GPU burner failed: {ex.Message}");
+    }
+    gpuComputer.Close();
+    return;
+}
+
 // `--acer`: probe the Acer gaming WMI interface (the NitroSense channel) that
 // AcerWmiFanReader rides: a raw GetGamingSysInfo sweep over sensor ids, then live
 // CPU/GPU fan RPM beside the LHM CPU temperature — load the machine while it runs

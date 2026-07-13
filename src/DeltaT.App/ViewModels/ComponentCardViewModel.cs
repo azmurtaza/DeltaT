@@ -20,7 +20,6 @@ public partial class ComponentCardViewModel : ObservableObject
     [ObservableProperty] private double _load;
     [ObservableProperty] private string _loadText = "";
     [ObservableProperty] private string _metaText = "";
-    [ObservableProperty] private string _deltaText = "";
     [ObservableProperty] private IReadOnlyList<double>? _spark;
 
     public ComponentCardViewModel(ComponentReading first)
@@ -46,7 +45,12 @@ public partial class ComponentCardViewModel : ObservableObject
         _ => 100,
     };
 
-    public void Update(ComponentReading r, double? ambientC, double roomOffsetC, bool fahrenheit)
+    // The raw rise-over-outside number used to live on each card, but it swings
+    // with the seasons (silicon idles against a heat floor, so a cold day makes
+    // the delta look alarming on a healthy machine). The scoring engine still
+    // uses ambient - banded and floor-corrected - the dashboard just doesn't
+    // show the uncorrected number anymore.
+    public void Update(ComponentReading r, bool fahrenheit)
     {
         double Conv(double c) => fahrenheit ? c * 9 / 5 + 32 : c;
         Unit = fahrenheit ? "°F" : "°C";
@@ -76,19 +80,5 @@ public partial class ComponentCardViewModel : ObservableObject
         if (r.BatteryCycles is { } cyc) meta.Add($"{cyc:0} cycles");
         if (r.IsThrottling) meta.Add("THROTTLING");
         MetaText = string.Join("  ·  ", meta);
-
-        if (r.TemperatureC is { } temp && ambientC is { } amb)
-        {
-            double deltaC = temp - (amb + roomOffsetC);
-            double shown = fahrenheit ? deltaC * 9 / 5 : deltaC;
-            // The reference is stated once in the ledger caption; rows only
-            // flag the exception (indoor offset shifts it to room).
-            string suffix = Math.Abs(roomOffsetC) > 0.05 ? " vs room" : "";
-            DeltaText = $"Δ {shown:+0.#;-0.#}°{suffix}";
-        }
-        else
-        {
-            DeltaText = "";
-        }
     }
 }

@@ -77,6 +77,8 @@ public static class SettingsKeys
     public const string BaselineLockedUtc = "baseline.lockedUtc";   // legacy shared lock; per-component locks live at "baseline.lockedUtc.{Kind}"
     public const string BaselineLockEarned = "baseline.lockEarned"; // "…{Kind}" = the lock came from a real confidence pass (never self-healed away)
     public const string BaselineOutcomeReportedEpoch = "baseline.outcomeReported"; // epoch whose repaste/recalibrate verdict was already announced
+    public const string BaselineMeterPeak = "baseline.meterPeak";   // "…{Kind}" = "epoch:value" ratchet: the calibration meter never shows less than it already showed this epoch
+    public const string BaselineScoreShown = "baseline.scoreShown"; // "…{Kind}" = epoch in which a provisional score was first shown (once shown, it stays shown)
 
     public const string LastSeenUtc = "app.lastSeenUtc";           // heartbeat: last scoring pass, for dormancy detection
 

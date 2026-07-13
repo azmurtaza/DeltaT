@@ -1,30 +1,40 @@
+using System.Text.Json.Serialization;
 using DeltaT.Core.Monitoring;
 using DeltaT.Core.Weather;
 
 namespace DeltaT.Core.Diagnostics;
 
-public sealed record FingerprintProgress(string Phase, double SecondsLeft, double? CpuTempC, double? CpuLoad);
+public enum FingerprintTarget { Cpu, Gpu }
 
+public sealed record FingerprintProgress(string Phase, double SecondsLeft, double? TempC, double? Load);
+
+/// <summary>One fingerprint run's numbers. The primary Start/Peak/Sustained fields
+/// describe whichever component was loaded (<see cref="Target"/>); their JSON names
+/// keep the historical "Cpu*" spelling so every fingerprint stored before GPU runs
+/// existed still deserializes for month-over-month comparison. The Gpu* fields are
+/// the ride-along GPU readings of a CPU run (a game happening to run alongside).</summary>
 public sealed record FingerprintResult(
     DateTimeOffset AtUtc,
     double? AmbientC,
-    double CpuStartC,
-    double CpuPeakC,
-    double CpuSustainedC,
-    double? CpuSustainedDeltaC,
+    [property: JsonPropertyName("CpuStartC")] double StartC,
+    [property: JsonPropertyName("CpuPeakC")] double PeakC,
+    [property: JsonPropertyName("CpuSustainedC")] double SustainedC,
+    [property: JsonPropertyName("CpuSustainedDeltaC")] double? SustainedDeltaC,
     double SoakRatePerMin,
     int ThrottleSamples,
     double? GpuPeakC,
     double? GpuSustainedDeltaC,
     bool GpuWasLoaded,
-    bool OnAcPower);
+    bool OnAcPower,
+    string Target = "Cpu");
 
-/// <summary>The on-demand thermal fingerprint: ~25 s of calm, then ~2.5 min of
-/// full CPU load while we watch how the machine soaks and where it settles.
-/// Repeatable, so month-over-month fingerprints are directly comparable — the
-/// active counterpart to the passive baseline. The GPU isn't loaded by us
-/// (that needs a real 3D workload); if a game/benchmark happens to be running,
-/// its numbers ride along.</summary>
+/// <summary>The on-demand thermal fingerprint: ~25 s of calm, then ~2.5 min of full
+/// load on the chosen component while we watch how the machine soaks and where it
+/// settles. Repeatable, so month-over-month fingerprints are directly comparable —
+/// the active counterpart to the passive baseline. CPU runs spin every core
+/// (CpuBurner); GPU runs saturate the compute engine through OpenCL (GpuBurner).
+/// During a CPU run the GPU isn't loaded by us, but if a game/benchmark happens to
+/// be running its numbers ride along.</summary>
 public sealed class FingerprintTest
 {
     public static readonly TimeSpan Settle = TimeSpan.FromSeconds(25);
@@ -40,9 +50,13 @@ public sealed class FingerprintTest
         _ambient = ambient;
     }
 
-    public async Task<FingerprintResult> RunAsync(IProgress<FingerprintProgress>? progress, CancellationToken ct)
+    public async Task<FingerprintResult> RunAsync(FingerprintTarget target,
+        IProgress<FingerprintProgress>? progress, CancellationToken ct)
     {
-        var cpuSamples = new List<(DateTimeOffset Ts, double Temp, bool Throttling)>();
+        ComponentKind kind = target == FingerprintTarget.Gpu ? ComponentKind.GpuDiscrete : ComponentKind.Cpu;
+        string label = target == FingerprintTarget.Gpu ? "GPU" : "CPU";
+
+        var samples = new List<(DateTimeOffset Ts, double Temp, bool Throttling)>();
         var gpuSamples = new List<(double Temp, double Load)>();
         bool onAc = true;
 
@@ -56,16 +70,17 @@ public sealed class FingerprintTest
         void Collect(SensorSnapshot snap)
         {
             onAc = snap.OnAcPower;
-            if (snap.Find(ComponentKind.Cpu) is { TemperatureC: { } ct_ } cpu)
+            if (snap.Find(kind) is { TemperatureC: { } t } reading)
             {
-                cpuSamples.Add((snap.TimestampUtc, ct_, cpu.IsThrottling));
+                samples.Add((snap.TimestampUtc, t, reading.IsThrottling));
                 // Push the reading the instant it lands — the same snapshot the main
                 // window renders from — so the fingerprint gauge can't trail it by a tick.
                 if (phase.Length > 0)
                     progress?.Report(new FingerprintProgress(
-                        phase, Math.Max(0, (phaseEnd - DateTimeOffset.UtcNow).TotalSeconds), ct_, null));
+                        phase, Math.Max(0, (phaseEnd - DateTimeOffset.UtcNow).TotalSeconds), t, null));
             }
-            if (snap.Find(ComponentKind.GpuDiscrete) is { TemperatureC: { } gt, LoadPercent: { } gl })
+            if (target == FingerprintTarget.Cpu
+                && snap.Find(ComponentKind.GpuDiscrete) is { TemperatureC: { } gt, LoadPercent: { } gl })
                 gpuSamples.Add((gt, gl));
         }
 
@@ -74,50 +89,52 @@ public sealed class FingerprintTest
         {
             await TickPhase("Settling - hands off the machine", Settle, progress, ct).ConfigureAwait(false);
 
-            double cpuStart = TailAverage(cpuSamples, TimeSpan.FromSeconds(10)) ?? cpuSamples.LastOrDefault().Temp;
-            int loadStartIndex = cpuSamples.Count;
+            double start = TailAverage(samples, TimeSpan.FromSeconds(10)) ?? samples.LastOrDefault().Temp;
+            int loadStartIndex = samples.Count;
+            int gpuLoadStartIndex = gpuSamples.Count;
             DateTimeOffset loadStartTs = DateTimeOffset.UtcNow;
 
-            using (var burner = new CpuBurner())
+            using (IDisposable burner = CreateBurner(target))
             {
-                await TickPhase("Full CPU load - let it cook", Load, progress, ct).ConfigureAwait(false);
+                await TickPhase($"Full {label} load - let it cook", Load, progress, ct).ConfigureAwait(false);
             }
 
-            var loadSamples = cpuSamples.Skip(loadStartIndex).ToList();
+            var loadSamples = samples.Skip(loadStartIndex).ToList();
             if (loadSamples.Count < 10)
                 throw new InvalidOperationException("Not enough sensor samples during the load phase.");
 
             double peak = loadSamples.Max(s => s.Temp);
-            double sustained = TailAverage(cpuSamples, TimeSpan.FromSeconds(45)) ?? peak;
+            double sustained = TailAverage(samples, TimeSpan.FromSeconds(45)) ?? peak;
             int throttles = loadSamples.Count(s => s.Throttling);
 
             // Soak rate: rise over the first 60 s of load.
             var minuteIn = loadSamples.Where(s => s.Ts <= loadStartTs + TimeSpan.FromSeconds(60)).ToList();
             double soakRate = minuteIn.Count >= 2
-                ? (minuteIn[^1].Temp - cpuStart) / Math.Max(10, (minuteIn[^1].Ts - loadStartTs).TotalSeconds) * 60
+                ? (minuteIn[^1].Temp - start) / Math.Max(10, (minuteIn[^1].Ts - loadStartTs).TotalSeconds) * 60
                 : 0;
 
             double? ambient = _ambient.CurrentAmbientC;
-            var gpuLoaded = gpuSamples.Skip(Math.Min(gpuSamples.Count, loadStartIndex)).Where(g => g.Load >= 60).ToList();
+            var gpuLoaded = gpuSamples.Skip(gpuLoadStartIndex).Where(g => g.Load >= 60).ToList();
 
             var result = new FingerprintResult(
                 AtUtc: DateTimeOffset.UtcNow,
                 AmbientC: ambient,
-                CpuStartC: Math.Round(cpuStart, 1),
-                CpuPeakC: Math.Round(peak, 1),
-                CpuSustainedC: Math.Round(sustained, 1),
-                CpuSustainedDeltaC: ambient is { } a ? Math.Round(sustained - a, 1) : null,
+                StartC: Math.Round(start, 1),
+                PeakC: Math.Round(peak, 1),
+                SustainedC: Math.Round(sustained, 1),
+                SustainedDeltaC: ambient is { } a ? Math.Round(sustained - a, 1) : null,
                 SoakRatePerMin: Math.Round(soakRate, 1),
                 ThrottleSamples: throttles,
                 GpuPeakC: gpuLoaded.Count > 0 ? Math.Round(gpuLoaded.Max(g => g.Temp), 1) : null,
                 GpuSustainedDeltaC: gpuLoaded.Count > 0 && ambient is { } a2
                     ? Math.Round(gpuLoaded.TakeLast(20).Average(g => g.Temp) - a2, 1) : null,
                 GpuWasLoaded: gpuLoaded.Count > 0,
-                OnAcPower: onAc);
+                OnAcPower: onAc,
+                Target: target.ToString());
 
             // Cooldown ticks like any other phase — the countdown counts down and the
-            // gauge keeps tracking the CPU as it falls — but a Stop here just ends the
-            // wait and still returns the finished result: the numbers are already in hand.
+            // gauge keeps tracking the component as it falls — but a Stop here just ends
+            // the wait and still returns the finished result: the numbers are already in hand.
             await TickPhase("Cooling down", Cooldown, progress, ct, cancelable: false).ConfigureAwait(false);
             return result;
         }
@@ -148,13 +165,23 @@ public sealed class FingerprintTest
             }
         }
 
-        double? TailAverage(List<(DateTimeOffset Ts, double Temp, bool Throttling)> samples, TimeSpan tail)
+        double? TailAverage(List<(DateTimeOffset Ts, double Temp, bool Throttling)> list, TimeSpan tail)
         {
-            if (samples.Count == 0) return null;
-            DateTimeOffset cut = samples[^1].Ts - tail;
-            var window = samples.Where(s => s.Ts >= cut).ToList();
+            if (list.Count == 0) return null;
+            DateTimeOffset cut = list[^1].Ts - tail;
+            var window = list.Where(s => s.Ts >= cut).ToList();
             return window.Count > 0 ? window.Average(s => s.Temp) : null;
         }
+    }
+
+    private IDisposable CreateBurner(FingerprintTarget target)
+    {
+        if (target == FingerprintTarget.Cpu)
+            return new CpuBurner();
+        // Aim the compute load at the same GPU the sensors watch (the discrete card
+        // on a hybrid laptop, not the display iGPU).
+        string? gpuName = _monitor.Latest?.Find(ComponentKind.GpuDiscrete)?.Name;
+        return new GpuBurner(gpuName);
     }
 
     /// <summary>Spins every core with float math at BelowNormal priority — full

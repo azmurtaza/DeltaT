@@ -56,7 +56,9 @@ public sealed record RecentBucketObs(
     double TempAvg,
     double TempMax,
     double? FanAvg,
-    int ThrottleSampleCount);
+    int ThrottleSampleCount,
+    // Mean hotspot-to-edge gap (°C) when the sensor exposes a hotspot; null otherwise.
+    double? GapAvg = null);
 
 public sealed record BaselineBucket(
     LoadBucket Bucket,
@@ -68,7 +70,11 @@ public sealed record BaselineBucket(
     // Mean absolute die temperature (°C) learned for this cell. The physical anchor
     // that lets scoring compare across ambient bands without inflating the rise:
     // ambient of this cell ≈ TempAvg − DeltaAvg. Null on legacy rows (pre-rebuild).
-    double? TempAvg = null);
+    double? TempAvg = null,
+    // This machine's own healthy hotspot-to-edge gap (°C). Different GPU models run
+    // very different natural gaps, so paste judgement on the gap is drift against
+    // this, never a universal number. Null when no hotspot sensor exists.
+    double? GapAvg = null);
 
 /// <summary>Everything the engine needs. Assembled by ScoreCoordinator from the
 /// database; the engine itself never touches clocks, sensors or storage.</summary>
@@ -95,7 +101,12 @@ public sealed record ScoreInput(
     // Statistical confidence in the baseline data itself (independent of paste cure).
     // A provisional score is only shown once this is solid, so a thin, half-learned
     // baseline can't flash a misleading number before it locks.
-    double CalibrationDataConfidence = 1.0);
+    double CalibrationDataConfidence = 1.0,
+    // True when a provisional score was already shown this epoch. The confidence
+    // floor is an entry gate, not a hold requirement: once a number is on screen,
+    // it keeps updating live instead of vanishing when a noisy session dips
+    // confidence below the floor again.
+    bool ProvisionalEverShown = false);
 
 public static class Verdicts
 {

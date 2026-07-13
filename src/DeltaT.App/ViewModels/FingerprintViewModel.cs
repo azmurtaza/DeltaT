@@ -17,32 +17,43 @@ public partial class FingerprintViewModel : ObservableObject
 
     public ObservableCollection<StatCell> ResultCells { get; } = new();
 
+    public bool HasGpu { get; }
+
     [ObservableProperty] private string _state = "intro"; // intro | running | done
     [ObservableProperty] private string _phase = "";
+    [ObservableProperty] private string _targetLabel = "CPU";
     [ObservableProperty] private double _secondsLeft;
     [ObservableProperty] private double _currentTemp;
     [ObservableProperty] private bool _hasCurrentTemp;
     [ObservableProperty] private string _verdictText = "";
     [ObservableProperty] private bool _onBattery;
 
-    public FingerprintViewModel(FingerprintTest test, TelemetryRepository repo, bool onBattery)
+    public FingerprintViewModel(FingerprintTest test, TelemetryRepository repo, bool onBattery, bool hasGpu)
     {
         _test = test;
         _repo = repo;
         _onBattery = onBattery;
+        HasGpu = hasGpu;
         _dispatcher = System.Windows.Application.Current.Dispatcher;
     }
 
     [RelayCommand]
-    private async Task StartAsync()
+    private Task StartCpuAsync() => StartAsync(FingerprintTarget.Cpu);
+
+    [RelayCommand]
+    private Task StartGpuAsync() => StartAsync(FingerprintTarget.Gpu);
+
+    private async Task StartAsync(FingerprintTarget target)
     {
         State = "running";
+        TargetLabel = target == FingerprintTarget.Gpu ? "GPU" : "CPU";
+        HasCurrentTemp = false;
         _cts = new CancellationTokenSource();
         var progress = new Progress<FingerprintProgress>(p =>
         {
             Phase = p.Phase;
             SecondsLeft = p.SecondsLeft;
-            if (p.CpuTempC is { } t)
+            if (p.TempC is { } t)
             {
                 CurrentTemp = t;
                 HasCurrentTemp = true;
@@ -51,7 +62,7 @@ public partial class FingerprintViewModel : ObservableObject
 
         try
         {
-            FingerprintResult result = await Task.Run(() => _test.RunAsync(progress, _cts.Token));
+            FingerprintResult result = await Task.Run(() => _test.RunAsync(target, progress, _cts.Token));
             await _dispatcher.BeginInvoke(() => ShowResult(result));
         }
         catch (OperationCanceledException)
@@ -68,45 +79,49 @@ public partial class FingerprintViewModel : ObservableObject
     private void ShowResult(FingerprintResult result)
     {
         long now = result.AtUtc.ToUnixTimeSeconds();
+        string label = result.Target == "Gpu" ? "GPU" : "CPU";
 
-        // Fetch the previous fingerprint BEFORE storing this one.
+        // Fetch the previous fingerprint OF THE SAME TARGET before storing this one —
+        // a GPU run only ever compares against earlier GPU runs. Legacy events carry
+        // kind "Cpu", so old history keeps feeding CPU comparisons.
         FingerprintResult? previous = null;
-        StoredEvent? prevEvent = _repo.GetEvents("fingerprint", 0, now - 1, 1).FirstOrDefault();
+        StoredEvent? prevEvent = _repo.GetEvents("fingerprint", 0, now - 1, 24)
+            .FirstOrDefault(e => e.Kind == result.Target);
         if (prevEvent?.Data is { } json)
         {
             try { previous = JsonSerializer.Deserialize<FingerprintResult>(json); }
             catch { }
         }
 
-        _repo.InsertEvent(now, "fingerprint", "Cpu", null, 1,
-            $"Fingerprint: CPU sustained {result.CpuSustainedC:0.#}° (peak {result.CpuPeakC:0.#}°), soak {result.SoakRatePerMin:0.#}°/min"
-            + (result.CpuSustainedDeltaC is { } d ? $", Δ+{d:0.#}° vs outside" : "")
+        _repo.InsertEvent(now, "fingerprint", result.Target, null, 1,
+            $"Fingerprint: {label} sustained {result.SustainedC:0.#}° (peak {result.PeakC:0.#}°), soak {result.SoakRatePerMin:0.#}°/min"
+            + (result.SustainedDeltaC is { } d ? $", Δ+{d:0.#}° vs outside" : "")
             + (result.ThrottleSamples > 0 ? $", throttled {result.ThrottleSamples} samples" : ", no throttling"),
             JsonSerializer.Serialize(result));
 
         ResultCells.Clear();
-        ResultCells.Add(new StatCell("SUSTAINED", $"{result.CpuSustainedC:0.#}°"));
-        ResultCells.Add(new StatCell("PEAK", $"{result.CpuPeakC:0.#}°"));
+        ResultCells.Add(new StatCell("SUSTAINED", $"{result.SustainedC:0.#}°"));
+        ResultCells.Add(new StatCell("PEAK", $"{result.PeakC:0.#}°"));
         ResultCells.Add(new StatCell("SOAK RATE", $"{result.SoakRatePerMin:0.#}°/min"));
-        ResultCells.Add(new StatCell("Δ OUTSIDE", result.CpuSustainedDeltaC is { } dd ? $"+{dd:0.#}°" : "-"));
+        ResultCells.Add(new StatCell("Δ OUTSIDE", result.SustainedDeltaC is { } dd ? $"+{dd:0.#}°" : "-"));
         ResultCells.Add(new StatCell("THROTTLING", result.ThrottleSamples > 0 ? $"{result.ThrottleSamples} samples" : "none"));
-        if (result.GpuWasLoaded && result.GpuPeakC is { } gp)
+        if (result.Target == "Cpu" && result.GpuWasLoaded && result.GpuPeakC is { } gp)
             ResultCells.Add(new StatCell("GPU PEAK", $"{gp:0.#}°"));
 
-        if (previous is { CpuSustainedDeltaC: { } prevDelta } && result.CpuSustainedDeltaC is { } curDelta)
+        if (previous is { SustainedDeltaC: { } prevDelta } && result.SustainedDeltaC is { } curDelta)
         {
             double diff = curDelta - prevDelta;
             string when = previous.AtUtc.ToLocalTime().ToString("MMM d");
             VerdictText = Math.Abs(diff) < 1.5
-                ? $"Versus the {when} fingerprint: unchanged ({diff:+0.#;-0.#}° weather-corrected). The paste is holding steady."
+                ? $"Versus the {when} {label} fingerprint: unchanged ({diff:+0.#;-0.#}° weather-corrected). The paste is holding steady."
                 : diff > 0
-                    ? $"Versus the {when} fingerprint: running {diff:0.#}° hotter, weather-corrected. Rerun monthly - a steady climb is the paste drying out."
-                    : $"Versus the {when} fingerprint: {-diff:0.#}° cooler, weather-corrected. Whatever you did - it worked.";
+                    ? $"Versus the {when} {label} fingerprint: running {diff:0.#}° hotter, weather-corrected. Rerun monthly - a steady climb is the paste drying out."
+                    : $"Versus the {when} {label} fingerprint: {-diff:0.#}° cooler, weather-corrected. Whatever you did - it worked.";
         }
         else
         {
             VerdictText = result.OnAcPower
-                ? "First fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift."
+                ? $"First {label} fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift."
                 : "Recorded - but this run was on battery, so power limits softened the load. Prefer plugged-in runs for comparable numbers.";
         }
 

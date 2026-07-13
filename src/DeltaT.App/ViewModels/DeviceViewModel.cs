@@ -30,6 +30,7 @@ public partial class DeviceViewModel : ObservableObject
 
     public ComponentIntelViewModel CpuIntel { get; }
     public ComponentIntelViewModel GpuIntel { get; }
+    public ComponentIntelViewModel SsdIntel { get; }
 
     [ObservableProperty] private string _limitsText = "";
     [ObservableProperty] private string _ambientText = "";
@@ -58,6 +59,7 @@ public partial class DeviceViewModel : ObservableObject
 
         CpuIntel = new ComponentIntelViewModel("CPU", profile.Cpu);
         GpuIntel = new ComponentIntelViewModel("GPU", profile.Gpu);
+        SsdIntel = ComponentIntelViewModel.ForSsd();
         Refresh();
     }
 
@@ -70,6 +72,7 @@ public partial class DeviceViewModel : ObservableObject
 
         CpuIntel.Update(snap?.Find(ComponentKind.Cpu), ambientC, roomOffset, fahrenheit);
         GpuIntel.Update(snap?.Find(ComponentKind.GpuDiscrete), ambientC, roomOffset, fahrenheit);
+        SsdIntel.Update(snap?.Find(ComponentKind.Storage), ambientC, roomOffset, fahrenheit);
 
         string unit = fahrenheit ? "°F" : "°C";
         AmbientText = ambientC is { } amb
@@ -91,15 +94,27 @@ public partial class DeviceViewModel : ObservableObject
 /// <summary>One component's expected-vs-measured block on the Device page.</summary>
 public partial class ComponentIntelViewModel : ObservableObject
 {
+    // NVMe controllers are comfortable to ~70 °C and start throttling around 80 —
+    // silicon behavior, not chassis-specific, so no knowledge profile is needed.
+    // Matches the 70 °C hot-SSD remark and the tray readout.
+    private static readonly ComponentProfile SsdEnvelope = new(0, 0, 70, 80);
+
     private readonly ComponentProfile? _spec;
+    private readonly double _fallbackLimitC;
 
     public string Label { get; }
     public bool HasProfile => _spec is not null;
+    /// <summary>Idle/heavy expected-temperature rows — pasteable parts only.</summary>
+    public bool ShowRises { get; }
+    /// <summary>SMART media-wear row — SSD only.</summary>
+    public bool ShowWear { get; }
 
-    [ObservableProperty] private string _idleDeltaText = "-";
-    [ObservableProperty] private string _heavyDeltaText = "-";
+    [ObservableProperty] private string _idleExpectedText = "-";
+    [ObservableProperty] private string _heavyExpectedText = "-";
     [ObservableProperty] private string _sustainedText = "-";
     [ObservableProperty] private string _concernText = "-";
+    [ObservableProperty] private string _wearText = "--";
+    [ObservableProperty] private string _basisText = "";
     [ObservableProperty] private string _nowText = "no reading yet";
     [ObservableProperty] private double _colorFraction;
     [ObservableProperty] private bool _hasReading;
@@ -110,19 +125,43 @@ public partial class ComponentIntelViewModel : ObservableObject
     [ObservableProperty] private double _stripMax = 102;
 
     public ComponentIntelViewModel(string label, ComponentProfile? spec)
+        : this(label, spec, showRises: true, showWear: false, fallbackLimitC: 100) { }
+
+    private ComponentIntelViewModel(string label, ComponentProfile? spec,
+        bool showRises, bool showWear, double fallbackLimitC)
     {
         Label = label;
         _spec = spec;
+        ShowRises = showRises;
+        ShowWear = showWear;
+        _fallbackLimitC = fallbackLimitC;
     }
+
+    public static ComponentIntelViewModel ForSsd() =>
+        new("SSD", SsdEnvelope, showRises: false, showWear: true, fallbackLimitC: 90);
 
     public void Update(ComponentReading? reading, double? ambientC, double roomOffsetC, bool fahrenheit)
     {
         string unit = fahrenheit ? "°F" : "°C";
+        double? roomC = ambientC + roomOffsetC;
 
         if (_spec is { } spec)
         {
-            IdleDeltaText = $"+{DeviceViewModel.Delta(spec.TypicalIdleDeltaC, fahrenheit):0}° over ambient";
-            HeavyDeltaText = $"+{DeviceViewModel.Delta(spec.TypicalHeavyDeltaC, fahrenheit):0}° over ambient";
+            if (ShowRises)
+            {
+                // Expected temps track the current outside reference instead of quoting
+                // the raw "+N° over ambient" delta: silicon idles against its own heat
+                // floor, so in cold weather the literal delta reads huge on a perfectly
+                // healthy machine (the 40°-die-at-0°-outside loophole). Cold holds the
+                // room-anchored figure; warm raises it (ProfileExpectation).
+                double idle = ProfileExpectation.ExpectedTempC(spec.TypicalIdleDeltaC, roomC, spec.ConcernC);
+                double heavy = ProfileExpectation.ExpectedTempC(spec.TypicalHeavyDeltaC, roomC, spec.ConcernC);
+                IdleExpectedText = $"≈{DeviceViewModel.Temp(idle, fahrenheit):0}{unit}";
+                HeavyExpectedText = $"≈{DeviceViewModel.Temp(heavy, fahrenheit):0}{unit}";
+                BasisText = roomC is { } r
+                    ? $"expectations for {DeviceViewModel.Temp(r, fahrenheit):0.#}° outside now"
+                    : $"expectations for a {DeviceViewModel.Temp(ProfileExpectation.ReferenceAmbientC, fahrenheit):0}° room";
+            }
             SustainedText = $"{DeviceViewModel.Temp(spec.SustainedNormC, fahrenheit):0}{unit}";
             ConcernText = $"above {DeviceViewModel.Temp(spec.ConcernC, fahrenheit):0}{unit}";
 
@@ -132,11 +171,17 @@ public partial class ComponentIntelViewModel : ObservableObject
             StripMax = DeviceViewModel.Temp(spec.ConcernC + 7, fahrenheit);
         }
 
+        if (ShowWear)
+        {
+            WearText = reading?.WearPercent is { } wear ? $"{wear:0}% used" : "--";
+            BasisText = reading?.Name ?? "";
+        }
+
         if (reading?.TemperatureC is { } t)
         {
             HasReading = true;
             StripValue = DeviceViewModel.Temp(t, fahrenheit);
-            double limit = reading.ThrottleLimitC ?? 100;
+            double limit = reading.ThrottleLimitC ?? _fallbackLimitC;
             ColorFraction = limit > 0 ? t / limit : 0;
 
             var parts = new List<string> { $"{DeviceViewModel.Temp(t, fahrenheit):0.0}{unit} now" };

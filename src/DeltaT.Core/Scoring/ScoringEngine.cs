@@ -32,6 +32,17 @@ public static class ScoringEngine
     public const double MaxSoakPenalty = 15;
     public const double MaxAbsolutePenalty = 12;
 
+    // Hotspot-to-edge gap under load. Different GPU models run very different
+    // natural gaps (8–15 °C is common, some run wider by design), so the PRIMARY
+    // judgement is drift against this card's own learned gap; the absolute
+    // thresholds only backstop paste that was already failing when DeltaT arrived
+    // (a baseline learned on a bad mount would bless its gap as "normal").
+    public const double MaxHotspotGapPenalty = 12;
+    public const double HotspotDriftDeadbandC = 3;
+    public const double HotspotDriftPointsPerDegree = 1.8;
+    public const double HotspotGapNoticeC = 20;
+    public const double HotspotGapPenaltyC = 24;
+
     /// <summary>Fan speed within ±10% of baseline is normal EC wobble — no correction.</summary>
     public const double FanRatioDeadband = 0.10;
 
@@ -90,8 +101,12 @@ public static class ScoringEngine
         // the baseline data confidence has crossed a floor. Otherwise a thin, half-learned
         // baseline could flash a misleading 100 (or a false Aging) that whipsaws as more
         // data lands — so below the floor we stay honest and show the learning dial.
+        // The floor is an ENTRY gate only: once a provisional score has been shown this
+        // epoch (ProvisionalEverShown), a later confidence dip — a new session widening
+        // the variance estimate — updates the number instead of yanking it off screen.
         if (!locked && (input.Baseline.Count == 0 || weightedExcess is null
-                        || input.CalibrationDataConfidence < ProvisionalMinDataConfidence))
+                        || (input.CalibrationDataConfidence < ProvisionalMinDataConfidence
+                            && !input.ProvisionalEverShown)))
         {
             AddAbsoluteObservations(input, reasons, fmtTemp, calibrating: true);
             return ComponentScore.CalibratingScore(input.Kind, input.Name, input.CalibrationProgress, reasons, input.CalibrationConstraint);
@@ -359,7 +374,61 @@ public static class ScoringEngine
                 $"Already thermal-throttled {input.ThrottleEvents}× during calibration - expect a hard verdict once the baseline locks.", 0));
         }
 
+        penalty += AddHotspotGap(input, reasons, calibrating);
+
         return penalty;
+    }
+
+    /// <summary>Hotspot-to-edge gap: heat that reaches the hotspot sensor but not the
+    /// edge one hasn't crossed the paste. A widening gap against this card's OWN learned
+    /// gap is the classic dried/pumped-out signature — often visible before the edge
+    /// temperature moves at all. Loaded buckets only; idle gaps are noise.</summary>
+    private static double AddHotspotGap(ScoreInput input, List<ScoreReason> reasons, bool calibrating)
+    {
+        var rows = input.Recent
+            .Where(r => r.Bucket is LoadBucket.Medium or LoadBucket.Heavy or LoadBucket.Max
+                        && r.GapAvg is not null && r.Minutes >= 5)
+            .ToList();
+        if (rows.Count == 0)
+            return 0;
+        double gap = rows.Sum(r => r.GapAvg!.Value * r.Minutes) / rows.Sum(r => r.Minutes);
+
+        // Primary: drift vs the same loaded buckets of this machine's baseline.
+        var baseRows = input.Baseline
+            .Where(b => b.GapAvg is not null && rows.Any(r => r.Bucket == b.Bucket))
+            .ToList();
+        double? baseGap = baseRows.Count > 0
+            ? baseRows.Sum(b => b.GapAvg!.Value * b.Minutes) / baseRows.Sum(b => b.Minutes)
+            : null;
+
+        double driftPoints = 0;
+        if (baseGap is { } bg && gap - bg > HotspotDriftDeadbandC)
+            driftPoints = Math.Min(MaxHotspotGapPenalty, (gap - bg - HotspotDriftDeadbandC) * HotspotDriftPointsPerDegree);
+
+        // Backstop: an absolute ceiling for mounts that were never healthy on record.
+        double absPoints = gap >= HotspotGapPenaltyC
+            ? Math.Min(MaxHotspotGapPenalty, 3 + (gap - HotspotGapPenaltyC) * 1.2)
+            : 0;
+
+        double p = calibrating ? 0 : Math.Max(driftPoints, absPoints);
+        string label = input.Kind.Label();
+
+        if (p > 0 && driftPoints >= absPoints && baseGap is { } b1)
+        {
+            reasons.Add(new ScoreReason("hotspot-gap",
+                $"{label} hotspot gap widened to {gap:0.#}° from this card's own {b1:0.#}° baseline - heat is spreading less evenly than it used to. That drift is the paste, not the weather.", p));
+        }
+        else if (p > 0)
+        {
+            reasons.Add(new ScoreReason("hotspot-gap",
+                $"{label} hotspot runs {gap:0.#}° above the edge sensor under load - heat is pooling at one spot instead of crossing the paste.", p));
+        }
+        else if (gap >= HotspotGapNoticeC && (baseGap is not { } b2 || gap - b2 > HotspotDriftDeadbandC))
+        {
+            reasons.Add(new ScoreReason("hotspot-gap",
+                $"{label} hotspot gap is {gap:0.#}° under load - wider than the usual healthy spread. Worth watching.", 0));
+        }
+        return p;
     }
 
     private static PatternHint InferPattern(ScoreInput input, double? heavyExcess, double? idleExcess, bool broadExcess)

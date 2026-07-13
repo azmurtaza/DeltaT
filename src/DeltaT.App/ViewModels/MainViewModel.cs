@@ -165,9 +165,7 @@ public partial class MainViewModel : ObservableObject
 
     private void OnSnapshot(SensorSnapshot snap)
     {
-        double? ambient = _ambient.CurrentAmbientC;
         bool fahrenheit = _settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
-        double roomOffset = _settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
 
         foreach (ComponentKind kind in CardOrder)
         {
@@ -182,7 +180,7 @@ public partial class MainViewModel : ObservableObject
                     _cardsById[reading.Id] = card;
                     Cards.Add(card);
                 }
-                card.Update(reading, ambient, roomOffset, fahrenheit);
+                card.Update(reading, fahrenheit);
             }
         }
 

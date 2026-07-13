@@ -13,7 +13,7 @@
     <AssemblyTitle>DeltaT</AssemblyTitle>
     <Product>DeltaT</Product>
     <Description>Your machine's thermal conscience</Description>
-    <Version>1.1.6</Version>
+    <Version>1.1.7</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -25,19 +25,27 @@ public class ScoringEngineTests
         double recentHours = 7 * 24,
         bool stale = false,
         int dormantDays = 0,
-        double dataConfidence = 1.0) =>
+        double dataConfidence = 1.0,
+        bool provisionalEverShown = false) =>
         new(ComponentKind.Cpu, "Test CPU",
             recent ?? Array.Empty<RecentBucketObs>(),
             baseline ?? Array.Empty<BaselineBucket>(),
             recentHours, throttleEvents, soakRecent, soakBaseline,
             LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress,
-            BaselineStale: stale, DormantDays: dormantDays, CalibrationDataConfidence: dataConfidence);
+            BaselineStale: stale, DormantDays: dormantDays, CalibrationDataConfidence: dataConfidence,
+            ProvisionalEverShown: provisionalEverShown);
 
     private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
         new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
 
     private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null, double? tempAvg = null) =>
         new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200, tempAvg);
+
+    private static RecentBucketObs HeavyGap(double delta, double gap, int minutes = 60) =>
+        new(LoadBucket.Heavy, Warm, minutes, delta, 88, 92, null, 0, gap);
+
+    private static BaselineBucket HeavyBaseGap(double delta, double? gap) =>
+        new(LoadBucket.Heavy, Warm, delta, delta + 3, null, 200, null, gap);
 
     // ------------------------------------------------------------------ core behaviours
 
@@ -84,6 +92,22 @@ public class ScoringEngineTests
         Assert.False(score.Provisional);
         Assert.Equal(0, score.Value);
         Assert.Equal(Verdict.Calibrating, score.Verdict);
+    }
+
+    [Fact]
+    public void Provisional_StaysShown_AfterConfidenceDipsBelowFloor()
+    {
+        // The confidence floor is an entry gate only: a score that was already on
+        // screen keeps updating when a noisy new session dips confidence back under
+        // the floor - it must not vanish and reappear.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 68) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            ready: false, progress: 0.6, dataConfidence: 0.3, provisionalEverShown: true), Fmt);
+
+        Assert.True(score.Provisional);
+        Assert.True(score.Value is > 0 and < 100);
+        Assert.NotEqual(Verdict.Calibrating, score.Verdict);
     }
 
     [Fact]
@@ -345,5 +369,58 @@ public class ScoringEngineTests
             soakRecent: 20.5, soakBaseline: 20), Fmt);
 
         Assert.Equal(PatternHint.LooksLikeDust, score.Hint);
+    }
+
+    // ------------------------------------------------------------------ hotspot gap
+
+    [Fact]
+    public void HotspotGap_WideningAgainstOwnBaseline_LosesPoints()
+    {
+        // Same edge deltas (paste looks fine by the edge sensor), but the gap grew
+        // 11° → 18°: heat is pooling. Drift vs own baseline must cost points.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyGap(delta: 60, gap: 18) },
+            baseline: new[] { HeavyBaseGap(delta: 60, gap: 11) }), Fmt);
+
+        ScoreReason reason = score.Reasons.Single(r => r.Code == "hotspot-gap");
+        Assert.True(reason.PointsLost > 0, $"expected points lost, got {reason.PointsLost}");
+        Assert.Contains("baseline", reason.Text);
+        Assert.True(score.Value < 100);
+    }
+
+    [Fact]
+    public void HotspotGap_StableWideByDesign_CostsNothing()
+    {
+        // Some models run a wide gap from the factory. Stable = healthy: no penalty,
+        // no nag - only drift or extreme absolutes may speak.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyGap(delta: 60, gap: 22) },
+            baseline: new[] { HeavyBaseGap(delta: 60, gap: 21.5) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "hotspot-gap");
+    }
+
+    [Fact]
+    public void HotspotGap_AbsoluteBackstop_WhenNoLearnedGap()
+    {
+        // Legacy baseline (no gap learned) with a 30° gap: the absolute backstop
+        // still catches paste that was already failing when DeltaT arrived.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyGap(delta: 60, gap: 30) },
+            baseline: new[] { HeavyBaseGap(delta: 60, gap: null) }), Fmt);
+
+        ScoreReason reason = score.Reasons.Single(r => r.Code == "hotspot-gap");
+        Assert.True(reason.PointsLost > 0);
+    }
+
+    [Fact]
+    public void HotspotGap_IdleGapIsIgnored()
+    {
+        var idleWithGap = new RecentBucketObs(LoadBucket.Idle, Warm, 120, 20, 45, 50, null, 0, GapAvg: 30);
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { idleWithGap },
+            baseline: new[] { new BaselineBucket(LoadBucket.Idle, Warm, 20, 23, null, 300, null, 10) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "hotspot-gap");
     }
 }

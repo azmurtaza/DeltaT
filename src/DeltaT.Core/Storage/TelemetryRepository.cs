@@ -25,13 +25,17 @@ public sealed class MinuteAccum
     public double FanSum;
     public int FanN;
     public int ThrottleN;
+    // Hotspot-to-edge gap (hotspot − temp), when the sensor exposes a hotspot.
+    public double GapSum;
+    public int GapN;
 }
 
 public sealed record BucketStat(
     LoadBucket Bucket, int Band, bool OnAc,
     int Minutes, long SampleCount,
     double TempAvg, double TempMin, double TempMax,
-    double LoadAvg, double? DeltaAvg, double? FanAvg, int ThrottleCount);
+    double LoadAvg, double? DeltaAvg, double? FanAvg, int ThrottleCount,
+    double? GapAvg = null);
 
 public sealed record SeriesPoint(long Ts, double? TempAvg, double? TempMin, double? TempMax, double? LoadAvg, double? Ambient);
 
@@ -45,7 +49,10 @@ public sealed record BaselineRow(
     double? DeltaSe = null,
     // Mean absolute die temperature (°C) for this cell — the physical anchor behind
     // cross-band scoring. Null for legacy rows until the next baseline rebuild refills it.
-    double? TempAvg = null);
+    double? TempAvg = null,
+    // This machine's own healthy hotspot-to-edge gap (°C) for the cell. Null when the
+    // sensor exposes no hotspot (CPUs, older GPUs) or on legacy rows.
+    double? GapAvg = null);
 
 /// <summary>All reads/writes of telemetry. SQL lives here and nowhere else.</summary>
 public sealed class TelemetryRepository
@@ -107,8 +114,8 @@ public sealed class TelemetryRepository
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO agg_minute(minute,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n)
-            VALUES($m,$kind,$name,$bucket,$band,$onac,$n,$tsum,$tmin,$tmax,$lsum,$dsum,$dn,$fsum,$fn,$thn)
+            INSERT INTO agg_minute(minute,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n)
+            VALUES($m,$kind,$name,$bucket,$band,$onac,$n,$tsum,$tmin,$tmax,$lsum,$dsum,$dn,$fsum,$fn,$thn,$gsum,$gn)
             ON CONFLICT(minute,kind,name,bucket,band,on_ac) DO UPDATE SET
                 n = n + excluded.n,
                 temp_sum = temp_sum + excluded.temp_sum,
@@ -119,7 +126,9 @@ public sealed class TelemetryRepository
                 delta_n = delta_n + excluded.delta_n,
                 fan_sum = fan_sum + excluded.fan_sum,
                 fan_n = fan_n + excluded.fan_n,
-                throttle_n = throttle_n + excluded.throttle_n;
+                throttle_n = throttle_n + excluded.throttle_n,
+                gap_sum = gap_sum + excluded.gap_sum,
+                gap_n = gap_n + excluded.gap_n;
             """;
         AddAggParams(cmd);
         foreach (MinuteAccum a in minutes)
@@ -149,6 +158,8 @@ public sealed class TelemetryRepository
         cmd.Parameters.Add("$fsum", SqliteType.Real);
         cmd.Parameters.Add("$fn", SqliteType.Integer);
         cmd.Parameters.Add("$thn", SqliteType.Integer);
+        cmd.Parameters.Add("$gsum", SqliteType.Real);
+        cmd.Parameters.Add("$gn", SqliteType.Integer);
     }
 
     private static void FillAggParams(SqliteCommand cmd, MinuteAccum a)
@@ -168,6 +179,8 @@ public sealed class TelemetryRepository
         cmd.Parameters["$fsum"].Value = a.FanSum;
         cmd.Parameters["$fn"].Value = a.FanN;
         cmd.Parameters["$thn"].Value = a.ThrottleN;
+        cmd.Parameters["$gsum"].Value = a.GapSum;
+        cmd.Parameters["$gn"].Value = a.GapN;
     }
 
     /// <summary>Rebuilds every hour row in a range from its minutes, in one statement.
@@ -191,10 +204,11 @@ public sealed class TelemetryRepository
         {
             ins.Transaction = tx;
             ins.CommandText = """
-                INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n)
+                INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n)
                 SELECT minute / 3600 * 3600, kind, name, bucket, band, on_ac,
                        SUM(n), SUM(temp_sum), MIN(temp_min), MAX(temp_max), SUM(load_sum),
-                       SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n)
+                       SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n),
+                       SUM(gap_sum), SUM(gap_n)
                 FROM agg_minute
                 WHERE minute >= $from AND minute < $to
                 GROUP BY minute / 3600 * 3600, kind, name, bucket, band, on_ac;
@@ -222,10 +236,11 @@ public sealed class TelemetryRepository
         {
             ins.Transaction = tx;
             ins.CommandText = """
-                INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n)
+                INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n)
                 SELECT $h, kind, name, bucket, band, on_ac,
                        SUM(n), SUM(temp_sum), MIN(temp_min), MAX(temp_max), SUM(load_sum),
-                       SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n)
+                       SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n),
+                       SUM(gap_sum), SUM(gap_n)
                 FROM agg_minute
                 WHERE minute >= $h AND minute < $h + 3600
                 GROUP BY kind, name, bucket, band, on_ac;
@@ -340,7 +355,8 @@ public sealed class TelemetryRepository
                    SUM(load_sum)/SUM(n),
                    CASE WHEN SUM(delta_n) > 0 THEN SUM(delta_sum)/SUM(delta_n) END,
                    CASE WHEN SUM(fan_n) > 0 THEN SUM(fan_sum)/SUM(fan_n) END,
-                   SUM(throttle_n)
+                   SUM(throttle_n),
+                   CASE WHEN SUM(gap_n) > 0 THEN SUM(gap_sum)/SUM(gap_n) END
             FROM agg_minute
             WHERE kind=$kind {(name is null ? "" : "AND name=$name")} AND minute BETWEEN $from AND $to
             GROUP BY bucket, band, on_ac;
@@ -361,7 +377,8 @@ public sealed class TelemetryRepository
                 reader.GetDouble(8),
                 reader.IsDBNull(9) ? null : reader.GetDouble(9),
                 reader.IsDBNull(10) ? null : reader.GetDouble(10),
-                reader.GetInt32(11)));
+                reader.GetInt32(11),
+                reader.IsDBNull(12) ? null : reader.GetDouble(12)));
         }
         return list;
     }
@@ -552,12 +569,12 @@ public sealed class TelemetryRepository
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg)
-            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd,$dse,$tavg)
+            INSERT INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg)
+            VALUES($e,$kind,$name,$band,$bucket,$davg,$dp95,$soak,$fan,$min,$upd,$dse,$tavg,$gavg)
             ON CONFLICT(epoch,kind,name,band,bucket) DO UPDATE SET
                 delta_avg=excluded.delta_avg, delta_p95=excluded.delta_p95, soak_rate=excluded.soak_rate,
                 fan_avg=excluded.fan_avg, minutes=excluded.minutes, updated=excluded.updated,
-                delta_se=excluded.delta_se, temp_avg=excluded.temp_avg;
+                delta_se=excluded.delta_se, temp_avg=excluded.temp_avg, gap_avg=excluded.gap_avg;
             """;
         foreach (BaselineRow r in rows)
         {
@@ -575,6 +592,7 @@ public sealed class TelemetryRepository
             cmd.Parameters.AddWithValue("$upd", r.Updated);
             cmd.Parameters.AddWithValue("$dse", (object?)r.DeltaSe ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$tavg", (object?)r.TempAvg ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$gavg", (object?)r.GapAvg ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
@@ -598,7 +616,7 @@ public sealed class TelemetryRepository
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg FROM baseline WHERE epoch=$e;";
+        cmd.CommandText = "SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg FROM baseline WHERE epoch=$e;";
         cmd.Parameters.AddWithValue("$e", epoch);
         var list = new List<BaselineRow>();
         using var reader = cmd.ExecuteReader();
@@ -614,7 +632,8 @@ public sealed class TelemetryRepository
                 reader.IsDBNull(8) ? null : reader.GetDouble(8),
                 reader.GetInt32(9), reader.GetInt64(10),
                 reader.IsDBNull(11) ? null : reader.GetDouble(11),
-                reader.IsDBNull(12) ? null : reader.GetDouble(12)));
+                reader.IsDBNull(12) ? null : reader.GetDouble(12),
+                reader.IsDBNull(13) ? null : reader.GetDouble(13)));
         }
         return list;
     }

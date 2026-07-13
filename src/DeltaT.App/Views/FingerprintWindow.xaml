@@ -45,8 +45,9 @@
         <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=intro}">
             <TextBlock Style="{StaticResource Text.H1}" Text="A 3-minute honest look" Margin="0,4,0,10"/>
             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap">
-                DeltaT idles for 25 seconds, then loads every CPU core for 2½ minutes and watches:
-                how fast the heat soaks in, where it settles, and whether the silicon has to throttle.
+                DeltaT idles for 25 seconds, then fully loads the component you pick - every CPU core,
+                or the GPU's compute engine - for 2½ minutes and watches: how fast the heat soaks in,
+                where it settles, and whether the silicon has to throttle.
                 Same test, same numbers - run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
             </TextBlock>
             <StackPanel Margin="0,16,0,0">
@@ -61,9 +62,13 @@
                 <TextBlock FontSize="12" Foreground="{StaticResource Brush.Warm}"
                            Text="You're on battery right now - results will be recorded but flagged."/>
             </Border>
-            <Button Style="{StaticResource Button.Primary}" Content="START THE TEST" Padding="20,10"
-                    HorizontalAlignment="Left" Margin="0,22,0,0"
-                    Command="{Binding StartCommand}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,22,0,0">
+                <Button Style="{StaticResource Button.Primary}" Content="TEST THE CPU" Padding="20,10"
+                        Command="{Binding StartCpuCommand}"/>
+                <Button Style="{StaticResource Button.Ghost}" Content="TEST THE GPU" Padding="20,10" Margin="12,0,0,0"
+                        Command="{Binding StartGpuCommand}"
+                        Visibility="{Binding HasGpu, Converter={StaticResource BoolToVis}}"/>
+            </StackPanel>
         </StackPanel>
 
         <!-- ============ running ============ -->
@@ -81,7 +86,7 @@
             </StackPanel>
             <controls:RingGauge Grid.Row="1" Width="230" Height="230"
                                 Value="{Binding CurrentTemp}" Maximum="100"
-                                HasValue="{Binding HasCurrentTemp}" Unit="°C" SubText="CPU"/>
+                                HasValue="{Binding HasCurrentTemp}" Unit="°C" SubText="{Binding TargetLabel}"/>
             <Button Grid.Row="2" Style="{StaticResource Button.Ghost}" Content="STOP THE TEST"
                     HorizontalAlignment="Center" Foreground="{StaticResource Brush.Hot}"
                     Command="{Binding StopCommand}"/>

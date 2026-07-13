@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Windows.Threading;
+using DeltaT.Core.Diagnostics;
 using DeltaT.Core.Monitoring;
 using DeltaT.Core.Remarks;
 using DeltaT.Core.Scoring;
@@ -95,7 +96,12 @@ public sealed class RemarksCoordinator : IDisposable
             CalibrationConstraint: scores.Values
                 .Where(s => s.Calibrating)
                 .OrderByDescending(s => s.CalibrationProgress)
-                .FirstOrDefault()?.CalibrationConstraint ?? "");
+                .FirstOrDefault()?.CalibrationConstraint ?? "",
+            LocalHour: now.ToLocalTime().Hour,
+            ThrottleEventsLast30Days: _repo.CountEvents("throttle", null, nowTs - 30L * 86400, nowTs),
+            DaysTogether: DaysTogether(nowTs),
+            CityChanged: TrackCityChange(),
+            Fingerprint: BuildFingerprintEcho(nowTs));
 
         IReadOnlyList<Remark> fired = _engine.Evaluate(ctx);
         foreach (Remark remark in fired)
@@ -109,6 +115,74 @@ public sealed class RemarksCoordinator : IDisposable
         }
         if (fired.Count > 0)
             _settings.Set("remarks.cooldowns", _engine.ExportCooldownState());
+    }
+
+    /// <summary>Days since DeltaT first ever evaluated on this machine. Persisted
+    /// separately from the scoring epoch so recalibration doesn't reset the clock.</summary>
+    private int DaysTogether(long nowTs)
+    {
+        const string key = "remarks.firstSeenTs";
+        if (!long.TryParse(_settings.Get(key), out long first) || first <= 0)
+        {
+            _settings.Set(key, nowTs.ToString());
+            return 0;
+        }
+        return (int)((nowTs - first) / 86400);
+    }
+
+    /// <summary>A fingerprint event stored since the last evaluation, paired with its
+    /// weather-corrected delta vs the previous same-target run. The last-seen timestamp
+    /// persists so a restart can't re-announce, and the first evaluation ever just
+    /// seeds the marker instead of echoing old history.</summary>
+    private FingerprintEcho? BuildFingerprintEcho(long nowTs)
+    {
+        const string key = "remarks.lastFingerprintTs";
+        if (!long.TryParse(_settings.Get(key), out long last) || last <= 0)
+        {
+            _settings.Set(key, nowTs.ToString());
+            return null;
+        }
+        StoredEvent? ev = _repo.GetEvents("fingerprint", last + 1, nowTs, 3).FirstOrDefault();
+        if (ev is null)
+            return null;
+        _settings.Set(key, ev.Ts.ToString());
+        if (ev.Data is not { } json)
+            return null;
+
+        FingerprintResult? result = TryParse(json);
+        if (result is null)
+            return null;
+
+        double? delta = null;
+        if (result.SustainedDeltaC is { } cur
+            && _repo.GetEvents("fingerprint", 0, ev.Ts - 1, 24).FirstOrDefault(e => e.Kind == ev.Kind) is { Data: { } prevJson }
+            && TryParse(prevJson)?.SustainedDeltaC is { } prev)
+        {
+            delta = cur - prev;
+        }
+
+        ComponentKind kind = ev.Kind == "Gpu" ? ComponentKind.GpuDiscrete : ComponentKind.Cpu;
+        return new FingerprintEcho(kind, result, delta);
+
+        static FingerprintResult? TryParse(string json)
+        {
+            try { return JsonSerializer.Deserialize<FingerprintResult>(json); }
+            catch { return null; }
+        }
+    }
+
+    /// <summary>True once when the weather city differs from the last one seen
+    /// (a real move or a manual pick). First-ever city just seeds the memory.</summary>
+    private bool TrackCityChange()
+    {
+        if (_ambient.Location?.City is not { Length: > 0 } city)
+            return false;
+        const string key = "remarks.lastCity";
+        string? last = _settings.Get(key);
+        if (city == last)
+            return false;
+        _settings.Set(key, city);
+        return last is not null;
     }
 
     private IReadOnlyDictionary<ComponentKind, (double, double, bool)>? BuildShortTrend()

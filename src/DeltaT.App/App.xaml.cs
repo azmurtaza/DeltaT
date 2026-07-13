@@ -212,10 +212,21 @@ public partial class App : Application
             await Shot(onboarding, "onboarding");
 
             var fpVm = new FingerprintViewModel(
-                new FingerprintTest(_monitor!, _ambient!), _repo!, onBattery: false);
+                new FingerprintTest(_monitor!, _ambient!), _repo!, onBattery: false, hasGpu: true);
             var fp = new FingerprintWindow { DataContext = fpVm };
             fp.Show();
             await Shot(fp, "fingerprint");
+
+            // Also capture the live "in progress" state (the load phase with the ring
+            // gauge tracking CPU temp) — drive the VM straight there instead of waiting
+            // out the real 3-minute test.
+            fpVm.State = "running";
+            fpVm.Phase = "Full CPU load - let it cook";
+            fpVm.SecondsLeft = 96;
+            fpVm.CurrentTemp = 82.4;
+            fpVm.HasCurrentTemp = true;
+            await Shot(fp, "fingerprint_running");
+
             fp.Close();
         }
         catch (Exception ex)
@@ -285,7 +296,7 @@ public partial class App : Application
         _updates = new UpdateService(_settings);
         _feedback = new FeedbackService(machine, IsElevated());
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
-            _updates, () => _monitor.Latest, simulate);
+            _updates, () => _monitor.Latest, simulate, showUpdatesPanel: _uishotDir is not null);
         var deviceVm = new DeviceViewModel(machine, profile, () => _monitor.Latest, _ambient, _settings);
         var onboarding = new OnboardingViewModel(_settings, _ambient, machine);
 
@@ -484,7 +495,8 @@ public partial class App : Application
         var vm = new FingerprintViewModel(
             new FingerprintTest(_monitor, _ambient),
             _repo,
-            onBattery: _monitor.Latest is { OnAcPower: false });
+            onBattery: _monitor.Latest is { OnAcPower: false },
+            hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null);
         new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();
     }
 

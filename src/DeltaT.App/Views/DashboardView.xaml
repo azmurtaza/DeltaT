@@ -44,7 +44,7 @@
                     </TextBlock>
                     <Button Style="{StaticResource Button.Link}" HorizontalAlignment="Left" Margin="-2,12,0,0"
                             Click="OnRunFingerprint"
-                            ToolTip="25 s idle + 2.5 min full CPU load - a repeatable thermal measurement">
+                            ToolTip="25 s idle + 2.5 min full CPU or GPU load - a repeatable thermal measurement">
                         <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11"
                                    Text="▸ RUN 3-MINUTE FINGERPRINT"/>
                     </Button>
@@ -117,7 +117,7 @@
                     <TextBlock Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource Text.Caption}" Text="COMPONENT"/>
                     <TextBlock Grid.Column="2" Style="{StaticResource Text.Caption}" Text="LOAD"/>
                     <TextBlock Grid.Column="3" Style="{StaticResource Text.Caption}" Text="TRACE · LAST 10 MIN"/>
-                    <TextBlock Grid.Column="4" Style="{StaticResource Text.Caption}" Text="Δ = RISE OVER OUTSIDE"
+                    <TextBlock Grid.Column="4" Style="{StaticResource Text.Caption}" Text="TEMPERATURE"
                                TextAlignment="Right"/>
                 </Grid>
 
@@ -183,9 +183,6 @@
                                                        FontSize="28" FontWeight="Bold"
                                                        Foreground="{StaticResource Brush.TextFaint}" Text="-"
                                                        Visibility="{Binding HasTemp, Converter={StaticResource InvBoolToVis}}"/>
-                                            <TextBlock TextAlignment="Right" FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
-                                                       Foreground="{StaticResource Brush.TextDim}" Margin="0,4,0,0"
-                                                       Text="{Binding DeltaText}"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>

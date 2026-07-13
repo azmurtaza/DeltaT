@@ -13,7 +13,9 @@ Fan speed is also factored in, so switching between silent and performance fan m
 ## What it does
 
 - **Paste Health Score 0-100** for CPU and GPU - compares current temp rise over ambient, per load bucket, against your machine's own baseline, not a spec sheet or benchmark database
-- **Load-bucketed stats** - idle, light, medium, and heavy load tracked separately so a brief gaming session does not skew your baseline
+- **Load-bucketed stats** - idle, light, medium, heavy, and full load tracked separately so a brief gaming session does not skew your baseline
+- **3-minute fingerprint test for CPU and GPU** - a repeatable stress measurement: 25 seconds of calm, then 2.5 minutes of full load while DeltaT watches how fast the heat soaks in and where it settles. The CPU test spins every core; the GPU test saturates the graphics card's compute engine directly (no extra software needed, and it picks the real gaming GPU on hybrid laptops). Run it monthly and the drift between runs is your paste aging, weather-corrected
+- **Hotspot gap tracking** - on GPUs that expose a hotspot sensor, DeltaT learns your card's own normal hotspot-to-edge gap and treats a widening gap as the early paste warning it is (pump-out and dry-out show up there before the main temperature moves). Different cards run different natural gaps, so it judges drift against your card's own normal, never a universal number
 - **SSD, battery, and board** - thermal health and wear readouts (SMART wear level, battery wear) alongside the paste scores
 - **Dust vs. paste insight** - fast heat spikes read as paste degradation; high steady temps with elevated fans at normal soak rate read as dust or airflow. DeltaT tells you which pattern it sees, so you know whether to grab compressed air or open the machine
 - **Repaste verdict** - after you log a repaste and the new baseline settles, DeltaT compares before and after like-for-like (same load bucket, same ambient band, fan-normalized) and calls it Improved, Unchanged, Worse, or Inconclusive. A worse result (air bubble, bad mount, pump-out) raises a visible warning, not just a quiet note
@@ -22,6 +24,7 @@ Fan speed is also factored in, so switching between silent and performance fan m
 - **Provisional score while it learns** - instead of a blank dial for the first week, DeltaT shows an estimated score with a confidence readout the moment there is enough load to compare, and it locks the real score by statistical confidence rather than a fixed countdown
 - **Automatic updates** - DeltaT checks its own GitHub releases on startup and installs new versions quietly, so you are never stuck on an old build. Turn it off in Settings, or check on demand with a button
 - **Weather-aware** - outside temp refreshes every 3 hours via Open-Meteo. Location resolves from Windows positioning first (falls back to IP), and names the nearest recognizable city rather than a small nearby village. No account needed
+- **A remarks feed that actually watches** - short observations as things happen: temps climbing or falling at similar load, a silent fan profile trading degrees for quiet, battery and SSD wear milestones, a throttle-free month, fingerprint results, and more. Rate-limited so it stays observant, never spammy
 - **Report a bug or idea** - a Feedback button in Settings sends your note straight to the developer, no account and no public thread. Your app version, Windows version, and PC model ride along so a report is reproducible; nothing else about your machine is sent
 
 ## How the score works

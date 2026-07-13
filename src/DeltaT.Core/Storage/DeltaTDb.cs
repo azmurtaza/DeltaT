@@ -236,5 +236,26 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 5)
+        {
+            // Minute/hour aggregates now carry the hotspot-to-edge gap (GPU hotspot
+            // minus edge temperature), and baseline cells learn this machine's own
+            // healthy gap, so a WIDENING gap under load — the classic dried/pumped-out
+            // paste signature — can feed the paste score, not just a remark. Different
+            // GPU models run different natural gaps, so drift-vs-own-baseline is the
+            // primary signal; fixed thresholds only backstop paste that was already
+            // bad on install. Additive; legacy rows read as "no gap data".
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE agg_minute ADD COLUMN gap_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_minute ADD COLUMN gap_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN gap_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN gap_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE baseline ADD COLUMN gap_avg REAL;
+                PRAGMA user_version = 5;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }

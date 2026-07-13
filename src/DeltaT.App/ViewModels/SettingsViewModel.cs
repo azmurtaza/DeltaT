@@ -48,7 +48,8 @@ public partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(
         SettingsStore settings, AmbientService ambient, ScoreCoordinator scores,
         MachineIdentity machine, ThermalProfile profile, DeltaTDb db,
-        UpdateService updates, Func<SensorSnapshot?> latest, bool simulated)
+        UpdateService updates, Func<SensorSnapshot?> latest, bool simulated,
+        bool showUpdatesPanel = false)
     {
         _settings = settings;
         _ambient = ambient;
@@ -57,7 +58,9 @@ public partial class SettingsViewModel : ObservableObject
         _updates = updates;
 
         AutostartAvailable = !simulated;
-        UpdatesAvailable = !simulated;
+        // The auto-update panel is hidden under --simulate (no real update flow), but
+        // the screenshot harness forces it on so promo shots show the shipping layout.
+        UpdatesAvailable = !simulated || showUpdatesPanel;
 
         _fahrenheit = settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
         _indoorOffset = settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;

@@ -29,15 +29,20 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource SpecLabel}"
-                               Text="Typical idle rise" Margin="0,0,14,8"/>
+                               Text="Typical idle" Margin="0,0,14,8"
+                               Visibility="{Binding ShowRises, Converter={StaticResource BoolToVis}}"/>
                     <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource SpecValue}"
-                               Text="{Binding IdleDeltaText}" Margin="0,0,0,8"/>
+                               Text="{Binding IdleExpectedText}" Margin="0,0,0,8"
+                               Visibility="{Binding ShowRises, Converter={StaticResource BoolToVis}}"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource SpecLabel}"
-                               Text="Typical heavy-load rise" Margin="0,0,14,8"/>
+                               Text="Typical heavy load" Margin="0,0,14,8"
+                               Visibility="{Binding ShowRises, Converter={StaticResource BoolToVis}}"/>
                     <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource SpecValue}"
-                               Text="{Binding HeavyDeltaText}" Margin="0,0,0,8"/>
+                               Text="{Binding HeavyExpectedText}" Margin="0,0,0,8"
+                               Visibility="{Binding ShowRises, Converter={StaticResource BoolToVis}}"/>
                     <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource SpecLabel}"
                                Text="Sustained norm (healthy)" Margin="0,0,14,8"/>
                     <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource SpecValue}"
@@ -46,7 +51,26 @@
                                Text="Concern threshold" Margin="0,0,14,0"/>
                     <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource SpecValue}"
                                Text="{Binding ConcernText}"/>
+                    <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource SpecLabel}"
+                               Text="Media wear (SMART)" Margin="0,8,14,0"
+                               Visibility="{Binding ShowWear, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource SpecValue}"
+                               Text="{Binding WearText}" Margin="0,8,0,0"
+                               Visibility="{Binding ShowWear, Converter={StaticResource BoolToVis}}"/>
                 </Grid>
+
+                <TextBlock TextAlignment="Right" Margin="0,7,0,0"
+                           Text="{Binding BasisText}" TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding BasisText}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
 
                 <controls:RangeStrip Height="36" Margin="0,12,0,2"
                                      Value="{Binding StripValue}"
@@ -139,13 +163,18 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Silicon limits">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Silicon limits" Margin="0,0,0,14">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="19"
                                        Text="{Binding LimitsText}" TextWrapping="Wrap"/>
                             <TextBlock Style="{StaticResource Text.Caption}" Margin="0,9,0,0" TextWrapping="Wrap"
                                        Text="throttle points come from the hardware, not the profile"/>
                         </StackPanel>
+                    </HeaderedContentControl>
+
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="SSD · thermal envelope">
+                        <ContentControl Content="{Binding SsdIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
                     </HeaderedContentControl>
                 </StackPanel>
 

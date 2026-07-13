@@ -1,7 +1,12 @@
+using DeltaT.Core.Diagnostics;
 using DeltaT.Core.Monitoring;
 using DeltaT.Core.Scoring;
 
 namespace DeltaT.Core.Remarks;
+
+/// <summary>A fingerprint that completed since the last evaluation, plus its
+/// weather-corrected sustained delta vs the previous same-target run (null = first).</summary>
+public sealed record FingerprintEcho(ComponentKind Kind, FingerprintResult Result, double? DeltaVsPrevious);
 
 public enum RemarkSeverity
 {
@@ -41,7 +46,19 @@ public sealed record RemarkContext(
     // A just-locked repaste verdict to announce once (better/worse/unchanged).
     RepasteReport? RepasteOutcome = null,
     // While calibrating: the binding constraint on baseline confidence.
-    string CalibrationConstraint = "");
+    string CalibrationConstraint = "",
+    // Local wall-clock hour (0-23), supplied by the host (timezone is a display
+    // concern, so Core never asks the clock itself); -1 = unknown.
+    int LocalHour = -1,
+    // Throttle events over the last 30 days; null = host didn't ask the repo.
+    int? ThrottleEventsLast30Days = null,
+    // Days since DeltaT first ever ran on this machine. Unlike LearningDay this
+    // survives recalibration - it measures the relationship, not the epoch.
+    int DaysTogether = 0,
+    // Weather city changed since the last evaluation (a real move or a manual pick).
+    bool CityChanged = false,
+    // A fingerprint completed since the last evaluation - announced once.
+    FingerprintEcho? Fingerprint = null);
 
 /// <summary>DeltaT's voice: dry, precise, occasionally warm. Rules fire against a
 /// context snapshot and are rate-limited per rule (and per component where it
@@ -283,6 +300,133 @@ public sealed class RemarksEngine
                 ? One("all-quiet", ctx, RemarkSeverity.Info,
                     "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.")
                 : Enumerable.Empty<Remark>();
+        }),
+
+        // Counterpart to temp-climbing: credit where due when things improve.
+        new Rule("temp-falling", TimeSpan.FromHours(6), ctx =>
+        {
+            if (ctx.ShortTrend is null) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach ((ComponentKind kind, (double recent, double prev, bool similar)) in ctx.ShortTrend)
+            {
+                double diff = prev - recent;
+                if (similar && diff >= 5)
+                    list.Add(new Remark("temp-falling", ctx.NowUtc, RemarkSeverity.Info,
+                        $"{kind.Label()} is running {diff:0.#}° cooler than an hour ago at similar load. Whatever changed, the silicon approves.", kind));
+            }
+            return list;
+        }),
+
+        // A wide hotspot-to-edge gap under load is the classic signature of paste
+        // that stopped spreading heat evenly (pump-out, drying, a void).
+        new Rule("gpu-hotspot-gap", TimeSpan.FromHours(24), ctx =>
+        {
+            if (ctx.Latest?.Find(ComponentKind.GpuDiscrete) is not
+                { TemperatureC: { } t, HotspotC: { } hot, LoadPercent: >= 50 })
+                return Enumerable.Empty<Remark>();
+            double gap = hot - t;
+            return gap switch
+            {
+                >= 28 => One("gpu-hotspot-gap", ctx, RemarkSeverity.Warning,
+                    $"GPU hotspot is running {gap:0}° above the edge sensor under load - heat is trapped in one spot. That pattern is classic dried or pumped-out paste.", ComponentKind.GpuDiscrete),
+                >= 20 => One("gpu-hotspot-gap", ctx, RemarkSeverity.Notice,
+                    $"GPU hotspot is {gap:0}° above its edge sensor under load - a wide gap like that is how paste looks when it stops spreading heat evenly. Worth watching.", ComponentKind.GpuDiscrete),
+                _ => Enumerable.Empty<Remark>(),
+            };
+        }),
+
+        // Hot silicon under heavy load with the fan barely turning: almost always a
+        // silent fan profile. Fan-normalized scoring already compensates, but the
+        // user should know the trade they're making.
+        new Rule("fan-silent-load", TimeSpan.FromHours(6), ctx =>
+        {
+            if (ctx.Latest is not { } snap) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete })
+            {
+                if (snap.Find(kind) is { TemperatureC: >= 82 and { } t, FanRpm: < 1200 and { } rpm,
+                        Bucket: LoadBucket.Heavy or LoadBucket.Max })
+                    list.Add(new Remark("fan-silent-load", ctx.NowUtc, RemarkSeverity.Notice,
+                        $"{kind.Label()} at {t:0}° under heavy load with the fan at {rpm:0} RPM. If that's a silent fan profile, it's buying quiet with degrees.", kind));
+            }
+            return list;
+        }),
+
+        new Rule("battery-wear", TimeSpan.FromDays(90), ctx =>
+        {
+            if (ctx.Latest?.Find(ComponentKind.Battery) is not { WearPercent: >= 15 and { } wear } bat)
+                return Enumerable.Empty<Remark>();
+            string cycles = bat.BatteryCycles is { } c ? $" after {c:0} charge cycles" : "";
+            return One("battery-wear", ctx, RemarkSeverity.Info, wear >= 30
+                ? $"Battery check: {wear:0}% of design capacity is gone{cycles}. Expect shorter unplugged sessions - that's chemistry aging, not paste."
+                : $"Battery check: {wear:0}% of design capacity gone{cycles}. Normal aging - noted for the record.", ComponentKind.Battery);
+        }),
+
+        new Rule("ssd-wear", TimeSpan.FromDays(90), ctx =>
+        {
+            if (ctx.Latest?.Find(ComponentKind.Storage) is not { WearPercent: >= 50 and { } wear })
+                return Enumerable.Empty<Remark>();
+            return One("ssd-wear", ctx, wear >= 80 ? RemarkSeverity.Notice : RemarkSeverity.Info, wear >= 80
+                ? $"SSD has used {wear:0}% of its rated write endurance. Start thinking about a successor - and keep the backups honest."
+                : $"SSD wear check: {wear:0}% of rated write endurance used. No action needed - just bookkeeping.", ComponentKind.Storage);
+        }),
+
+        new Rule("night-owl", TimeSpan.FromHours(20), ctx =>
+        {
+            if (ctx.LocalHour is < 1 or > 4) return Enumerable.Empty<Remark>();
+            bool working = ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket is LoadBucket.Heavy or LoadBucket.Max
+                || ctx.Latest?.Find(ComponentKind.GpuDiscrete)?.Bucket is LoadBucket.Heavy or LoadBucket.Max;
+            return working
+                ? One("night-owl", ctx, RemarkSeverity.Info,
+                    $"Heavy load at {ctx.LocalHour} a.m. - no judgment. The readings are just as good at this hour.")
+                : Enumerable.Empty<Remark>();
+        }),
+
+        new Rule("throttle-free-month", TimeSpan.FromDays(30), ctx =>
+            ctx is { ThrottleEventsLast30Days: 0, DaysTogether: >= 30, BaselineReady: true }
+                ? One("throttle-free-month", ctx, RemarkSeverity.Info,
+                    "A full month without a single thermal throttle. Whatever the workload threw at it, the cooling absorbed.")
+                : Enumerable.Empty<Remark>()),
+
+        // Anniversary notes. Ranges instead of exact days so a machine that was off
+        // on the milestone day still gets its mention; the cooldown stops repeats.
+        new Rule("days-together", TimeSpan.FromDays(25), ctx => ctx.DaysTogether switch
+        {
+            >= 365 and < 380 => One("days-together", ctx, RemarkSeverity.Notice,
+                "One year of thermal history on this machine. Season-to-season comparisons are now backed by data, not guesswork."),
+            >= 100 and < 110 => One("days-together", ctx, RemarkSeverity.Info,
+                "Day 100 on this machine. That's enough history to tell real drift from noise at a glance."),
+            >= 30 and < 38 => One("days-together", ctx, RemarkSeverity.Info,
+                "One month of watching this machine. The baseline maths only gets sharper from here."),
+            _ => Enumerable.Empty<Remark>(),
+        }),
+
+        new Rule("city-moved", TimeSpan.FromHours(1), ctx =>
+            ctx.CityChanged && ctx.City is { } city
+                ? One("city-moved", ctx, RemarkSeverity.Info,
+                    $"Weather reference moved to {city}. Ambient correction follows the machine, not the old town.")
+                : Enumerable.Empty<Remark>()),
+
+        // A finished fingerprint speaks in the ticker too, not only in its window —
+        // the comparison is weather-corrected, so it means the same thing in any season.
+        new Rule("fingerprint-echo", TimeSpan.Zero, ctx =>
+        {
+            if (ctx.Fingerprint is not { } fp) return Enumerable.Empty<Remark>();
+            string label = fp.Kind.Label();
+            FingerprintResult r = fp.Result;
+            return fp.DeltaVsPrevious switch
+            {
+                null => One("fingerprint-echo", ctx, RemarkSeverity.Notice,
+                    $"First {label} fingerprint on record: sustained {r.SustainedC:0.#}° under full load"
+                    + (r.ThrottleSamples > 0 ? $" with {r.ThrottleSamples} throttling samples" : "")
+                    + ". Every future run measures drift against it.", fp.Kind),
+                >= 3 and { } d => One("fingerprint-echo", ctx, RemarkSeverity.Warning,
+                    $"{label} fingerprint came back {d:0.#}° hotter than the last run, weather-corrected. Once is a data point - rerun in a few days; twice is a trend.", fp.Kind),
+                <= -3 and { } d => One("fingerprint-echo", ctx, RemarkSeverity.Notice,
+                    $"{label} fingerprint came back {-d:0.#}° cooler than the last run, weather-corrected. Whatever changed - a cleaning, a repaste, better airflow - it's real.", fp.Kind),
+                { } d => One("fingerprint-echo", ctx, RemarkSeverity.Info,
+                    $"{label} fingerprint matches the last run ({d:+0.#;-0.#}° weather-corrected). Consistency is exactly what healthy paste looks like.", fp.Kind),
+            };
         }),
     };
 

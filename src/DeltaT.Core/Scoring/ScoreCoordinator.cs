@@ -373,7 +373,11 @@ public sealed class ScoreCoordinator
         // The meter shows the smoothed, evidence-driven progress — not raw Confidence,
         // which is gated and steps (sits at 0, then teleports). Readiness/lock above still
         // keys off cal.Ready, so this only changes what the user watches, never when it locks.
-        double progress = cal.DisplayProgress;
+        // Ratcheted per component+epoch: the underlying confidence legitimately dips when a
+        // new session reveals variance (that's the statistics working), but a meter falling
+        // 76% → 58% reads as the app losing its homework. Display never regresses; the lock
+        // still waits for real confidence.
+        double progress = RatchetMeter(c.Kind, cal.DisplayProgress);
         double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs);
 
         // Recent pool. Once the baseline is locked, "recent" is data AFTER the frozen
@@ -386,10 +390,12 @@ public sealed class ScoreCoordinator
         var recentStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, recentFromTs, nowTs));
         double recentHours = Math.Max(1, (nowTs - recentFromTs) / 3600.0);
 
+        bool scoreShownBefore = _settings.GetInt(ScoreShownKey(c.Kind)) == Epoch;
+
         var input = new ScoreInput(
             c.Kind, c.Name,
             Recent: recentStats.Select(s => new RecentBucketObs(
-                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount)).ToList(),
+                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg)).ToList(),
             Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null && !justLocked, baselineStats, soakBaseline, nowUtc),
             RecentWindowHours: recentHours,
             ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs),
@@ -402,9 +408,42 @@ public sealed class ScoreCoordinator
             BaselineStale: BaselineStale,
             DormantDays: DormantDays,
             CalibrationConstraint: cal.Constraint,
-            CalibrationDataConfidence: cal.DataConfidence);
+            CalibrationDataConfidence: cal.DataConfidence,
+            ProvisionalEverShown: scoreShownBefore);
 
-        return ScoringEngine.Score(input, _fmtTemp);
+        ComponentScore score = ScoringEngine.Score(input, _fmtTemp);
+        // Once a provisional number has been shown, remember it: the confidence floor
+        // is an entry gate, not a hold requirement (see ScoringEngine), so the score
+        // keeps updating live instead of vanishing when a noisy session dips confidence.
+        if (score.Provisional && !scoreShownBefore)
+            _settings.SetInt(ScoreShownKey(c.Kind), Epoch);
+        return score;
+    }
+
+    private static string ScoreShownKey(ComponentKind kind) => $"{SettingsKeys.BaselineScoreShown}.{kind}";
+
+    /// <summary>Displayed calibration progress never regresses within an epoch: returns
+    /// the high-water mark of what this component's meter has already shown, persisting
+    /// new peaks. A new epoch (repaste/recalibrate) starts the ratchet fresh.</summary>
+    private double RatchetMeter(ComponentKind kind, double current)
+    {
+        string key = $"{SettingsKeys.BaselineMeterPeak}.{kind}";
+        double peak = 0;
+        if (_settings.Get(key) is { } stored)
+        {
+            int sep = stored.IndexOf(':');
+            if (sep > 0
+                && int.TryParse(stored[..sep], out int epoch) && epoch == Epoch
+                && double.TryParse(stored[(sep + 1)..], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double p))
+                peak = p;
+        }
+        if (current > peak + 0.0005)
+        {
+            _settings.Set(key, $"{Epoch}:{current.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}");
+            return current;
+        }
+        return Math.Max(current, peak);
     }
 
     /// <summary>Readiness is a confidence judgement, not a timer: how precisely we know
@@ -544,7 +583,7 @@ public sealed class ScoreCoordinator
                 }
             }
         }
-        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg)).ToList();
+        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg)).ToList();
     }
 
     /// <summary>Paste scoring only trusts samples on AC power with known ambient —

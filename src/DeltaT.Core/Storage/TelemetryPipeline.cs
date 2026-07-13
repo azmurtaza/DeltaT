@@ -147,6 +147,11 @@ public sealed class TelemetryPipeline : IDisposable
             acc.FanSum += fan;
             acc.FanN++;
         }
+        if (c.HotspotC is { } hot)
+        {
+            acc.GapSum += hot - temp;
+            acc.GapN++;
+        }
         if (c.IsThrottling)
             acc.ThrottleN++;
     }
