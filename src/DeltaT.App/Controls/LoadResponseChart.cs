@@ -12,8 +12,8 @@ public readonly record struct LoadResponseDatum(string Label, double? Earlier, d
 /// <summary>The season-on-season comparison graph: two load-response curves overlaid on a
 /// shared axis (x = load bucket idle→full, y = rise over ambient). The recent period is
 /// the ember subject line (solid, glowing, filled dots with value labels); the earlier
-/// period is the steel reference (dashed, hollow dots). Where the ember line pulls above
-/// the steel one under load, that gap is the drift. Hand-drawn in the DeltaT dialect to
+/// period is a neutral gray reference (dashed, hollow dots). Where the ember line pulls
+/// above the reference under load, that gap is the drift. Hand-drawn in the DeltaT dialect to
 /// match the time-series chart — no charting library.</summary>
 public sealed class LoadResponseChart : FrameworkElement
 {
@@ -47,12 +47,19 @@ public sealed class LoadResponseChart : FrameworkElement
     private static readonly SolidColorBrush LabelBrush = Frozen(ThermalPalette.TextFaint);
     private static readonly SolidColorBrush TextDimBrush = Frozen(ThermalPalette.TextDim);
     private static readonly SolidColorBrush AccentBrush = Frozen(ThermalPalette.Accent);
-    private static readonly SolidColorBrush SteelBrush = Frozen(ThermalPalette.Cool);
-    private static readonly SolidColorBrush PanelBrush = Frozen(ThermalPalette.Bg);
+    // The earlier period is a reference, not a reading: it gets the neutral warm gray,
+    // not the thermal ramp's steel (which means "running cool" everywhere else).
+    private static readonly SolidColorBrush RefBrush = Frozen(ThermalPalette.TextDim);
+    // Matches the Module plate the chart sits on, so a hollow dot reads as a ring
+    // punched in the line, not as a darker hole in the panel.
+    private static readonly SolidColorBrush PanelBrush = Frozen(ThermalPalette.Panel);
     private static readonly Pen GridPen = FrozenPen(Color.FromRgb(0x1C, 0x13, 0x0D), 1);
     private static readonly Pen AxisPen = FrozenPen(ThermalPalette.Stroke, 1);
     private static readonly Pen RecentPen = FrozenPen(ThermalPalette.Accent, 1.8, PenLineJoin.Round);
-    private static readonly Pen SteelPen = MakeSteelPen();
+    private static readonly Pen RefPen = MakeRefPen();
+    // The reference dots are stroked solid: the dash pattern belongs to the line, and
+    // wrapping it around a 3px circle just chews the ring into three ragged arcs.
+    private static readonly Pen RefDotPen = FrozenPen(ThermalPalette.TextDim, 1.4, PenLineJoin.Round);
     private static readonly Pen GlowPen = MakeGlowPen();
 
     public LoadResponseChart()
@@ -108,9 +115,9 @@ public sealed class LoadResponseChart : FrameworkElement
             dc.DrawText(txt, new Point(tx, axisY + 7));
         }
 
-        // Earlier reference curve first (steel, dashed, hollow dots), so the ember
+        // Earlier reference curve first (gray, dashed, hollow dots), so the ember
         // subject line reads on top of it.
-        DrawCurve(dc, series, i => series[i].Earlier, X, Y, SteelPen, null, SteelBrush, hollow: true, dip: dip, showValues: false);
+        DrawCurve(dc, series, i => series[i].Earlier, X, Y, RefPen, null, RefBrush, hollow: true, dip: dip, showValues: false, dotPen: RefDotPen);
         DrawCurve(dc, series, i => series[i].Recent, X, Y, RecentPen, GlowPen, AccentBrush, hollow: false, dip: dip, showValues: true);
 
         DrawLegend(dc, dip);
@@ -120,7 +127,7 @@ public sealed class LoadResponseChart : FrameworkElement
     /// bucket with no data leaves a hole rather than a false straight line through it.</summary>
     private void DrawCurve(DrawingContext dc, IReadOnlyList<LoadResponseDatum> series, Func<int, double?> value,
         Func<int, double> X, Func<double, double> Y, Pen pen, Pen? glow, SolidColorBrush dot,
-        bool hollow, double dip, bool showValues)
+        bool hollow, double dip, bool showValues, Pen? dotPen = null)
     {
         int n = series.Count;
         Point? prev = null;
@@ -147,7 +154,7 @@ public sealed class LoadResponseChart : FrameworkElement
             var p = new Point(X(i), Y(v));
             if (hollow)
             {
-                dc.DrawEllipse(PanelBrush, pen, p, 3, 3);
+                dc.DrawEllipse(PanelBrush, dotPen ?? pen, p, 3.2, 3.2);
             }
             else
             {
@@ -172,7 +179,8 @@ public sealed class LoadResponseChart : FrameworkElement
         dc.DrawText(r, new Point(x + 24, y));
         // Earlier (steel, dashed) swatch, to the right of the recent label.
         double x2 = x + 24 + r.Width + 22;
-        dc.DrawLine(SteelPen, new Point(x2, y + 5.2), new Point(x2 + 16, y + 5.2));
+        dc.DrawLine(RefPen, new Point(x2, y + 5.2), new Point(x2 + 16, y + 5.2));
+        dc.DrawEllipse(PanelBrush, RefDotPen, new Point(x2 + 8, y + 5.2), 3.2, 3.2); // same marker as the plot
         FormattedText e = Label(EarlierLabel.ToUpperInvariant(), MonoSemiFace, 9.5, TextDimBrush, dip);
         dc.DrawText(e, new Point(x2 + 24, y));
     }
@@ -233,9 +241,9 @@ public sealed class LoadResponseChart : FrameworkElement
         return p;
     }
 
-    private static Pen MakeSteelPen()
+    private static Pen MakeRefPen()
     {
-        var p = new Pen(Frozen(ThermalPalette.Cool), 1.4)
+        var p = new Pen(Frozen(ThermalPalette.TextDim), 1.4)
         { DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0), LineJoin = PenLineJoin.Round };
         p.Freeze();
         return p;

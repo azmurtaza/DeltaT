@@ -1,5 +1,7 @@
 using System.Management;
 using System.Security.Principal;
+using DeltaT.Core.Machine;
+using DeltaT.Core.Monitoring;
 using System.Text;
 using LibreHardwareMonitor.Hardware;
 
@@ -181,6 +183,82 @@ if (args.Contains("--gpuburn", StringComparer.OrdinalIgnoreCase))
 // CPU/GPU fan RPM beside the LHM CPU temperature — load the machine while it runs
 // and the RPMs should ramp with the heat. Read-only throughout; needs admin
 // (root\wmi denies standard users). Leaves acer-wmi-dump.txt next to the exe.
+// Vendor-agnostic fan probe report: what does THIS machine's firmware actually expose?
+// The one thing a user on hardware we don't own can run and send back.
+if (args.Contains("--fans", StringComparer.OrdinalIgnoreCase))
+{
+    MachineIdentity id = MachineIdentityProvider.Detect();
+    Line($"machine : {id.Display}  (family '{id.SystemFamily}', laptop={id.IsLaptop})");
+    Line($"elevated: {elevated}{(elevated ? "" : "   << root\\wmi denies standard users; rerun as admin")}");
+    Line();
+
+    Line("firmware interfaces (does the class exist on this machine?):");
+    (string Vendor, string Namespace, string Class)[] interfaces =
+    {
+        ("Acer Nitro/Predator", @"root\wmi", "AcerGamingFunction"),
+        ("Lenovo Legion/LOQ", @"root\WMI", "LENOVO_FAN_METHOD"),
+        ("ASUS ROG/TUF", @"root\WMI", "AsusAtkWmi_WMNB"),
+        ("HP business-class", @"root\HP\InstrumentedBIOS", "HPBIOS_BIOSNumericSensor"),
+        ("HP business-class (alt)", @"root\WMI", "HPBIOS_BIOSNumericSensor"),
+    };
+    foreach ((string vendor, string ns, string cls) in interfaces)
+    {
+        string verdict;
+        try
+        {
+            using var s = new ManagementObjectSearcher(ns, $"SELECT * FROM {cls}");
+            int n = s.Get().Count;
+            verdict = n > 0 ? $"PRESENT ({n} instance(s))" : "class known, no instances";
+        }
+        catch (Exception ex)
+        {
+            verdict = $"absent ({ex.GetType().Name})";
+        }
+        Line($"  {vendor,-24} {ns}:{cls}");
+        Line($"  {"",-24}   -> {verdict}");
+    }
+
+    // HP's sensor class is a plain query, so its contents can just be dumped.
+    try
+    {
+        using var hp = new ManagementObjectSearcher(
+            @"root\HP\InstrumentedBIOS", "SELECT Name, CurrentReading, BaseUnits, UnitModifier FROM HPBIOS_BIOSNumericSensor");
+        List<ManagementObject> sensors = hp.Get().Cast<ManagementObject>().ToList();
+        if (sensors.Count > 0)
+        {
+            Line();
+            Line("HPBIOS_BIOSNumericSensor instances (BaseUnits 19 = RPM):");
+            foreach (ManagementObject mo in sensors)
+            {
+                using (mo)
+                    Line($"  {mo["Name"],-28} reading={mo["CurrentReading"],8}  baseUnits={mo["BaseUnits"],4}  modifier={mo["UnitModifier"]}");
+            }
+        }
+    }
+    catch { /* not an HP business BIOS */ }
+
+    Line();
+    Line("live read through the real probe coordinator (10 samples, 2 s apart):");
+    using (var fans = new DeltaT.Core.Monitoring.LaptopFanReader())
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            LaptopFanSample s = fans.Read();
+            Line($"  [{i:00}] cpu={FmtFan(s.CpuRpm)}  gpu={FmtFan(s.GpuRpm)}  latched={fans.ActiveVendor ?? "(none yet)"}");
+            Thread.Sleep(2000);
+        }
+        Line();
+        Line(fans.ActiveVendor is { } v
+            ? $"RESULT: fan telemetry works on this machine via the {v} interface."
+            : "RESULT: no vendor answered. DeltaT runs fine, but with no fan RPM the scoring "
+              + "falls back to raw deltas (no fan normalization). If this is an HP Omen/Victus or an MSI, "
+              + "that is expected: their fans are EC-only.");
+    }
+
+    static string FmtFan(double? rpm) => rpm is { } r ? $"{r,5:0} rpm" : "   -- ";
+    return;
+}
+
 if (args.Contains("--acer", StringComparer.OrdinalIgnoreCase))
 {
     try

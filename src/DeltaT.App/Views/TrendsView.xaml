@@ -38,11 +38,16 @@
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="2,0,2,10"
                     Visibility="{Binding Comparing, Converter={StaticResource BoolToVis}}">
             <TextBlock Style="{StaticResource Text.Caption}" Text="RECENT VS" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <!-- Checked state follows the view model, so a preset set in code (the screenshot
+                 harness, a restored selection) lights the button that matches the data. -->
             <RadioButton Style="{StaticResource Seg}" Content="PRIOR 7D" GroupName="cmp"
+                         IsChecked="{Binding ComparePreset, Converter={StaticResource StateToBool}, ConverterParameter=7d, Mode=OneWay}"
                          Command="{Binding SetComparePresetCommand}" CommandParameter="7d"/>
-            <RadioButton Style="{StaticResource Seg}" Content="PRIOR 30D" GroupName="cmp" IsChecked="True"
+            <RadioButton Style="{StaticResource Seg}" Content="PRIOR 30D" GroupName="cmp"
+                         IsChecked="{Binding ComparePreset, Converter={StaticResource StateToBool}, ConverterParameter=30d, Mode=OneWay}"
                          Command="{Binding SetComparePresetCommand}" CommandParameter="30d"/>
             <RadioButton Style="{StaticResource Seg}" Content="LAST YEAR" GroupName="cmp"
+                         IsChecked="{Binding ComparePreset, Converter={StaticResource StateToBool}, ConverterParameter=season, Mode=OneWay}"
                          Command="{Binding SetComparePresetCommand}" CommandParameter="season"/>
         </StackPanel>
 

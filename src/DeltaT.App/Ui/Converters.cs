@@ -45,6 +45,19 @@ public sealed class StringMatchToVisibilityConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>True when the bound string equals the parameter. Lets a radio button's
+/// checked state follow the view model's selection instead of being hardcoded in XAML,
+/// so a selection made in code (or restored on load) lights the right button.</summary>
+public sealed class StringMatchToBoolConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        string.Equals(value as string, parameter as string, StringComparison.Ordinal);
+
+    // One-way: the command on the button is what changes the selection.
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
+}
+
 /// <summary>temp/limit fraction (0..1) → frozen thermal brush, so numerals can
 /// carry the same heat color the gauges use.</summary>
 public sealed class FractionToBrushConverter : IValueConverter

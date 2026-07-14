@@ -124,6 +124,7 @@
     <ui:StringMatchToVisibilityConverter x:Key="StateToVis"/>
     <ui:InverseBooleanConverter x:Key="InvertBool"/>
     <ui:InverseBoolToVisibilityConverter x:Key="InvBoolToVis"/>
+    <ui:StringMatchToBoolConverter x:Key="StateToBool"/>
     <ui:FractionToBrushConverter x:Key="FracToBrush"/>
 
     <!-- ============================== text styles -->

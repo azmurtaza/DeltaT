@@ -305,8 +305,10 @@ public partial class MainViewModel : ObservableObject
 
             // Nothing comparable yet: lead with the calibration confidence itself
             // (big numeral, fill bar) and, honestly, the one thing still holding
-            // the baseline back — confidence, not a countdown.
-            ComponentScore lead = all.OrderByDescending(s => s.CalibrationProgress).First();
+            // the baseline back — confidence, not a countdown. The headline is the
+            // LEAST confident component: the baseline isn't trustworthy until every
+            // component locks, so a confident CPU must not paper over a raw GPU.
+            ComponentScore lead = all.OrderBy(s => s.CalibrationProgress).First();
             HeroStats.Clear();
             string constraint = lead.CalibrationConstraint;
             HeroCalibrating = true;
@@ -314,9 +316,12 @@ public partial class MainViewModel : ObservableObject
             CalibrationPercent = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
             CalibrationPercentValue = Math.Clamp(lead.CalibrationProgress, 0, 1) * 100;
             VerdictTitle = "Learning your machine";
+            // Name the component when several are learning: the number belongs to
+            // whichever one is furthest behind, so the "what's next" must say which.
+            string who = all.Count > 1 ? $" ({lead.Kind.Label()})" : "";
             VerdictDetail = (string.IsNullOrWhiteSpace(constraint)
                 ? "Use the machine normally; games and heavy work teach DeltaT fastest."
-                : $"What's next: {constraint}.") + " Hard limits are enforced from day one.";
+                : $"What's next{who}: {constraint}.") + " Hard limits are enforced from day one.";
             UpdateDiagnosis(null);
             return;
         }

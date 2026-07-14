@@ -25,25 +25,33 @@ public interface ILaptopFanProbe : IDisposable
 }
 
 /// <summary>Picks the one laptop-fan probe that fits this machine and sticks with it.
-/// Laptop fans hide behind the EC where LibreHardwareMonitor sees nothing; each
-/// supported gaming line (Acer Nitro/Predator, Lenovo Legion/LOQ) exposes them through
-/// its own read-only WMI interface instead. A machine is exactly one vendor, so on the
-/// first sample that yields real RPM the winning probe is latched and the rest disposed;
-/// if none ever answers (unsupported laptop, desktop, non-elevated) the reader simply
-/// stays dark and every FanRpm remains null.
+/// Laptop fans hide behind the EC where LibreHardwareMonitor sees nothing; each supported
+/// vendor (Acer Nitro/Predator, Lenovo Legion/LOQ, ASUS ROG/TUF, HP business-class)
+/// exposes them through its own read-only WMI interface instead. A machine is exactly one
+/// vendor, so on the first sample that yields real RPM the winning probe is latched and
+/// the rest disposed; if none ever answers (unsupported laptop, desktop, non-elevated) the
+/// reader simply stays dark and every FanRpm remains null.
 ///
 /// Adding a vendor is one new <see cref="ILaptopFanProbe"/> in the constructor list.
-/// HP Omen/Victus, ASUS ROG/TUF and MSI are deliberately absent: their fan RPM is only
-/// reachable by raw Embedded-Controller port I/O (model-specific register maps,
-/// EC-lockup risk), not a clean WMI getter — a separate, riskier mechanism left for a
-/// future pass rather than shipped unverified here.</summary>
+/// Still uncovered: HP's consumer gaming line (Omen/Victus) and MSI, whose fan RPM is only
+/// reachable by raw Embedded-Controller port I/O (model-specific register maps, EC-lockup
+/// risk), not a clean WMI getter — a riskier mechanism left for a future pass rather than
+/// shipped unverified here.</summary>
 public sealed class LaptopFanReader : IDisposable
 {
     private readonly List<ILaptopFanProbe> _probes;
     private ILaptopFanProbe? _winner;
 
+    // Order is audition order. Acer first: it is the one verified on real hardware, so a
+    // machine that has it never spends a sample on a probe that has to be gated dark.
     public LaptopFanReader()
-        : this(new ILaptopFanProbe[] { new AcerWmiFanReader(), new LenovoWmiFanReader() })
+        : this(new ILaptopFanProbe[]
+        {
+            new AcerWmiFanReader(),
+            new LenovoWmiFanReader(),
+            new AsusWmiFanReader(),
+            new HpWmiFanReader(),
+        })
     {
     }
 

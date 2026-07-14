@@ -34,6 +34,28 @@ public sealed class HardwareSensorSource : ISensorSource
     private readonly AcpiThermalZoneReader _acpiZone = new();
     private readonly CpuMsrTemperatureReader _msrReader = new();
     private readonly LaptopFanReader _laptopFans = new();
+    private readonly NvmlGpuReader _nvml = new();
+    private readonly CpuLoadReader _cpuLoad = new();
+    private bool _nvmlLogged;
+    /// <summary>True while the CPU's temperature is coming from the thermal registers
+    /// directly, which lets LHM's expensive CPU update drop to a slow clock (power only).</summary>
+    private bool _cpuServedByMsr;
+
+    /// <summary>LHM's name for the discrete NVIDIA card, so NVML can bind to the same
+    /// device (a multi-GPU desktop must not read one card's watts against another's
+    /// temperature). Null on machines with no NVIDIA card, which keeps NVML dark.</summary>
+    private string? NvidiaName
+    {
+        get
+        {
+            foreach (IHardware hw in _computer.Hardware)
+            {
+                if (hw.HardwareType == HardwareType.GpuNvidia)
+                    return hw.Name;
+            }
+            return null;
+        }
+    }
     private bool _cpuTempEverMissingLogged;
     private bool _acpiFallbackLogged;
     private bool _msrFallbackLogged;
@@ -101,12 +123,29 @@ public sealed class HardwareSensorSource : ISensorSource
 
     public SensorSnapshot Read()
     {
+        // NVML first: when it is live it serves the discrete NVIDIA card's fast-moving
+        // values (~0.19 ms) and the visitor below can leave LHM's 61 ms NVIDIA update on a
+        // slow clock, since all LHM is still needed for there is hotspot and fan RPM.
+        NvmlSample nv = _nvml.Read(NvidiaName);
+        _visitor.NvidiaServedByNvml = _nvml.IsLive;
+        // Set from the previous tick's outcome (MapCpu runs after the visitor). The first
+        // tick therefore refreshes LHM's CPU fully, which is what we want anyway: it is what
+        // the fallback path would need if the MSR read turns out not to work here.
+        _visitor.CpuServedByMsr = _cpuServedByMsr;
+        if (_nvml.IsLive && !_nvmlLogged)
+        {
+            _nvmlLogged = true;
+            Diagnostic?.Invoke($"GPU telemetry via NVML ({_nvml.DeviceName}) - LibreHardwareMonitor's slow NVIDIA path is now polled only for hotspot and fan");
+        }
+
         _computer.Accept(_visitor);
         var components = new List<ComponentReading>();
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         // Laptop EC fans are invisible to LHM; a supported vendor's gaming WMI answers.
-        LaptopFanSample ecFans = _laptopFans.Read();
+        // The WMI round trip costs ~19 ms, and a fan takes seconds to change speed, so it is
+        // polled on its own clock and the reading carried between polls.
+        LaptopFanSample ecFans = ReadFansCached(now: DateTimeOffset.UtcNow);
         if (!_laptopFansLogged && ecFans.HasAny)
         {
             _laptopFansLogged = true;
@@ -118,7 +157,10 @@ public sealed class HardwareSensorSource : ISensorSource
             ComponentReading? reading = hw.HardwareType switch
             {
                 HardwareType.Cpu => MapCpu(hw, ecFans.CpuRpm),
-                HardwareType.GpuNvidia or HardwareType.GpuAmd => MapDiscreteGpu(hw, ecFans.GpuRpm),
+                // NVML's sample only applies to the NVIDIA card; an AMD card is read from
+                // LHM exactly as before.
+                HardwareType.GpuNvidia => MapDiscreteGpu(hw, ecFans.GpuRpm, nv),
+                HardwareType.GpuAmd => MapDiscreteGpu(hw, ecFans.GpuRpm, default),
                 HardwareType.GpuIntel => MapIntelGpu(hw),
                 HardwareType.Storage => MapStorage(hw),
                 HardwareType.Battery => MapBattery(hw),
@@ -190,6 +232,7 @@ public sealed class HardwareSensorSource : ISensorSource
         catch { /* the wedged session may refuse to close cleanly */ }
         _cpuCache.Clear();
         _gpuCache.Clear();
+        _visitor.Reset();
         _wdTemp = _wdLoad = null;
         _wdEverSawTemp = false;
         _wdLastChangeUtc = _wdLastTempSeenUtc = _wdColdStartSince = now;
@@ -276,15 +319,42 @@ public sealed class HardwareSensorSource : ISensorSource
     {
         CpuSensors s = ResolveCpu(hw);
 
+        // Fast path, and on an elevated run this is the normal path: read the die's
+        // architectural thermal registers ourselves (~1 ms) instead of letting LHM do it
+        // (~122 ms, because it walks every logical processor switching thread affinity to
+        // read each one's MSRs). It is the SAME register - verified side by side on the dev
+        // machine, the two agree sample for sample - so nothing about the recorded numbers
+        // changes, only what they cost. When it answers, the visitor drops LHM's CPU update
+        // to a slow clock, where it is still needed for package power.
+        //
+        // This also remains the ONLY source on CPUs newer than the pinned LHM build
+        // (Arrow/Lunar/Panther Lake, post-Zen-5), which expose no LHM sensors at all.
+        bool msrThrottling = false;
+        double? temp = null;
+        if (_msrReader.TryRead(hw.Name) is { } msr)
+        {
+            temp = msr.TemperatureC;
+            _cpuTjMax ??= msr.TjMaxC;
+            msrThrottling = msr.Throttling;
+            _cpuServedByMsr = true;
+        }
+        else
+        {
+            _cpuServedByMsr = false;
+        }
+
         // Hottest of everything the die reports. Package DTS and hottest core
         // disagree by a few degrees on hybrid parts; users compare us against
         // tools that show the max, and the max is what the paste has to survive.
         // Tctl/Tdie is the AMD equivalent of package temperature.
-        double? temp = MaxOf(Temp(s.Package), Temp(s.CoreMax));
-        foreach (ISensor core in s.Cores)
-            temp = MaxOf(temp, Temp(core));
-        temp = MaxOf(temp, Temp(s.Tctl));
-        temp ??= Temp(s.CoreAvg);
+        if (temp is null)
+        {
+            temp = MaxOf(Temp(s.Package), Temp(s.CoreMax));
+            foreach (ISensor core in s.Cores)
+                temp = MaxOf(temp, Temp(core));
+            temp = MaxOf(temp, Temp(s.Tctl));
+            temp ??= Temp(s.CoreAvg);
+        }
 
         // Vendor-agnostic safety net: if no sensor we recognise by name produced a
         // reading (an unfamiliar AMD APU, a future part), fall back to the hottest of
@@ -296,22 +366,10 @@ public sealed class HardwareSensorSource : ISensorSource
                 temp = MaxOf(temp, Temp(t));
         }
 
-        // A CPU newer than the pinned LHM build (Arrow/Lunar/Panther Lake, post-Zen-5)
-        // exposes NO sensors above — read the die's architectural thermal registers
-        // directly instead. Full sampling rate and 1 °C DTS precision, unlike the ACPI
-        // zone below (EC-paced: 10–20 s stale, coarse) which stays as the true last
-        // resort. Also yields the real TjMax and live throttle state.
-        bool msrThrottling = false;
-        if (temp is null && _msrReader.TryRead(hw.Name) is { } msr)
+        if (_cpuServedByMsr && !_msrFallbackLogged)
         {
-            temp = msr.TemperatureC;
-            _cpuTjMax ??= msr.TjMaxC;
-            msrThrottling = msr.Throttling;
-            if (!_msrFallbackLogged)
-            {
-                _msrFallbackLogged = true;
-                Diagnostic?.Invoke($"reading the CPU's thermal registers directly ({temp:0.#} °C) - this CPU model is newer than the bundled sensor library");
-            }
+            _msrFallbackLogged = true;
+            Diagnostic?.Invoke($"CPU temperature read straight from the thermal registers ({temp:0.#} °C) - LibreHardwareMonitor's slow CPU path is now polled only for package power");
         }
 
         // On many desktops the CPU's MSR temperatures need the kernel driver (admin),
@@ -357,12 +415,34 @@ public sealed class HardwareSensorSource : ISensorSource
         return new ComponentReading(
             ComponentKind.Cpu, hw.Name,
             temp, null,
-            Percent(s.Load),
+            // Load from the Windows scheduler's own counters (microseconds) when the MSR
+            // path is carrying this CPU, since LHM's copy of the same number is only
+            // refreshed on the slow clock then. Same quantity, same meaning.
+            (_cpuServedByMsr ? _cpuLoad.Read() : null) ?? Percent(s.Load),
             ecFanRpm,
-            Watts(s.Power ?? s.PowerCores),
+            // Package power first (Intel "CPU Package", AMD "Package"); cores-only power is
+            // the fallback when the package rail exists but never reports. This is the one
+            // CPU value only LHM has, and the reason its update still runs at all.
+            Watts(s.Power) ?? Watts(s.PowerCores),
             null,
             throttling,
             _cpuTjMax);
+    }
+
+    private static readonly TimeSpan FanPollInterval = TimeSpan.FromSeconds(6);
+    private DateTimeOffset _lastFanPoll = DateTimeOffset.MinValue;
+    private LaptopFanSample _lastFanSample;
+
+    /// <summary>The vendor fan WMI at its own cadence. A fan ramps over seconds, so a 6 s
+    /// poll loses nothing, while polling it every tick cost ~19 ms of the sensor thread each
+    /// time (it is a WMI method call into the EC).</summary>
+    private LaptopFanSample ReadFansCached(DateTimeOffset now)
+    {
+        if (now - _lastFanPoll < FanPollInterval)
+            return _lastFanSample;
+        _lastFanPoll = now;
+        _lastFanSample = _laptopFans.Read();
+        return _lastFanSample;
     }
 
     /// <summary>Hottest board/SuperIO temperature whose name looks like a CPU sensor
@@ -409,9 +489,23 @@ public sealed class HardwareSensorSource : ISensorSource
 
     private sealed class GpuSensors
     {
-        public ISensor? Core, HotSpot, Load, Power;
+        public ISensor? Core, HotSpot, Load;
+        /// <summary>Every power sensor the card exposes, best first. Read in order and the
+        /// first with a live value wins.</summary>
+        public readonly List<ISensor> Power = new();
         public readonly List<ISensor> Fans = new();
     }
+
+    /// <summary>Power sensor names in preference order, across vendors. NVIDIA reports
+    /// "GPU Package"; AMD reports "GPU Package" but leaves it null on many cards, where
+    /// "GPU PPT" (package power tracking) or "GPU Core" is the live one; Intel Arc reports
+    /// "GPU Package"/"GPU Total"; Intel integrated reports "GPU Power". Whole-package
+    /// figures come first because thermal resistance is about everything the die
+    /// dissipates, but any of these is a valid basis: scoring compares a machine against
+    /// its own baseline, so what matters is that the SAME sensor is read every time on a
+    /// given card, which an ordered list guarantees.</summary>
+    private static readonly string[] GpuPowerNames =
+        { "GPU Package", "GPU PPT", "GPU Total", "GPU Power", "GPU Core", "GPU SoC" };
 
     private GpuSensors ResolveGpu(IHardware hw)
     {
@@ -422,10 +516,19 @@ public sealed class HardwareSensorSource : ISensorSource
             Core = Find(hw, SensorType.Temperature, "GPU Core"),
             HotSpot = Find(hw, SensorType.Temperature, "GPU Hot Spot"),
             Load = Find(hw, SensorType.Load, "GPU Core"),
-            Power = Find(hw, SensorType.Power, "GPU Package") ?? Find(hw, SensorType.Power, "GPU Power"),
         };
+        foreach (string name in GpuPowerNames)
+        {
+            if (Find(hw, SensorType.Power, name) is { } p)
+                s.Power.Add(p);
+        }
+        // Vendor-agnostic safety net, same as the CPU's: an unfamiliar card (a future
+        // Arc, an AMD APU naming its rail something new) still yields watts as long as it
+        // exposes any power sensor at all, rather than silently dropping to raw-ΔT scoring.
         foreach (ISensor sensor in hw.Sensors)
         {
+            if (sensor.SensorType == SensorType.Power && !s.Power.Contains(sensor))
+                s.Power.Add(sensor);
             if (sensor.SensorType == SensorType.Fan)
                 s.Fans.Add(sensor);
         }
@@ -433,11 +536,29 @@ public sealed class HardwareSensorSource : ISensorSource
         return s;
     }
 
-    private ComponentReading MapDiscreteGpu(IHardware hw, double? ecFanRpm)
+    /// <summary>First power sensor that is actually reporting. A card can expose a rail
+    /// and never populate it (AMD's "GPU Package" on many laptop dies), so presence of the
+    /// sensor is not proof of a reading: fall through until one answers.</summary>
+    private static double? FirstWatts(List<ISensor> candidates)
+    {
+        foreach (ISensor s in candidates)
+        {
+            if (Watts(s) is { } w)
+                return w;
+        }
+        return null;
+    }
+
+    /// <param name="nv">NVML's reading of this card, when NVML is live. It wins per value,
+    /// because it is both far cheaper to obtain and fresher: LHM's rows are only refreshed
+    /// every 30 s once NVML is carrying the fast signals. Each value still falls back to LHM
+    /// independently, so a driver that answers for temperature but not power degrades one
+    /// reading rather than the whole card.</param>
+    private ComponentReading MapDiscreteGpu(IHardware hw, double? ecFanRpm, NvmlSample nv)
     {
         GpuSensors s = ResolveGpu(hw);
         double limit = hw.HardwareType == HardwareType.GpuAmd ? AmdGpuLimitC : NvidiaGpuLimitC;
-        double? temp = Temp(s.Core);
+        double? temp = nv.TemperatureC ?? Temp(s.Core);
         double? fan = null;
         foreach (ISensor f in s.Fans)
         {
@@ -448,10 +569,12 @@ public sealed class HardwareSensorSource : ISensorSource
         return new ComponentReading(
             ComponentKind.GpuDiscrete, hw.Name,
             temp,
+            // Hotspot stays LHM's: NVML reports the hotspot field unsupported on this driver.
+            // It moves slowly (it is a gap against the edge sensor), so a 30 s refresh is fine.
             Temp(s.HotSpot),
-            Percent(s.Load),
+            nv.LoadPercent ?? Percent(s.Load),
             fan,
-            Watts(s.Power),
+            nv.PowerW ?? FirstWatts(s.Power),
             null,
             temp is { } t && t >= limit - 1,
             limit);
@@ -592,18 +715,77 @@ public sealed class HardwareSensorSource : ISensorSource
         _batteryCycles.Dispose();
         _acpiZone.Dispose();
         _laptopFans.Dispose();
+        _nvml.Dispose();
         _computer.Close();
     }
 
+    /// <summary>Refreshes each hardware item only as often as its data can actually
+    /// change. LHM's Update() cost is wildly uneven: on the dev machine the CPU costs
+    /// ~2 ms but the NVIDIA GPU costs ~61 ms, because LHM's NVIDIA path also pulls
+    /// clocks, PCIe throughput, D3D engine counters and memory stats DeltaT never reads.
+    /// Updating everything at the sampling interval burned ~3% of a core around the
+    /// clock and put a 61 ms driver call in front of every game frame (the frame-stutter
+    /// reports). Sensors keep their last value between refreshes, so a skipped Update
+    /// simply carries the previous reading forward.</summary>
     private sealed class UpdateVisitor : IVisitor
     {
+        private readonly Dictionary<IHardware, DateTimeOffset> _lastUpdate = new();
+
+        /// <summary>Zero = every tick. The rest are paced by how fast the reading can
+        /// move: a GPU die swings in seconds, SMART wear and battery temperature do not
+        /// (and each SMART read is a command sent to the drive).</summary>
+        /// <summary>Set when NVML is carrying the NVIDIA card's temperature, load and power.
+        /// LHM is then only needed for hotspot and fan RPM, both of which move slowly, so its
+        /// expensive NVIDIA update drops from every 6 s to every 30 s.</summary>
+        public bool NvidiaServedByNvml { get; set; }
+
+        /// <summary>Set when the CPU's temperature and load are coming from the thermal
+        /// registers and the Windows scheduler instead of LHM. Elevated, LHM's CPU update
+        /// costs ~122 ms per tick (an affinity switch and MSR read per logical processor).
+        /// All it is still needed for then is package power, which moves slowly enough for a
+        /// 30 s clock, so this is where most of the app's CPU cost disappears.</summary>
+        public bool CpuServedByMsr { get; set; }
+
+        private TimeSpan CadenceFor(HardwareType type) => type switch
+        {
+            HardwareType.Cpu => CpuServedByMsr ? TimeSpan.FromSeconds(30) : TimeSpan.Zero,
+            HardwareType.GpuNvidia => NvidiaServedByNvml ? TimeSpan.FromSeconds(30) : TimeSpan.FromSeconds(6),
+            HardwareType.GpuAmd or HardwareType.GpuIntel => TimeSpan.FromSeconds(6),
+            HardwareType.Storage => TimeSpan.FromSeconds(60),
+            HardwareType.Battery => TimeSpan.FromSeconds(30),
+            // Everything else (CPU, motherboard/SuperIO and its fan tachometers) measured
+            // sub-millisecond, and carries the fast-moving signals. Poll it every tick.
+            _ => TimeSpan.Zero,
+        };
+
+        /// <summary>Forget pacing state (call when the LHM session is reopened: the old
+        /// hardware instances are gone and the new ones must all refresh immediately).</summary>
+        public void Reset() => _lastUpdate.Clear();
+
         public void VisitComputer(IComputer computer) => computer.Traverse(this);
 
         public void VisitHardware(IHardware hardware)
         {
-            hardware.Update();
-            foreach (IHardware sub in hardware.SubHardware)
-                sub.Accept(this);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            TimeSpan cadence = CadenceFor(hardware.HardwareType);
+            bool due = cadence == TimeSpan.Zero
+                || !_lastUpdate.TryGetValue(hardware, out DateTimeOffset last)
+                || now - last >= cadence;
+
+            if (due)
+            {
+                hardware.Update();
+                _lastUpdate[hardware] = now;
+            }
+
+            // Sub-hardware inherits the parent's cadence: it is the same physical part
+            // (a CPU's cores, a GPU's memory), so refreshing it on a different clock
+            // would hand out a snapshot whose halves disagree about when they were read.
+            if (due)
+            {
+                foreach (IHardware sub in hardware.SubHardware)
+                    sub.Accept(this);
+            }
         }
 
         public void VisitSensor(ISensor sensor) { }

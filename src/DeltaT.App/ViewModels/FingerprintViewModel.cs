@@ -141,13 +141,32 @@ public partial class FingerprintViewModel : ObservableObject
         // GPU run only ever compares against earlier GPU runs. Legacy events carry kind
         // "Cpu", so old history keeps feeding CPU comparisons. Sequence steps are stored
         // in order, so an earlier step of this same workup counts as a valid "previous".
+        // The load duration sets the temperature: a run held at full load for 90 s settles
+        // cooler than one held for 150 s. So a fingerprint may only be compared against one
+        // taken under the SAME timing protocol; otherwise a change to the test itself would
+        // masquerade as the machine running cooler. Runs from an older protocol stay in the
+        // history and on the graph, they just don't get a verdict against this one.
         FingerprintResult? previous = null;
-        StoredEvent? prevEvent = _repo.GetEvents("fingerprint", 0, now - 1, 24)
-            .FirstOrDefault(e => e.Kind == result.Target);
-        if (prevEvent?.Data is { } json)
+        bool olderProtocolExists = false;
+        foreach (StoredEvent e in _repo.GetEvents("fingerprint", 0, now - 1, 24))
         {
-            try { previous = JsonSerializer.Deserialize<FingerprintResult>(json); }
+            if (e.Kind != result.Target || e.Data is not { } json)
+                continue;
+            FingerprintResult? candidate = null;
+            try { candidate = JsonSerializer.Deserialize<FingerprintResult>(json); }
             catch { }
+            if (candidate is null)
+                continue;
+            // Same protocol, and both runs must have actually settled. A run that hit the
+            // ceiling still climbing measured a floor, not a plateau, so pairing it with a
+            // settled run would compare two different quantities.
+            if (candidate.Protocol == result.Protocol && candidate.Settled && result.Settled)
+            {
+                previous = candidate;
+                break;
+            }
+            if (candidate.Protocol != result.Protocol)
+                olderProtocolExists = true;
         }
 
         _repo.InsertEvent(now, "fingerprint", result.Target, null, 1,
@@ -163,6 +182,10 @@ public partial class FingerprintViewModel : ObservableObject
             new("SOAK RATE", $"{result.SoakRatePerMin:0.#}°/min"),
             new("Δ OUTSIDE", result.SustainedDeltaC is { } dd ? $"+{dd:0.#}°" : "-"),
             new("THROTTLING", result.ThrottleSamples > 0 ? $"{result.ThrottleSamples} samples" : "none"),
+            // The load ran until the component stopped climbing, so how long that took is
+            // itself a reading: a machine that takes longer to settle than it used to is
+            // shedding heat more slowly.
+            new("LOAD HELD", result.Settled ? $"{result.LoadSeconds:0}s" : $"{result.LoadSeconds:0}s (still rising)"),
         };
         if (result.Target == "Cpu" && result.GpuWasLoaded && result.GpuPeakC is { } gp)
             cells.Add(new StatCell("GPU PEAK", $"{gp:0.#}°"));
@@ -186,11 +209,26 @@ public partial class FingerprintViewModel : ObservableObject
                 _ => "Whatever you did, it worked.",
             };
         }
+        else if (!result.OnAcPower)
+        {
+            verdict = "Recorded, but this run was on battery, so power limits softened the load. Prefer plugged-in runs for comparable numbers.";
+        }
+        else if (!result.Settled)
+        {
+            verdict = $"The {label} was still heating up when the test hit its time limit, so this is a floor, not a settled reading. "
+                + "That usually means a large cooler that takes its time. It's recorded, but DeltaT won't compare it against settled runs.";
+        }
+        else if (olderProtocolExists)
+        {
+            // Honest about why there's no verdict: the earlier runs are still in the history,
+            // they were just measured on a longer load and would read hotter for that reason
+            // alone.
+            verdict = $"The fingerprint test is now shorter, so this run isn't comparable to your older {label} ones. "
+                + "This becomes the new reference. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift.";
+        }
         else
         {
-            verdict = result.OnAcPower
-                ? $"First {label} fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift."
-                : "Recorded, but this run was on battery, so power limits softened the load. Prefer plugged-in runs for comparable numbers.";
+            verdict = $"First {label} fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift.";
         }
 
         return new FingerprintSection($"{label} FINGERPRINT", cells, verdict, comparison);

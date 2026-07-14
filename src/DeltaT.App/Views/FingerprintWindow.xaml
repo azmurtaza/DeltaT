@@ -69,7 +69,7 @@
                             <Rectangle Height="3" Fill="{StaticResource Brush.Cool}"/>
                             <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
                                        Margin="0,7,0,0" ui:Tracking.Text="SETTLE"/>
-                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="25 s idle"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="12 s idle"/>
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="1" Background="{StaticResource Brush.Panel}"
@@ -78,7 +78,7 @@
                             <Rectangle Height="3" Fill="{StaticResource Brush.Accent}"/>
                             <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
                                        Margin="0,7,0,0" ui:Tracking.Text="FULL LOAD"/>
-                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="2½ min flat out, soak measured"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="Flat out to the plateau, soak measured"/>
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{StaticResource Brush.Panel}"
@@ -120,7 +120,7 @@
                             Command="{Binding StartGpuCommand}"/>
                 </StackPanel>
                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17" Margin="2,11,0,0" TextWrapping="Wrap"
-                           Text="Full workup runs the CPU, waits for it to cool, then the GPU. About 7 minutes, one comparable reading for each."/>
+                           Text="Full workup runs the CPU, waits for it to cool, then the GPU. About 5 minutes, one comparable reading for each."/>
             </StackPanel>
             <!-- No discrete GPU: a single CPU test. -->
             <Button Style="{StaticResource Button.Primary}" Content="TEST THE CPU" Padding="20,10" Margin="0,22,0,0"

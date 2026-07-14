@@ -14,6 +14,37 @@ public class LenovoWmiFanReaderTests
         Assert.Equal(expected, LenovoWmiFanReader.PlausibleRpm(raw));
 }
 
+public class AsusWmiFanReaderTests
+{
+    [Theory]
+    [InlineData(0, null)]           // parked fan
+    [InlineData(28, 2800.0)]        // status word carries hundreds of RPM
+    [InlineData(0x00010028, 4000.0)] // high half is status flags, not speed: masked off
+    [InlineData(100, null)]         // 10000 rpm: out of range
+    public void RpmFromStatus_MasksAndScalesTheStatusWord(long status, double? expected) =>
+        Assert.Equal(expected, AsusWmiFanReader.RpmFromStatus(status));
+}
+
+public class HpWmiFanReaderTests
+{
+    [Theory]
+    [InlineData("GPU Fan", true)]
+    [InlineData("gpu0 fan", true)]
+    [InlineData("CPU0 Fan", false)]
+    [InlineData("Fan 1", false)]   // single-fan chassis: defaults to the CPU side
+    [InlineData(null, false)]
+    public void IsGpuFan_ReadsTheSensorLabel(string? name, bool expected) =>
+        Assert.Equal(expected, HpWmiFanReader.IsGpuFan(name));
+
+    [Theory]
+    [InlineData(0.0, null)]         // parked fan
+    [InlineData(2500.0, 2500.0)]
+    [InlineData(12000.0, null)]     // out of range
+    [InlineData(null, null)]        // sensor present but reading absent
+    public void PlausibleRpm_KeepsOnlyRealAirflow(double? raw, double? expected) =>
+        Assert.Equal(expected, HpWmiFanReader.PlausibleRpm(raw));
+}
+
 public class LaptopFanReaderCoordinatorTests
 {
     private sealed class FakeProbe : ILaptopFanProbe
