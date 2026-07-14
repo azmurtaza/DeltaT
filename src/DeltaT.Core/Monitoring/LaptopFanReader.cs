@@ -1,10 +1,19 @@
 namespace DeltaT.Core.Monitoring;
 
-/// <summary>CPU and GPU fan RPM sampled from a laptop's embedded controller through a
-/// vendor WMI interface. A null field means "not exposed / not trustworthy" and is
-/// rendered as "--" upstream — never faked as 0.</summary>
-public readonly record struct LaptopFanSample(double? CpuRpm, double? GpuRpm)
+/// <summary>What a laptop's embedded controller will tell us through its vendor WMI
+/// interface: fan RPM, and (where the firmware publishes it) the EC's own CPU temperature.
+/// A null field means "not exposed / not trustworthy" and is rendered as "--" upstream —
+/// never faked as 0.
+///
+/// The temperature is a **fallback**, never the primary reading: it is whole-degree and
+/// EC-paced, where the MSR path is precise and instant. It earns its place by needing no
+/// kernel driver at all — the same firmware channel NitroSense uses — so a machine without
+/// PawnIO still shows a real CPU temperature instead of falling all the way back to the
+/// coarse ACPI thermal zone.</summary>
+public readonly record struct LaptopFanSample(double? CpuRpm, double? GpuRpm, double? CpuTempC = null)
 {
+    /// <summary>Airflow data specifically: this is what latches a vendor probe, so a probe
+    /// answering only a temperature can never win the machine for the wrong vendor.</summary>
     public bool HasAny => CpuRpm is not null || GpuRpm is not null;
 }
 

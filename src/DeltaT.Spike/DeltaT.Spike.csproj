@@ -10,9 +10,12 @@
 
   <ItemGroup>
     <!-- Keep this in lockstep with DeltaT.Core so the spike diagnoses the SAME
-         LibreHardwareMonitor the app actually ships. A mismatch here once masked a
-         0.9.6 CPU-temp regression on Raptor Lake - see deltat-gotchas. -->
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+         LibreHardwareMonitor the app actually ships (see the pin note there). -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <!-- Same floating pin as DeltaT.Core. Without this direct reference the spike
+         resolved an older System.Management than Core was built against, and the
+         acer probe died at runtime with a FileNotFoundException for 10.0.0.10. -->
+    <PackageReference Include="System.Management" Version="10.0.*" />
     <!-- For the msr diagnostic mode: exercises the same CpuMsrTemperatureReader the
          app ships, against this machine's silicon. -->
     <ProjectReference Include="..\DeltaT.Core\DeltaT.Core.csproj" />

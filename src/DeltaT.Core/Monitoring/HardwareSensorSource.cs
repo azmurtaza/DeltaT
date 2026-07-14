@@ -59,6 +59,7 @@ public sealed class HardwareSensorSource : ISensorSource
     private bool _cpuTempEverMissingLogged;
     private bool _acpiFallbackLogged;
     private bool _msrFallbackLogged;
+    private bool _ecTempFallbackLogged;
     private bool _laptopFansLogged;
 
     // Resolved sensor references, so each Read() is direct value access instead
@@ -156,7 +157,7 @@ public sealed class HardwareSensorSource : ISensorSource
         {
             ComponentReading? reading = hw.HardwareType switch
             {
-                HardwareType.Cpu => MapCpu(hw, ecFans.CpuRpm),
+                HardwareType.Cpu => MapCpu(hw, ecFans.CpuRpm, ecFans.CpuTempC),
                 // NVML's sample only applies to the NVIDIA card; an AMD card is read from
                 // LHM exactly as before.
                 HardwareType.GpuNvidia => MapDiscreteGpu(hw, ecFans.GpuRpm, nv),
@@ -315,7 +316,7 @@ public sealed class HardwareSensorSource : ISensorSource
         return s;
     }
 
-    private ComponentReading MapCpu(IHardware hw, double? ecFanRpm)
+    private ComponentReading MapCpu(IHardware hw, double? ecFanRpm, double? ecTempC)
     {
         CpuSensors s = ResolveCpu(hw);
 
@@ -370,6 +371,21 @@ public sealed class HardwareSensorSource : ISensorSource
         {
             _msrFallbackLogged = true;
             Diagnostic?.Invoke($"CPU temperature read straight from the thermal registers ({temp:0.#} °C) - LibreHardwareMonitor's slow CPU path is now polled only for package power");
+        }
+
+        // No ring0 (no PawnIO installed, or a non-elevated run) and no LHM sensor: ask the
+        // laptop's EC through the vendor's own WMI, the channel NitroSense reads. It needs no
+        // kernel driver at all, and it beats both fallbacks below — it is the actual CPU
+        // temperature, just whole-degree and EC-paced, where the board sensor is a nearby
+        // socket probe and the ACPI zone is coarser still.
+        if (temp is null && ecTempC is { } ecTemp)
+        {
+            temp = ecTemp;
+            if (!_ecTempFallbackLogged)
+            {
+                _ecTempFallbackLogged = true;
+                Diagnostic?.Invoke($"CPU temperature via {_laptopFans.ActiveVendor ?? "vendor"} EC WMI ({ecTemp:0} °C) - no kernel driver in play; install PawnIO for full-rate, full-precision readings");
+            }
         }
 
         // On many desktops the CPU's MSR temperatures need the kernel driver (admin),
@@ -716,6 +732,7 @@ public sealed class HardwareSensorSource : ISensorSource
         _acpiZone.Dispose();
         _laptopFans.Dispose();
         _nvml.Dispose();
+        _msrReader.Dispose(); // closes the PawnIO module handle
         _computer.Close();
     }
 

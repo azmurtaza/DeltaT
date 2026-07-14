@@ -135,6 +135,84 @@ if (args.Contains("--msr", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+// `--cost`: what does one sensor pass actually cost? DeltaT's whole polling design rests on
+// these numbers (fast readers every tick, LHM's expensive per-hardware Update() on a slow
+// clock), and they were previously measured by hand, which is how they went stale when the
+// kernel driver changed from WinRing0 to PawnIO. Run this ELEVATED: a non-elevated run fails
+// fast on exactly the expensive paths and flatters every figure.
+if (args.Contains("--cost", StringComparer.OrdinalIgnoreCase))
+{
+    const int Samples = 20;
+    Line($"elevated : {elevated}{(elevated ? "" : "   << numbers below are NOT valid; the costly paths fail fast unelevated")}");
+    Line($"PawnIO   : {(DeltaT.Core.Monitoring.PawnIoStatus.IsInstalled ? $"present ({DeltaT.Core.Monitoring.PawnIoStatus.Version})" : "MISSING - CPU register reads will fail")}");
+    Line();
+
+    static string Trim(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+    static double MedianMs(Action action, int samples)
+    {
+        var times = new List<double>(samples);
+        var sw = new System.Diagnostics.Stopwatch();
+        for (int i = 0; i < samples; i++)
+        {
+            sw.Restart();
+            action();
+            sw.Stop();
+            times.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        times.Sort();
+        return times[times.Count / 2];
+    }
+
+    var costComputer = new Computer
+    {
+        IsCpuEnabled = true, IsGpuEnabled = true, IsMotherboardEnabled = true,
+        IsStorageEnabled = true, IsBatteryEnabled = true,
+    };
+    costComputer.Open();
+
+    Line("LibreHardwareMonitor per-hardware Update()  (median of 20):");
+    double lhmTotal = 0;
+    foreach (IHardware hw in costComputer.Hardware)
+    {
+        double ms = MedianMs(() => hw.Update(), Samples);
+        lhmTotal += ms;
+        Line($"  {hw.HardwareType,-14} {Trim(hw.Name, 34),-34} {ms,8:0.00} ms");
+    }
+    Line($"  {"",-14} {"TOTAL if polled every tick",-34} {lhmTotal,8:0.00} ms");
+    Line();
+
+    Line("DeltaT's own fast readers (what actually runs every tick):");
+    var costMsr = new DeltaT.Core.Monitoring.CpuMsrTemperatureReader();
+    var costLoad = new DeltaT.Core.Monitoring.CpuLoadReader();
+    var costNvml = new DeltaT.Core.Monitoring.NvmlGpuReader();
+    var costFans = new DeltaT.Core.Monitoring.LaptopFanReader();
+    string cpuName = costComputer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu)?.Name ?? "";
+    string gpuName = costComputer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.GpuNvidia)?.Name ?? "";
+
+    double msrMs = MedianMs(() => costMsr.TryRead(cpuName), Samples);
+    double loadMs = MedianMs(() => costLoad.Read(), Samples);
+    double nvmlMs = MedianMs(() => costNvml.Read(gpuName), Samples);
+    double fanMs = MedianMs(() => costFans.Read(), Samples);
+
+    Line($"  CPU temp   CpuMsrTemperatureReader (PawnIO)   {msrMs,8:0.00} ms   {(costMsr.TryRead(cpuName) is { } cr ? $"{cr.TemperatureC:0.0} °C" : "no reading")}");
+    Line($"  CPU load   CpuLoadReader (GetSystemTimes)     {loadMs,8:0.00} ms");
+    Line($"  GPU        NvmlGpuReader (nvml.dll)           {nvmlMs,8:0.00} ms   {(costNvml.IsLive ? "live" : "not available")}");
+    Line($"  Fans       LaptopFanReader (vendor WMI)       {fanMs,8:0.00} ms   {costFans.ActiveVendor ?? "none"}   [polled every 6 s, not every tick]");
+    Line();
+    Line($"  per-tick total (temp + load + GPU)            {msrMs + loadMs + nvmlMs,8:0.00} ms");
+    Line($"  at the 2 s sampling interval that is          {(msrMs + loadMs + nvmlMs) / 2000.0 * 100,8:0.000} % of one core");
+    Line();
+    Line("Compare against the LHM totals above: that gap is the whole reason for the split.");
+    Line("Update the perf numbers in CLAUDE.md whenever the sensor layer changes.");
+
+    costMsr.Dispose();
+    costNvml.Dispose();
+    costFans.Dispose();
+    costComputer.Close();
+    return;
+}
+
 // `--gpuburn`: prove the OpenCL burner (the GPU fingerprint's load engine) works on
 // this machine: pick the compute device, burn ~12 s, and watch the GPU temp/load
 // ramp through LHM. Heat comes purely from math; Dispose ends the load instantly.

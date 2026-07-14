@@ -36,6 +36,19 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
     private const uint CpuFanSensorId = 0x02;
     private const uint GpuFanSensorId = 0x06;
 
+    /// <summary>CPU temperature, in whole °C. Verified on the dev ANV15-51: a sweep of the
+    /// sensor-id space returned 64 here at the same moment the CPU package MSR read 64 °C.
+    /// This is the reading NitroSense shows, and it needs no kernel driver, which makes it
+    /// the fallback for a machine with no PawnIO. Only this id is trusted: the sweep also
+    /// answered on 0x03 and 0x0A, but nothing on that machine corroborated what they are, and
+    /// a guessed sensor is worse than an absent one.</summary>
+    private const uint CpuTempSensorId = 0x01;
+
+    /// <summary>Plausible die temperature. A parked/absent sensor answers 0, which must not
+    /// be mistaken for a very cold CPU.</summary>
+    private const double MinPlausibleTempC = 1;
+    private const double MaxPlausibleTempC = 119;
+
     // A firmware that exposes the class but never answers a single valid sensor
     // reading is a non-gaming variant — stop asking. Once one valid reading has
     // landed the feature never self-disables: a parked fan still answers with a
@@ -63,6 +76,11 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
         bool anyValid = false;
         double? cpu = ReadRpm(CpuFanSensorId, ref anyValid);
         double? gpu = ReadRpm(GpuFanSensorId, ref anyValid);
+        // Deliberately does not feed anyValid: latching a vendor stays a fan decision.
+        double? cpuTemp = ReadRaw(CpuTempSensorId, out _) is { } t
+                          && t is >= MinPlausibleTempC and <= MaxPlausibleTempC
+            ? t
+            : null;
 
         if (anyValid)
         {
@@ -73,7 +91,7 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
         {
             _dead = true;
         }
-        return new LaptopFanSample(cpu, gpu);
+        return new LaptopFanSample(cpu, gpu, cpuTemp);
     }
 
     private void Init()
@@ -100,6 +118,19 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
 
     private double? ReadRpm(uint sensorId, ref bool anyValid)
     {
+        double? value = ReadRaw(sensorId, out bool answered);
+        if (answered)
+            anyValid = true;
+        // A valid 0 means "fan parked" (Nitro/Predator fans stop at cool idle) — a real
+        // answer, but not airflow, so it maps to null like every other absent reading here.
+        return value is > 0 and < 10000 ? value : null;
+    }
+
+    /// <summary>One sensor query. <paramref name="answered"/> reports the status byte, so a
+    /// caller can tell "the firmware replied 0" from "the firmware didn't reply".</summary>
+    private double? ReadRaw(uint sensorId, out bool answered)
+    {
+        answered = false;
         try
         {
             using ManagementBaseObject inParams = _instance!.GetMethodParameters("GetGamingSysInfo");
@@ -107,10 +138,10 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
             using ManagementBaseObject? outParams = _instance.InvokeMethod("GetGamingSysInfo", inParams, null);
             if (outParams?["gmOutput"] is not { } raw)
                 return null;
-            if (!TryDecode(Convert.ToUInt64(raw), out double? rpm))
+            if (!TryDecodeValue(Convert.ToUInt64(raw), out double value))
                 return null;
-            anyValid = true;
-            return rpm;
+            answered = true;
+            return value;
         }
         catch
         {
@@ -118,17 +149,24 @@ public sealed class AcerWmiFanReader : ILaptopFanProbe
         }
     }
 
-    /// <summary>Pure protocol half, split out for tests. Returns whether the sensor
-    /// answered at all (status byte 0); <paramref name="rpm"/> gets the reading from
-    /// bits 8–23 when it's airflow data. A valid 0 means "fan parked" (Nitro/Predator
-    /// fans stop at cool idle) — a real answer, but not airflow, so it maps to null
-    /// exactly like every other absent reading in this codebase.</summary>
+    /// <summary>Pure protocol half, split out for tests. Returns whether the sensor answered
+    /// at all (status byte 0); <paramref name="value"/> gets the raw reading from bits 8–23,
+    /// which is RPM for a fan id and °C for the temperature id.</summary>
+    public static bool TryDecodeValue(ulong raw, out double value)
+    {
+        value = 0;
+        if ((raw & 0xFF) != 0)
+            return false;
+        value = (raw >> 8) & 0xFFFF;
+        return true;
+    }
+
+    /// <summary>Fan-shaped decode: answered, plus the RPM when the reading is real airflow.</summary>
     public static bool TryDecode(ulong raw, out double? rpm)
     {
         rpm = null;
-        if ((raw & 0xFF) != 0)
+        if (!TryDecodeValue(raw, out double value))
             return false;
-        ulong value = (raw >> 8) & 0xFFFF;
         if (value is > 0 and < 10000)
             rpm = value;
         return true;

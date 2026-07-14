@@ -196,6 +196,20 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
+                    <!-- Sensor driver: a state, not a setting. DeltaT reads the CPU's thermal
+                         registers through PawnIO; if it isn't there, say which readings are
+                         missing and offer the fix rather than showing empty temperatures. -->
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Sensor driver" Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" TextWrapping="Wrap"
+                                       Text="{Binding SensorDriverText}"/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="INSTALL SENSOR DRIVER"
+                                    HorizontalAlignment="Left" Margin="0,10,0,0"
+                                    Command="{Binding InstallSensorDriverCommand}"
+                                    Visibility="{Binding SensorDriverMissing, Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
                 </StackPanel>
 
                 <!-- ================= maintenance band: one uniform row across the

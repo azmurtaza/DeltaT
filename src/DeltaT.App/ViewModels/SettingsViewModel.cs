@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -22,6 +23,7 @@ public partial class SettingsViewModel : ObservableObject
     private readonly DeltaTDb _db;
     private readonly UpdateService _updates;
     private readonly MonitoringService _monitor;
+    private readonly bool _simulated;
     private readonly double _cpuConcernDefault;
     private readonly double _gpuConcernDefault;
 
@@ -50,6 +52,15 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _dbText = "";
     [ObservableProperty] private string _statusText = "";
 
+    // The kernel driver DeltaT reads CPU thermal registers through. Shown as a state, not a
+    // toggle: the user either has it or doesn't, and if they don't, the honest thing is to
+    // say which readings are missing and offer to fix it.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SensorDriverMissing))]
+    private string _sensorDriverText = "";
+
+    public bool SensorDriverMissing => !_simulated && !PawnIoStatus.IsInstalled;
+
     public ObservableCollection<GeoLocation> CityResults { get; } = new();
 
     public SettingsViewModel(
@@ -64,6 +75,7 @@ public partial class SettingsViewModel : ObservableObject
         _db = db;
         _updates = updates;
         _monitor = monitor;
+        _simulated = simulated;
 
         AutostartAvailable = !simulated;
         // The auto-update panel is hidden under --simulate (no real update flow), but
@@ -103,6 +115,32 @@ public partial class SettingsViewModel : ObservableObject
             DbText = info.Exists ? $"{_db.DbPath}\n{info.Length / 1024.0 / 1024.0:0.##} MB" : _db.DbPath;
         }
         catch { DbText = _db.DbPath; }
+
+        SensorDriverText = _simulated
+            ? "Simulated sensors; no driver in use."
+            : PawnIoStatus.IsInstalled
+                ? $"PawnIO {PawnIoStatus.Version?.ToString(3) ?? "installed"}. CPU thermal registers readable."
+                : PawnIoStatus.MissingMessage;
+        OnPropertyChanged(nameof(SensorDriverMissing));
+    }
+
+    /// <summary>Send the user to PawnIO's official page rather than downloading and running a
+    /// kernel-driver installer from inside the app. The setup wizard does chain it (with an
+    /// Authenticode check on the download), but a running app quietly fetching and executing a
+    /// driver installer is exactly the pattern users should be suspicious of, so here we open
+    /// the page and let them see what they're installing.</summary>
+    [RelayCommand]
+    private void InstallSensorDriver()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(PawnIoStatus.DownloadUrl) { UseShellExecute = true });
+            StatusText = "Opened the PawnIO download page. Install the Official (signed) edition, then restart DeltaT.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Couldn't open the browser: {ex.Message}. The driver is at {PawnIoStatus.DownloadUrl}";
+        }
     }
 
     partial void OnFahrenheitChanged(bool value) => _settings.SetBool(SettingsKeys.UnitsFahrenheit, value);

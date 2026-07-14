@@ -9,13 +9,21 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 0.9.4, deliberately. 0.9.5+ rewrote Intel hybrid-core detection (cores become
-         "P-Core/E-Core") and that path returns NULL temps/clocks on Raptor Lake mobile
-         (verified on i5-13420H: 0.9.4 reads fine, 0.9.6 and 0.9.7-pre read nothing).
-         Raptor Lake is a huge share of laptops, so 0.9.4 is the correct base; newer
-         CPUs 0.9.4 can't parse fall back to the ACPI thermal zone (AcpiThermalZoneReader).
-         See deltat-gotchas before touching this. -->
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
+    <!-- 0.9.6+, and it must stay there: 0.9.4 embedded the WinRing0 kernel driver, whose
+         ioctl hands ANY local process arbitrary MSR / port / physical-memory access
+         (CVE-2020-14979). It is on Microsoft's vulnerable-driver blocklist, Defender flags
+         it as HackTool:Win32/Winring0, and kernel anti-cheats refuse to run beside it — a
+         DeltaT user could not launch Battlefield 6 (EA Javelin), Valorant, or any EAC title.
+         0.9.5 replaced WinRing0 with PawnIO (signed, blocklist-clean, runs only verified
+         modules rather than exposing a generic kernel primitive). Do NOT pin back.
+
+         The old pin comment here claimed 0.9.6 "reads nothing" on Raptor Lake mobile. That
+         was a missing driver, not a regression: 0.9.6 ships NO driver of its own and needs
+         PawnIO installed separately, which that test machine didn't have. Re-verified on the
+         i5-13420H with PawnIO 2.2.0 present: full per-core temps, CPU Package temp, and CPU
+         Package power all read correctly. PawnIO is therefore a hard runtime dependency —
+         the installer chains it, and PawnIoStatus reports its absence. -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.*" />
     <PackageReference Include="System.Management" Version="10.0.*" />
   </ItemGroup>
