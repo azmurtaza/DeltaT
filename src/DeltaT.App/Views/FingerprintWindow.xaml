@@ -78,7 +78,8 @@
                             <Rectangle Height="3" Fill="{StaticResource Brush.Accent}"/>
                             <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
                                        Margin="0,7,0,0" ui:Tracking.Text="FULL LOAD"/>
-                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="Flat out to the plateau, soak measured"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0"
+                                       TextWrapping="Wrap" Text="flat out to the plateau"/>
                         </StackPanel>
                     </Border>
                     <Border Grid.Column="2" Background="{StaticResource Brush.Panel}"
