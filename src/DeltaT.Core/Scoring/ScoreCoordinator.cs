@@ -228,6 +228,25 @@ public sealed class ScoreCoordinator
         return results;
     }
 
+    /// <summary>Long-term drift/step analysis for one component against its frozen baseline.
+    /// Only meaningful once locked (there is no stable reference before then) and only over
+    /// data AFTER the lock (the learning weeks sit on baseline by construction and would
+    /// flatten a real slope). Reads hour rollups, which are never pruned — so this can see
+    /// months, even seasons, of history. Returns <see cref="TrendResult.None"/> when there
+    /// isn't a locked baseline or enough post-lock weeks yet.</summary>
+    public TrendResult ComputeTrend(ComponentKind kind, DateTimeOffset nowUtc)
+    {
+        if (!kind.HasPaste() || LockFor(kind) is not { } locked)
+            return TrendResult.None;
+        List<BaselineRow> baseline = _repo.GetBaseline(Epoch).Where(r => r.Kind == kind).ToList();
+        if (baseline.Count == 0)
+            return TrendResult.None;
+        string name = baseline[0].Name;
+        IReadOnlyList<WeeklyLoadedCell> cells =
+            _repo.GetWeeklyLoadedCells(kind, name, locked.ToUnixTimeSeconds(), nowUtc.ToUnixTimeSeconds());
+        return TrendAnalyzer.Analyze(TrendAnalyzer.BuildWeekly(cells, baseline));
+    }
+
     /// <summary>The payoff moment: the post-repaste baseline just locked, so DeltaT
     /// can tell the user — fairly — what the fresh paste actually did. Compares the
     /// two epochs' baselines like-for-like (same load bucket + ambient band,
@@ -268,7 +287,7 @@ public sealed class ScoreCoordinator
             string worse = Join(parts.Where(p => p.Cmp.Verdict == RepasteVerdict.Worse),
                 p => $"{p.Kind.Label()} {p.Cmp.WeightedDeltaChangeC:0.#}° hotter");
             return new RepasteReport(RepasteVerdict.Worse,
-                $"Repaste verdict: {worse} under load versus the old paste, {corrNote}. That usually means an air bubble, too little or too much paste, or an uneven mount - worth pulling the cooler and redoing it before the numbers settle in as the new normal.");
+                $"Repaste verdict: {worse} under load versus the old paste, {corrNote}. That usually means an air bubble, too little or too much paste, or an uneven mount. Worth pulling the cooler and redoing it before the numbers settle in as the new normal.");
         }
 
         if (parts.Any(p => p.Cmp.Verdict == RepasteVerdict.Improved))
@@ -306,7 +325,7 @@ public sealed class ScoreCoordinator
             ? $" Versus the old baseline (weather- and fan-corrected): {string.Join(", ", changes)}."
             : "";
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
-            $"Recalibration complete - a fresh baseline is locked in and scoring is back on solid ground.{comparison}", null);
+            $"Recalibration complete. A fresh baseline is locked in and scoring is back on solid ground.{comparison}", null);
     }
 
     private ComponentScore ScoreComponent(
@@ -329,7 +348,7 @@ public sealed class ScoreCoordinator
             if (_unfreezeLogged.Add(c.Kind))
             {
                 _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "system", c.Kind.ToString(), c.Name, 1,
-                    $"Calibration self-heal: {c.Kind.Label()} baseline learning had been frozen prematurely by an earlier version - learning resumed with all of this epoch's data.", null);
+                    $"Calibration self-heal: {c.Kind.Label()} baseline learning had been frozen prematurely by an earlier version. Learning resumed with all of this epoch's data.", null);
             }
             locked = null;
             cal = AssessWindow(c, epochStart, null, nowUtc, out baselineStats, out learningEndTs);
@@ -395,12 +414,14 @@ public sealed class ScoreCoordinator
         var input = new ScoreInput(
             c.Kind, c.Name,
             Recent: recentStats.Select(s => new RecentBucketObs(
-                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg)).ToList(),
+                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg, s.PowerAvg)).ToList(),
             Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null && !justLocked, baselineStats, soakBaseline, nowUtc),
             RecentWindowHours: recentHours,
             ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs),
             SoakRateRecent: _repo.GetAverageSoakRate(c.Kind, recentFromTs, nowTs),
             SoakRateBaseline: soakBaseline,
+            CooldownRateRecent: _repo.GetAverageCooldownRate(c.Kind, recentFromTs, nowTs),
+            CooldownRateBaseline: _repo.GetAverageCooldownRate(c.Kind, epochStartTs, learningEndTs),
             LimitC: c.ThrottleLimitC,
             Profile: c.Kind == ComponentKind.Cpu ? _profile.Cpu : _profile.Gpu,
             BaselineReady: ready,
@@ -409,7 +430,9 @@ public sealed class ScoreCoordinator
             DormantDays: DormantDays,
             CalibrationConstraint: cal.Constraint,
             CalibrationDataConfidence: cal.DataConfidence,
-            ProvisionalEverShown: scoreShownBefore);
+            ProvisionalEverShown: scoreShownBefore,
+            ConcernOverrideC: ConcernOverride(c.Kind),
+            HeadroomWarnings: _settings.GetBool(SettingsKeys.HeadroomWarnings, true));
 
         ComponentScore score = ScoringEngine.Score(input, _fmtTemp);
         // Once a provisional number has been shown, remember it: the confidence floor
@@ -419,6 +442,11 @@ public sealed class ScoreCoordinator
             _settings.SetInt(ScoreShownKey(c.Kind), Epoch);
         return score;
     }
+
+    /// <summary>User's sustained-temperature concern override for a component, if set.</summary>
+    private double? ConcernOverride(ComponentKind kind) => kind == ComponentKind.Cpu
+        ? _settings.GetDouble(SettingsKeys.ConcernOverrideCpuC)
+        : _settings.GetDouble(SettingsKeys.ConcernOverrideGpuC);
 
     private static string ScoreShownKey(ComponentKind kind) => $"{SettingsKeys.BaselineScoreShown}.{kind}";
 
@@ -507,7 +535,7 @@ public sealed class ScoreCoordinator
         // complete" as if a from-scratch relearn had finished.
         _settings.SetInt(SettingsKeys.BaselineOutcomeReportedEpoch, Epoch);
         _repo.InsertEvent(nowTs, "remark", c.Kind.ToString(), c.Name, 1,
-            $"Recalibration check: {c.Kind.Label()} behaves exactly like its old baseline at matching load and weather (fan-corrected, within {cmp.WeightedDeltaChangeC:+0.#;-0.#}°). The old reference carries over - no point relearning what hasn't changed.", null);
+            $"Recalibration check: {c.Kind.Label()} behaves exactly like its old baseline at matching load and weather (fan-corrected, within {cmp.WeightedDeltaChangeC:+0.#;-0.#}°). The old reference carries over, so there's no point relearning what hasn't changed.", null);
         return true;
     }
 
@@ -583,7 +611,7 @@ public sealed class ScoreCoordinator
                 }
             }
         }
-        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg)).ToList();
+        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg, r.PowerAvg)).ToList();
     }
 
     /// <summary>Paste scoring only trusts samples on AC power with known ambient —
@@ -612,7 +640,7 @@ public sealed class ScoreCoordinator
         StartNewEpoch(nowUtc, "recalibrate");
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "recalibrate", null, null, 1,
             string.IsNullOrWhiteSpace(note)
-                ? "Baseline recalibration started - DeltaT will verify the machine against its old baseline under real load, keep it if nothing changed, and relearn only what did. History and trends stay put."
+                ? "Baseline recalibration started. DeltaT will verify the machine against its old baseline under real load, keep it if nothing changed, and relearn only what did. History and trends stay put."
                 : $"Baseline recalibration started: {note}",
             null);
         Compute(nowUtc);

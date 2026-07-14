@@ -20,26 +20,32 @@ public class ScoringEngineTests
         int throttleEvents = 0,
         double? soakRecent = null,
         double? soakBaseline = null,
+        double? cooldownRecent = null,
+        double? cooldownBaseline = null,
         bool ready = true,
         double progress = 1.0,
         double recentHours = 7 * 24,
         bool stale = false,
         int dormantDays = 0,
         double dataConfidence = 1.0,
-        bool provisionalEverShown = false) =>
+        bool provisionalEverShown = false,
+        double? concernOverrideC = null,
+        bool headroomWarnings = true) =>
         new(ComponentKind.Cpu, "Test CPU",
             recent ?? Array.Empty<RecentBucketObs>(),
             baseline ?? Array.Empty<BaselineBucket>(),
             recentHours, throttleEvents, soakRecent, soakBaseline,
+            CooldownRateRecent: cooldownRecent, CooldownRateBaseline: cooldownBaseline,
             LimitC: 100, Profile: NitroCpu, BaselineReady: ready, CalibrationProgress: progress,
             BaselineStale: stale, DormantDays: dormantDays, CalibrationDataConfidence: dataConfidence,
-            ProvisionalEverShown: provisionalEverShown);
+            ProvisionalEverShown: provisionalEverShown,
+            ConcernOverrideC: concernOverrideC, HeadroomWarnings: headroomWarnings);
 
-    private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null) =>
-        new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0);
+    private static RecentBucketObs Heavy(double delta, int band = Warm, int minutes = 60, double tempAvg = 88, double tempMax = 92, double? fan = null, double? power = null) =>
+        new(LoadBucket.Heavy, band, minutes, delta, tempAvg, tempMax, fan, 0, PowerAvg: power);
 
-    private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null, double? tempAvg = null) =>
-        new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200, tempAvg);
+    private static BaselineBucket HeavyBase(double delta, int band = Warm, double? fan = null, double? tempAvg = null, double? power = null) =>
+        new(LoadBucket.Heavy, band, delta, delta + 3, fan, 200, tempAvg, PowerAvg: power);
 
     private static RecentBucketObs HeavyGap(double delta, double gap, int minutes = 60) =>
         new(LoadBucket.Heavy, Warm, minutes, delta, 88, 92, null, 0, gap);
@@ -422,5 +428,168 @@ public class ScoringEngineTests
             baseline: new[] { new BaselineBucket(LoadBucket.Idle, Warm, 20, 23, null, 300, null, 10) }), Fmt);
 
         Assert.DoesNotContain(score.Reasons, r => r.Code == "hotspot-gap");
+    }
+
+    // ------------------------------------------------------------------ power normalization
+
+    [Fact]
+    public void Overclock_DrawingMorePower_IsNotMistakenForDegradation()
+    {
+        // Same healthy paste, but an overclock lifted sustained power 100 → 130 W, so the
+        // die runs a legitimate ~18 °C hotter. Raw ΔT would read a big excess and tank the
+        // score; thermal-resistance normalization sees the rise is exactly what 130 W should
+        // produce and keeps it Fresh.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 78, power: 130) },
+            baseline: new[] { HeavyBase(delta: 60, power: 100) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "power-normalized");
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value >= 85, $"an overclock on healthy paste must not read as Aging, got {score.Value}");
+    }
+
+    [Fact]
+    public void Undervolt_HidingDegradation_IsStillCaught()
+    {
+        // An undervolt cut sustained power 100 → 70 W, so the absolute die temp actually
+        // FELL (Δ 60 → 50) even though the paste got worse. Raw ΔT reads "cooler = healthy";
+        // resistance normalization (50/70 W vs 60/100 W) exposes the hidden degradation.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 50, power: 70) },
+            baseline: new[] { HeavyBase(delta: 60, power: 100) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value < 85, $"undervolt-masked degradation must still drop the score, got {score.Value}");
+
+        // Sanity: the SAME temperatures without power data read as a (false) improvement.
+        ComponentScore blind = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 50) },
+            baseline: new[] { HeavyBase(delta: 60) }), Fmt);
+        Assert.Equal(100, blind.Value);
+    }
+
+    [Fact]
+    public void PowerWithinDeadband_LeavesComparisonUntouched()
+    {
+        // A few watts of run-to-run variance must not trigger a correction.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60.3, power: 103) },
+            baseline: new[] { HeavyBase(delta: 60, power: 100) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "power-normalized");
+        Assert.True(score.Value >= 85);
+    }
+
+    [Fact]
+    public void PowerNormalization_AbsentData_FallsBackToRawDelta()
+    {
+        // No power sensor (baseline learned before v6): behaves exactly as before.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 68, power: null) },
+            baseline: new[] { HeavyBase(delta: 60, power: null) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "power-normalized");
+        Assert.Contains(score.Reasons, r => r.Code == "delta-excess");
+    }
+
+    // ------------------------------------------------------------------ cooldown rate
+
+    [Fact]
+    public void SluggishCooldown_LosesPoints()
+    {
+        // Die sheds heat far slower than baseline when load drops - the same resistance
+        // that makes paste run hot, seen on the falling edge.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            cooldownRecent: 12, cooldownBaseline: 22), Fmt);
+
+        ScoreReason reason = score.Reasons.Single(r => r.Code == "cooldown");
+        Assert.True(reason.PointsLost > 0);
+        Assert.True(score.Value < 100);
+    }
+
+    [Fact]
+    public void HealthyCooldown_CostsNothing()
+    {
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            cooldownRecent: 21, cooldownBaseline: 22), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "cooldown");
+        Assert.Equal(100, score.Value);
+    }
+
+    [Fact]
+    public void SluggishCooldown_CorroboratesPastePattern()
+    {
+        // A fast soak alone hints paste; a sluggish cooldown on top firms it up.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 66) },
+            baseline: new[] { HeavyBase(delta: 60) },
+            soakRecent: 30, soakBaseline: 20,
+            cooldownRecent: 12, cooldownBaseline: 22), Fmt);
+
+        Assert.Equal(PatternHint.LooksLikePaste, score.Hint);
+    }
+
+    // ------------------------------------------------------------------ fan undershoot
+
+    [Fact]
+    public void FanRunningWellBelowBaseline_HintsCause_WithoutDoublePenalizing()
+    {
+        // Fans ~35% below the learned speed at the same load. Normalization already
+        // reflects the airflow in the number, so this adds a cause-hint at zero points.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 66, fan: 2700) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 4200) }), Fmt);
+
+        ScoreReason hint = score.Reasons.Single(r => r.Code == "fan-undershoot");
+        Assert.Equal(0, hint.PointsLost);
+        Assert.Contains("slower", hint.Text);
+    }
+
+    [Fact]
+    public void FanNearBaseline_NoUndershootHint()
+    {
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { Heavy(delta: 60, fan: 4000) },
+            baseline: new[] { HeavyBase(delta: 60, fan: 4200) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "fan-undershoot");
+    }
+
+    // ------------------------------------------------------------------ configurable limits
+
+    [Fact]
+    public void RaisedConcernLimit_SilencesTheChassisWarning()
+    {
+        // Averaging 98.5° under load: past the stock 98° concern, so normally penalized.
+        var recent = new[] { Heavy(delta: 60, tempAvg: 98.5, tempMax: 99) };
+        var baseline = new[] { HeavyBase(delta: 60) };
+
+        ComponentScore stock = ScoringEngine.Score(Input(recent: recent, baseline: baseline), Fmt);
+        Assert.Contains(stock.Reasons, r => r.Code == "beyond-chassis");
+
+        // An overclocker sets their ceiling to 101°: the same run is no longer flagged.
+        ComponentScore tuned = ScoringEngine.Score(Input(recent: recent, baseline: baseline, concernOverrideC: 101), Fmt);
+        Assert.DoesNotContain(tuned.Reasons, r => r.Code == "beyond-chassis");
+        Assert.True(tuned.Value > stock.Value);
+    }
+
+    [Fact]
+    public void HeadroomWarningsOff_DropsTheNearLimitPenalty()
+    {
+        // Peaks within 2° of the 100° limit, no throttle event.
+        var recent = new[] { Heavy(delta: 60, tempAvg: 90, tempMax: 99) };
+        var baseline = new[] { HeavyBase(delta: 60) };
+
+        ComponentScore on = ScoringEngine.Score(Input(recent: recent, baseline: baseline), Fmt);
+        Assert.Contains(on.Reasons, r => r.Code == "headroom");
+
+        ComponentScore off = ScoringEngine.Score(Input(recent: recent, baseline: baseline, headroomWarnings: false), Fmt);
+        Assert.DoesNotContain(off.Reasons, r => r.Code == "headroom");
+        Assert.True(off.Value >= on.Value);
     }
 }

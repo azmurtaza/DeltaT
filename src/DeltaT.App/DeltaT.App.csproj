@@ -12,8 +12,8 @@
     <ApplicationIcon>Assets\deltat.ico</ApplicationIcon>
     <AssemblyTitle>DeltaT</AssemblyTitle>
     <Product>DeltaT</Product>
-    <Description>Your machine's thermal conscience</Description>
-    <Version>1.1.7</Version>
+    <Description>Your PC's thermal diagnostician</Description>
+    <Version>2.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

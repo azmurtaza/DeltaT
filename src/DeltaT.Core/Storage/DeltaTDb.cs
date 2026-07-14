@@ -257,5 +257,27 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 6)
+        {
+            // Minute/hour aggregates and baseline cells now carry package POWER (watts).
+            // Die-to-ambient thermal resistance is ΔT / P (°C per watt); comparing raw
+            // ΔT silently assumes power was constant, so an undervolt reads as "paste
+            // improved" and a heavier real workload at the same load% reads as "aging".
+            // Storing power per cell lets scoring compare thermal RESISTANCE like-for-like
+            // — the physically correct paste-health currency — and makes a deliberate
+            // power-limit / undervolt / overclock change stop masquerading as paste drift.
+            // Additive; legacy rows read as "no power data" and fall back to raw ΔT.
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE agg_minute ADD COLUMN power_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_minute ADD COLUMN power_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN power_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN power_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE baseline ADD COLUMN power_avg REAL;
+                PRAGMA user_version = 6;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }

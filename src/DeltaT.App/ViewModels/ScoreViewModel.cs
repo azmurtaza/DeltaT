@@ -63,9 +63,9 @@ public partial class ScoreViewModel : ObservableObject
         double c = fan.CorrectionC;
         if (Math.Abs(c) >= 1.0)
         {
-            return ($"Fan-normalized {c:+0.#;-0.#}° - averaged {fan.RecentRpm:0} rpm vs a {fan.BaselineRpm:0} rpm baseline.", true);
+            return ($"Fan-normalized {c:+0.#;-0.#}°, averaging {fan.RecentRpm:0} rpm against a {fan.BaselineRpm:0} rpm baseline.", true);
         }
 
-        return ($"Fans matched baseline ({fan.RecentRpm:0} rpm) - no airflow correction needed.", false);
+        return ($"Fans matched baseline ({fan.RecentRpm:0} rpm), no airflow correction needed.", false);
     }
 }

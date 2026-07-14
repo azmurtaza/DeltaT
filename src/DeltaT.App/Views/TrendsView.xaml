@@ -7,11 +7,12 @@
     <Grid Margin="22,16,22,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- selector row -->
+        <!-- selector row: component (left), range + compare (right) -->
         <Grid Grid.Row="0" Margin="2,0,2,12">
             <StackPanel Orientation="Horizontal">
                 <RadioButton x:Name="KindCpu" Style="{StaticResource Seg}" Content="CPU" GroupName="kind" IsChecked="True" Checked="OnKind0"/>
@@ -27,40 +28,75 @@
                              Command="{Binding SetRangeCommand}" CommandParameter="30d"/>
                 <RadioButton x:Name="RangeAll" Style="{StaticResource Seg}" Content="ALL" GroupName="range"
                              Command="{Binding SetRangeCommand}" CommandParameter="all"/>
+                <Rectangle Width="1" Fill="{StaticResource Brush.Stroke}" Margin="10,5"/>
+                <RadioButton x:Name="RangeCompare" Style="{StaticResource Seg}" Content="COMPARE" GroupName="range"
+                             Command="{Binding EnterCompareCommand}"/>
             </StackPanel>
         </Grid>
 
-        <!-- chart -->
-        <HeaderedContentControl Grid.Row="1" Style="{StaticResource Module}" Header="Thermal history">
+        <!-- compare sub-selector: which two periods to overlay (only in compare mode) -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="2,0,2,10"
+                    Visibility="{Binding Comparing, Converter={StaticResource BoolToVis}}">
+            <TextBlock Style="{StaticResource Text.Caption}" Text="RECENT VS" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <RadioButton Style="{StaticResource Seg}" Content="PRIOR 7D" GroupName="cmp"
+                         Command="{Binding SetComparePresetCommand}" CommandParameter="7d"/>
+            <RadioButton Style="{StaticResource Seg}" Content="PRIOR 30D" GroupName="cmp" IsChecked="True"
+                         Command="{Binding SetComparePresetCommand}" CommandParameter="30d"/>
+            <RadioButton Style="{StaticResource Seg}" Content="LAST YEAR" GroupName="cmp"
+                         Command="{Binding SetComparePresetCommand}" CommandParameter="season"/>
+        </StackPanel>
+
+        <!-- chart: thermal history OR load-response comparison -->
+        <HeaderedContentControl Grid.Row="2" Style="{StaticResource Module}" Header="{Binding ChartTitle}">
             <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <StackPanel Orientation="Horizontal" Margin="2,0,0,6">
-                    <Rectangle Width="14" Height="2" Fill="{StaticResource Brush.Accent}" VerticalAlignment="Center"/>
-                    <TextBlock Style="{StaticResource Text.Caption}" Text="COMPONENT" Margin="6,0,16,0"/>
-                    <Rectangle Width="14" Height="2" VerticalAlignment="Center">
-                        <Rectangle.Fill>
-                            <DrawingBrush TileMode="Tile" Viewport="0,0,6,2" ViewportUnits="Absolute">
-                                <DrawingBrush.Drawing>
-                                    <GeometryDrawing Brush="#6E5C4B" Geometry="M0,0 H3 V2 H0Z"/>
-                                </DrawingBrush.Drawing>
-                            </DrawingBrush>
-                        </Rectangle.Fill>
-                    </Rectangle>
-                    <TextBlock Style="{StaticResource Text.Caption}" Text="OUTSIDE" Margin="6,0,16,0"/>
-                    <TextBlock Style="{StaticResource Text.Caption}" Text="R REPASTE · F FINGERPRINT · T THROTTLE"/>
-                </StackPanel>
-                <controls:TimeSeriesChart Grid.Row="1"
-                                          Points="{Binding Points}"
-                                          AmbientPoints="{Binding AmbientPoints}"
-                                          Markers="{Binding Markers}"/>
+                <!-- normal thermal history -->
+                <Grid Visibility="{Binding Comparing, Converter={StaticResource InvBoolToVis}}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Margin="2,0,0,6">
+                        <Rectangle Width="14" Height="2" Fill="{StaticResource Brush.Accent}" VerticalAlignment="Center"/>
+                        <TextBlock Style="{StaticResource Text.Caption}" Text="COMPONENT" Margin="6,0,16,0"/>
+                        <Rectangle Width="14" Height="2" VerticalAlignment="Center">
+                            <Rectangle.Fill>
+                                <DrawingBrush TileMode="Tile" Viewport="0,0,6,2" ViewportUnits="Absolute">
+                                    <DrawingBrush.Drawing>
+                                        <GeometryDrawing Brush="#6E5C4B" Geometry="M0,0 H3 V2 H0Z"/>
+                                    </DrawingBrush.Drawing>
+                                </DrawingBrush>
+                            </Rectangle.Fill>
+                        </Rectangle>
+                        <TextBlock Style="{StaticResource Text.Caption}" Text="OUTSIDE" Margin="6,0,16,0"/>
+                        <TextBlock Style="{StaticResource Text.Caption}" Text="R REPASTE · F FINGERPRINT · T THROTTLE"/>
+                    </StackPanel>
+                    <controls:TimeSeriesChart Grid.Row="1"
+                                              Points="{Binding Points}"
+                                              AmbientPoints="{Binding AmbientPoints}"
+                                              Markers="{Binding Markers}"/>
+                </Grid>
+
+                <!-- season-on-season load-response overlay -->
+                <Grid Visibility="{Binding Comparing, Converter={StaticResource BoolToVis}}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <controls:LoadResponseChart Grid.Row="0"
+                                                Series="{Binding ResponseSeries}"
+                                                RecentLabel="{Binding RecentLabel}"
+                                                EarlierLabel="{Binding EarlierLabel}"/>
+                    <Border Grid.Row="1" BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,1,0,0"
+                            Margin="0,10,0,0" Padding="2,10,2,0">
+                        <TextBlock Style="{StaticResource Text.Dim}" FontSize="12.5" LineHeight="19"
+                                   TextWrapping="Wrap" Text="{Binding CompareVerdict}"/>
+                    </Border>
+                </Grid>
             </Grid>
         </HeaderedContentControl>
 
-        <!-- stats rail -->
-        <ItemsControl Grid.Row="2" ItemsSource="{Binding Stats}" Margin="0,14,0,0">
+        <!-- stats rail (history stats, or per-bucket drift in compare mode) -->
+        <ItemsControl Grid.Row="3" ItemsSource="{Binding Stats}" Margin="0,14,0,0">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <UniformGrid Rows="1"/>

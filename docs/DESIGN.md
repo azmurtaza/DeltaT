@@ -123,6 +123,10 @@ Overline tracking is done with the `ui:Tracking.Text` attached property
 - **Hazard ribbon:** the `/////` stripe motif (`Brush.Hazard`, ~42×7px)
   ends every module header rule and follows the wordmark in the title bar.
   The design signature.
+- **Wordmark:** the machined ΔT (gradient delta + nested DIN T) is defined
+  once as the `Brand.Mark` ContentControl style in `Themes/DeltaT.xaml`;
+  every window chrome bar uses it (wrap in a Viewbox to scale, as the
+  onboarding hero does). Never retype it as text runs.
 - **LEDs:** status dots are 6×6 squares, hard-cornered.
 - No gradients on surfaces. The only gradients in the app are *data*: the
   gauge arc sweep and the brand delta.
@@ -153,6 +157,11 @@ Overline tracking is done with the `ui:Tracking.Text` attached property
   (last 15% tinted red). The value arc sweeps as a thermal gradient — steel
   at the start of scale, the current heat color at the tip. Gaming-gauge
   flair, but the gradient is data.
+- **SegmentBar:** the dial's linear sibling — a segmented LED tick meter
+  (console meter-bridge language) used by the dashboard's health matrix and
+  the calibration readout. Ticks light to the value in the verdict color,
+  brightening toward the tip exactly like the dial sweep; unlit ticks stay
+  dark track marks so an empty meter still reads as a meter.
 - **Sparkline:** warm-slate hairline trace; the newest point carries an
   ember dot (the "live" cursor).
 - **TimeSeriesChart:** hairline horizontal grid, mono axis labels, min/max
@@ -167,8 +176,12 @@ Overline tracking is done with the `ui:Tracking.Text` attached property
 
 ## 6. Screens
 
-1. **Dashboard** — verdict hero (paste diagnosis + CPU/GPU score dials) over
-   the live telemetry ledger; remark ticker pinned at the bottom.
+1. **Dashboard** — the instrument deck: verdict + likely-cause diagnosis on
+   the left, two OVERALL health dials, and beneath them the subsystem health
+   matrix (PASTE / AIRFLOW / FANS / MOUNT / HEADROOM scored 0–100 per
+   component on SegmentBar meters, plus a POWER state column). While
+   calibrating, the baseline confidence leads as a big ember numeral with its
+   own meter. Live telemetry ledger below; remark ticker pinned at the bottom.
 2. **Trends** — full-bleed chart module, channel/range segments, keyline
    stat strip.
 3. **Remarks** — field log list, severity LEDs, mono timestamps.

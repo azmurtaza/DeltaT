@@ -12,62 +12,206 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ================= hero: paste diagnosis + score dials -->
-        <controls:TechBorder Grid.Row="0" Style="{StaticResource Card}" Padding="22,16,22,18" Margin="0,0,0,14"
+        <!-- ================= hero: thermal diagnosis + overall dials + health matrix -->
+        <controls:TechBorder Grid.Row="0" Style="{StaticResource Card}" Padding="22,16,22,16" Margin="0,0,0,14"
                              CutTopRight="14" Brackets="True" BracketBrush="{StaticResource Brush.Bracket}" BracketLength="16">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,28,0">
-                    <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Paste diagnosis"/>
-                    <TextBlock Style="{StaticResource Text.Label}" Text="{Binding ScoringBasis}" Margin="0,5,0,0"/>
-                    <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,9,0,7"/>
-                    <TextBlock Style="{StaticResource Text.Dim}" Text="{Binding VerdictDetail}"
-                               FontSize="12.5" LineHeight="19"/>
-                    <TextBlock Text="{Binding FanNote}" Margin="0,8,0,0" TextWrapping="Wrap">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Label}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding FanNote}" Value="">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding FanNoteActive}" Value="True">
-                                        <Setter Property="Foreground" Value="{StaticResource Brush.Accent}"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                    <Button Style="{StaticResource Button.Link}" HorizontalAlignment="Left" Margin="-2,12,0,0"
-                            Click="OnRunFingerprint"
-                            ToolTip="25 s idle + 2.5 min full CPU or GPU load - a repeatable thermal measurement">
-                        <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11"
-                                   Text="▸ RUN 3-MINUTE FINGERPRINT"/>
-                    </Button>
-                </StackPanel>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <controls:ScoreDial Grid.Column="1" Width="150" Height="150" Margin="10,2"
-                                    Score="{Binding CpuScore.Value}"
-                                    Calibrating="{Binding CpuScore.Calibrating}"
-                                    Provisional="{Binding CpuScore.Provisional}"
-                                    Progress="{Binding CpuScore.Progress}"
-                                    Verdict="{Binding CpuScore.VerdictShort}"
-                                    Label="CPU"
-                                    ToolTip="{Binding CpuScore.TopReason}"
-                                    ToolTipService.IsEnabled="{Binding CpuScore.HasReason}"/>
-                <controls:ScoreDial Grid.Column="2" Width="150" Height="150" Margin="10,2,0,2"
-                                    Score="{Binding GpuScore.Value}"
-                                    Calibrating="{Binding GpuScore.Calibrating}"
-                                    Provisional="{Binding GpuScore.Provisional}"
-                                    Progress="{Binding GpuScore.Progress}"
-                                    Verdict="{Binding GpuScore.VerdictShort}"
-                                    Label="GPU"
-                                    ToolTip="{Binding GpuScore.TopReason}"
-                                    ToolTipService.IsEnabled="{Binding GpuScore.HasReason}"/>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,28,0">
+                        <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Thermal diagnosis"/>
+                        <TextBlock Style="{StaticResource Text.Label}" Text="{Binding ScoringBasis}" Margin="0,5,0,0"/>
+                        <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,9,0,7"/>
+                        <TextBlock Text="{Binding VerdictDetail}" FontSize="12.5" LineHeight="19">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Dim}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding VerdictDetail}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
+                        <!-- the verdict's numbers as instrument readouts; each keeps its
+                             full sentence as the tooltip -->
+                        <ItemsControl ItemsSource="{Binding HeroStats}" Focusable="False" Margin="0,10,0,0"
+                                      Visibility="{Binding HeroCalibrating, Converter={StaticResource InvBoolToVis}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
+                                            Padding="14,1,0,0" Margin="0,0,22,0" Background="Transparent"
+                                            ToolTip="{Binding Detail}" ToolTipService.ShowDuration="20000">
+                                        <StackPanel>
+                                            <TextBlock FontFamily="{StaticResource Font.DisplayCond}" FontSize="23" FontWeight="Bold"
+                                                       Foreground="{Binding Brush}" Text="{Binding Value}"/>
+                                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0"
+                                                       ui:Tracking.Text="{Binding Caption}"/>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- while nothing is scored, the calibration confidence IS the reading:
+                             a big numeral and a fill bar, not a percentage buried in prose -->
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,2"
+                                    Visibility="{Binding HeroCalibrating, Converter={StaticResource BoolToVis}}">
+                            <TextBlock FontFamily="{StaticResource Font.DisplayCond}" FontSize="40" FontWeight="Bold"
+                                       Foreground="{StaticResource Brush.Accent}" VerticalAlignment="Center"
+                                       Text="{Binding CalibrationPercent}"/>
+                            <StackPanel VerticalAlignment="Center" Margin="16,2,0,0" Width="250">
+                                <TextBlock Style="{StaticResource Text.Caption}" ui:Tracking.Text="BASELINE CONFIDENCE"/>
+                                <controls:SegmentBar Height="8" Margin="0,7,0,0"
+                                                     Tint="{StaticResource Brush.Accent}"
+                                                     Value="{Binding CalibrationPercentValue, Mode=OneWay}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- likely-cause chip: what's actually driving the temperature, not just how healthy -->
+                        <Border Margin="0,12,0,0" Padding="12,8,12,9" Background="{StaticResource Brush.PanelHigh}"
+                                BorderBrush="{Binding DiagnosisColor}" BorderThickness="2,0,0,0"
+                                Visibility="{Binding HasDiagnosis, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="10.5" FontWeight="SemiBold"
+                                           Foreground="{Binding DiagnosisColor}" Text="{Binding DiagnosisHeadline}"/>
+                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="18"
+                                           Margin="0,5,0,0" TextWrapping="Wrap" Text="{Binding DiagnosisText}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- the health instrument cluster: the two dials with their action
+                         key beneath them — the controlled reading that feeds these
+                         numbers lives with the numbers, not off in the prose column -->
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Style="{StaticResource Text.OverlineFaint}" HorizontalAlignment="Center"
+                                   ui:Tracking.Text="Overall health"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <controls:ScoreDial Width="142" Height="142" Margin="8,2"
+                                                Score="{Binding CpuScore.Value}"
+                                                Calibrating="{Binding CpuScore.Calibrating}"
+                                                Provisional="{Binding CpuScore.Provisional}"
+                                                Progress="{Binding CpuScore.Progress}"
+                                                Verdict="{Binding CpuScore.VerdictShort}"
+                                                Label="CPU"
+                                                ToolTip="{Binding CpuScore.TopReason}"
+                                                ToolTipService.IsEnabled="{Binding CpuScore.HasReason}"/>
+                            <controls:ScoreDial Width="142" Height="142" Margin="8,2,0,2"
+                                                Score="{Binding GpuScore.Value}"
+                                                Calibrating="{Binding GpuScore.Calibrating}"
+                                                Provisional="{Binding GpuScore.Provisional}"
+                                                Progress="{Binding GpuScore.Progress}"
+                                                Verdict="{Binding GpuScore.VerdictShort}"
+                                                Label="GPU"
+                                                ToolTip="{Binding GpuScore.TopReason}"
+                                                ToolTipService.IsEnabled="{Binding GpuScore.HasReason}"/>
+                        </StackPanel>
+                        <Button Margin="8,12,0,0" Padding="15,8" HorizontalAlignment="Stretch"
+                                Click="OnRunFingerprint"
+                                ToolTip="A controlled reading: idle settle, then full load on the CPU, the GPU, or both back to back. Repeatable month over month.">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource Button.Ghost}">
+                                    <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentEdge}"/>
+                                    <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="M 0,0 L 7.5,4.5 L 0,9 Z" Fill="{StaticResource Brush.Accent}"
+                                      VerticalAlignment="Center" Margin="0,1,10,0"/>
+                                <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="11" FontWeight="SemiBold"
+                                           ui:Tracking.Text="RUN FINGERPRINT TEST"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ===== the health matrix: every subsystem the engine judges, per component.
+                     A healthy aspect reads as a visible 100, an unmeasurable one as dashes. -->
+                <Grid Grid.Row="1" Margin="0,14,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <DockPanel Grid.Row="0" Margin="0,0,0,10">
+                        <TextBlock DockPanel.Dock="Left" Style="{StaticResource Text.OverlineFaint}"
+                                   ui:Tracking.Text="Health by subsystem · 100 = on baseline" Margin="0,0,10,0"/>
+                        <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}" VerticalAlignment="Center"/>
+                    </DockPanel>
+
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <Border Height="17"/>
+                            <Border Height="34">
+                                <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
+                                           Text="CPU" VerticalAlignment="Center"/>
+                            </Border>
+                            <Border Height="34">
+                                <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
+                                           Text="GPU" VerticalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+
+                        <ItemsControl Grid.Column="1" ItemsSource="{Binding AspectColumns}" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <UniformGrid Rows="1"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,0,20,0">
+                                        <Border Height="17">
+                                            <TextBlock Style="{StaticResource Text.Caption}" VerticalAlignment="Top"
+                                                       ui:Tracking.Text="{Binding Label}"/>
+                                        </Border>
+                                        <Grid Height="34" Background="Transparent" ToolTip="{Binding Cpu.Detail}">
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock FontFamily="{StaticResource Font.DisplayCond}" FontSize="17" FontWeight="Bold"
+                                                           Foreground="{Binding Cpu.ValueBrush}" Text="{Binding Cpu.Value}"/>
+                                                <controls:SegmentBar Height="7" Margin="0,4,0,0"
+                                                                     Tint="{Binding Cpu.ValueBrush}"
+                                                                     Value="{Binding Cpu.BarValue, Mode=OneWay}"
+                                                                     Visibility="{Binding Cpu.HasBar, Converter={StaticResource BoolToVis}}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <Grid Height="34" Background="Transparent" ToolTip="{Binding Gpu.Detail}">
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock FontFamily="{StaticResource Font.DisplayCond}" FontSize="17" FontWeight="Bold"
+                                                           Foreground="{Binding Gpu.ValueBrush}" Text="{Binding Gpu.Value}"/>
+                                                <controls:SegmentBar Height="7" Margin="0,4,0,0"
+                                                                     Tint="{Binding Gpu.ValueBrush}"
+                                                                     Value="{Binding Gpu.BarValue, Mode=OneWay}"
+                                                                     Visibility="{Binding Gpu.HasBar, Converter={StaticResource BoolToVis}}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </Grid>
             </Grid>
         </controls:TechBorder>
 
@@ -121,12 +265,12 @@
                                TextAlignment="Right"/>
                 </Grid>
 
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0" Margin="0,0,-8,0">
                     <ItemsControl ItemsSource="{Binding Cards}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1"
-                                        Padding="0,12,0,11">
+                                        Padding="0,8,0,7">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="30"/>
@@ -162,9 +306,9 @@
                                                 <RowDefinition Height="*"/>
                                                 <RowDefinition Height="Auto"/>
                                             </Grid.RowDefinitions>
-                                            <controls:Sparkline Grid.Row="0" Height="34" VerticalAlignment="Bottom"
+                                            <controls:Sparkline Grid.Row="0" Height="30" VerticalAlignment="Bottom"
                                                                 Values="{Binding Spark}"/>
-                                            <TextBlock Grid.Row="1" Style="{StaticResource Text.Caption}" Margin="0,7,0,0"
+                                            <TextBlock Grid.Row="1" Style="{StaticResource Text.Caption}" Margin="0,6,0,0"
                                                        Text="{Binding MetaText}" TextTrimming="CharacterEllipsis"/>
                                         </Grid>
 
@@ -193,15 +337,25 @@
             </Grid>
         </HeaderedContentControl>
 
-        <!-- ================= remarks ticker -->
-        <DockPanel Grid.Row="3" Margin="2,13,2,0">
-            <Rectangle DockPanel.Dock="Left" Width="6" Height="6" RadiusX="1" RadiusY="1"
-                       VerticalAlignment="Center" Fill="{Binding RemarkDot}"/>
-            <TextBlock DockPanel.Dock="Right" Margin="14,0,0,0" VerticalAlignment="Center"
-                       Style="{StaticResource Text.Caption}" Text="{Binding LatestRemarkTime}"/>
-            <TextBlock Margin="11,0,0,0" VerticalAlignment="Center"
-                       Style="{StaticResource Text.Dim}" FontSize="12.5"
-                       Text="{Binding LatestRemark}" TextTrimming="CharacterEllipsis"/>
-        </DockPanel>
+        <!-- ================= latest remark: an instrument event line, not loose text.
+             Severity LED + tag on a panel strip; the full feed lives on the Remarks tab. -->
+        <controls:TechBorder Grid.Row="3" Margin="0,12,0,0" Padding="12,7,12,7" CutTopRight="8"
+                             Background="{StaticResource Brush.Panel}"
+                             BorderBrush="{StaticResource Brush.Stroke}" BorderThickness="1">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Rectangle Width="6" Height="6" VerticalAlignment="Center" Fill="{Binding RemarkDot}"/>
+                    <TextBlock Margin="9,0,0,0" VerticalAlignment="Center" FontFamily="{StaticResource Font.Mono}"
+                               FontSize="9.5" FontWeight="SemiBold" Width="76"
+                               Foreground="{Binding RemarkDot}" ui:Tracking.Text="{Binding LatestRemarkTag}"/>
+                    <Rectangle Width="1" Fill="{StaticResource Brush.StrokeSoft}" Margin="2,1,12,1"/>
+                </StackPanel>
+                <TextBlock DockPanel.Dock="Right" Margin="14,0,0,0" VerticalAlignment="Center"
+                           Style="{StaticResource Text.Caption}" Text="{Binding LatestRemarkTime}"/>
+                <TextBlock VerticalAlignment="Center"
+                           Style="{StaticResource Text.Dim}" FontSize="12.5"
+                           Text="{Binding LatestRemark}" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </controls:TechBorder>
     </Grid>
 </UserControl>

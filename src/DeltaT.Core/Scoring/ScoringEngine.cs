@@ -2,7 +2,8 @@ using DeltaT.Core.Monitoring;
 
 namespace DeltaT.Core.Scoring;
 
-/// <summary>Turns telemetry into a 0–100 paste-health score. Pure function of its
+/// <summary>Turns telemetry into a 0–100 overall thermal-health score (the diagnosis
+/// and per-aspect readout say WHY). Pure function of its
 /// input — no clocks, no I/O — so every rule here is unit-testable.
 ///
 /// The philosophy: absolute temperatures are weather; *changes against this
@@ -30,16 +31,45 @@ public static class ScoringEngine
     public const double MaxThrottlePenalty = 25;
     public const double ThrottlePointsPerDailyEvent = 12;
     public const double MaxSoakPenalty = 15;
+    public const double MaxCooldownPenalty = 12;
     public const double MaxAbsolutePenalty = 12;
+
+    // Power (source-side) normalization. Die-to-ambient rise scales with dissipated
+    // power (ΔT ≈ P × thermal-resistance), so comparing a rise learned at one wattage
+    // against a rise measured at another silently blames the paste for a power change.
+    // Scaling the recent rise by (baseline W / recent W) recovers the resistance — the
+    // paste-only quantity — so an undervolt, a raised power limit, or a heavier real
+    // workload at the same load% stops masquerading as paste drift.
+    /// <summary>Power within ±8% of baseline is normal run-to-run variance — no correction.</summary>
+    public const double PowerRatioDeadband = 0.08;
+
+    /// <summary>A power ratio outside this band implies &gt;2× or &lt;0.5× dissipation — real
+    /// hardware rarely swings that far, so treat it as a sensor glitch and clamp before it
+    /// can move the score. Within the band, a genuine undervolt/overclock is fully corrected
+    /// (no half-applied fix that would leave a false penalty).</summary>
+    public const double PowerRatioClampLo = 0.5;
+    public const double PowerRatioClampHi = 2.0;
+
+    /// <summary>Final backstop on the °C a cell's rise may be shifted by power normalization,
+    /// after the ratio clamp — a large but not unbounded correction for a big power swing.</summary>
+    public const double MaxPowerCorrectionC = 20;
+
+    /// <summary>Below this wattage a "power reading" is idle/noise, not a load the paste
+    /// is meaningfully conducting — don't normalize against it.</summary>
+    public const double MinMeaningfulPowerW = 5;
+
+    /// <summary>Recent cooldown rate this fraction of baseline (or slower) is a real
+    /// slowdown worth penalizing — degraded paste sheds heat sluggishly.</summary>
+    public const double CooldownSlowdownRatio = 0.85;
 
     // Hotspot-to-edge gap under load. Different GPU models run very different
     // natural gaps (8–15 °C is common, some run wider by design), so the PRIMARY
     // judgement is drift against this card's own learned gap; the absolute
     // thresholds only backstop paste that was already failing when DeltaT arrived
     // (a baseline learned on a bad mount would bless its gap as "normal").
-    public const double MaxHotspotGapPenalty = 12;
+    public const double MaxHotspotGapPenalty = 16;
     public const double HotspotDriftDeadbandC = 3;
-    public const double HotspotDriftPointsPerDegree = 1.8;
+    public const double HotspotDriftPointsPerDegree = 2.2;
     public const double HotspotGapNoticeC = 20;
     public const double HotspotGapPenaltyC = 24;
 
@@ -93,8 +123,15 @@ public static class ScoringEngine
         // 1) Ambient-corrected delta vs baseline, load-bucket by load-bucket,
         //    fan-normalized so airflow overrides can't masquerade as paste health.
         //    This also decides whether there's anything to put a number on yet.
-        (double? weightedExcess, double? heavyExcess, double? idleExcess, bool broadExcess, bool usedAdjacentBand, FanNormalization? fanNorm)
-            = ComputeExcess(input);
+        ExcessResult ex = ComputeExcess(input);
+        double? weightedExcess = ex.Weighted;
+        double? heavyExcess = ex.Heavy;
+        double? idleExcess = ex.Idle;
+        bool broadExcess = ex.Broad;
+        bool usedAdjacentBand = ex.Adjacent;
+        FanNormalization? fanNorm = ex.Fan;
+        PowerNormalization? powerNorm = ex.Power;
+        bool fanUndershoot = ex.FanUndershoot;
 
         // Before the baseline locks, DeltaT shows a provisional number only once the
         // estimate is genuinely data-backed: a real like-for-like comparison exists AND
@@ -119,7 +156,7 @@ public static class ScoringEngine
         // number — it tells the user why the number deserves a grain of salt.
         if (input.BaselineStale)
             reasons.Add(new ScoreReason("baseline-stale",
-                $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since - a lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
+                $"This baseline is {DescribeDormancy(input.DormantDays)} old and unverified since. A lot can change while DeltaT is off (dust, a moved fan, a cleaning). Recalibrate for a score you can trust.",
                 0));
 
         if (weightedExcess is { } excess)
@@ -135,25 +172,40 @@ public static class ScoringEngine
             else if (excess < -1.5)
             {
                 reasons.Add(new ScoreReason("delta-cooler",
-                    $"Running {-excess:0.#} °C cooler than baseline - paste is doing great.", 0));
+                    $"Running {-excess:0.#} °C cooler than baseline. The paste is doing great.", 0));
             }
             else
             {
                 reasons.Add(new ScoreReason("delta-on-baseline", "Temperatures sit on baseline at comparable load and weather.", 0));
             }
 
+            if (powerNorm is { } pn)
+            {
+                reasons.Add(new ScoreReason("power-normalized", pn.RecentW > pn.BaselineW
+                    ? $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline. More power means a hotter die for reasons that aren't the paste, so the comparison was corrected by {pn.CorrectionC:0.#} °C. Same-wattage, the paste is judged fairly."
+                    : $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline. Less power (an undervolt or lower limit) cools the die on its own, so the comparison was corrected by +{pn.CorrectionC:0.#} °C rather than credited to the paste.",
+                    0));
+            }
+
             if (fanNorm is { } fn)
             {
                 reasons.Add(new ScoreReason("fan-normalized", fn.CorrectionC > 0
-                    ? $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline - the extra airflow flatters the readings, so the comparison was corrected by +{fn.CorrectionC:0.#} °C."
-                    : $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline - quieter fans inflate the readings, so the comparison was corrected by {fn.CorrectionC:0.#} °C.",
+                    ? $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline. The extra airflow flatters the readings, so the comparison was corrected by +{fn.CorrectionC:0.#} °C."
+                    : $"Fans averaged {fn.RecentRpm:0} rpm against a {fn.BaselineRpm:0} rpm baseline. Quieter fans inflate the readings, so the comparison was corrected by {fn.CorrectionC:0.#} °C.",
+                    0));
+            }
+
+            if (fanUndershoot && ex.FanRecentMean is { } fanNow && ex.FanBaselineMean is { } fanWas)
+            {
+                reasons.Add(new ScoreReason("fan-undershoot",
+                    $"Fans are running about {(1 - fanNow / fanWas) * 100:0}% slower than this machine's baseline at the same load ({fanNow:0} vs {fanWas:0} rpm). The score already accounts for the airflow, but if you didn't set a quieter profile, a fan that can't reach its old speed points at a failing fan or a clogged intake worth checking.",
                     0));
             }
         }
         else
         {
             reasons.Add(new ScoreReason("delta-no-data",
-                "Not enough recent load to compare against baseline - run something demanding (or the fingerprint test) for a sharper score.", 0));
+                "Not enough recent load to compare against baseline. Run something demanding (or the fingerprint test) for a sharper score.", 0));
         }
 
         // 2) Thermal throttling — the paste failing at its actual job.
@@ -183,11 +235,30 @@ public static class ScoringEngine
             }
         }
 
+        // 3b) Cooldown rate: the same resistance that slows heat IN slows heat OUT, so
+        // degraded paste also sheds heat sluggishly when a load ends. This is the opposite
+        // edge of the soak signal and shows up whenever a game or render finishes, so a
+        // machine used in long steady sessions still yields it. Slower-than-baseline = worse.
+        if (input.CooldownRateRecent is { } coolNow && input.CooldownRateBaseline is { } coolBase && coolBase > 1)
+        {
+            double ratio = coolNow / coolBase;
+            if (ratio < CooldownSlowdownRatio)
+            {
+                double p = Math.Min(MaxCooldownPenalty, (1.0 - ratio) * 40);
+                penalty += p;
+                reasons.Add(new ScoreReason("cooldown",
+                    $"Sheds heat {(1 - ratio) * 100:0}% slower than baseline when load drops ({coolNow:0.#} vs {coolBase:0.#} °C/min). Heat lingering in the die is the same resistance that makes paste run hot.", p));
+            }
+        }
+
         // 4) Absolute sanity vs silicon limit and chassis norms.
         penalty += AddAbsoluteObservations(input, reasons, fmtTemp, calibrating: false);
 
         int score = (int)Math.Round(Math.Clamp(100 - penalty, 0, 100));
-        PatternHint hint = InferPattern(input, heavyExcess, idleExcess, broadExcess);
+        PatternHint hint = InferPattern(input, heavyExcess, idleExcess, broadExcess, fanUndershoot);
+        DiagnosisInputs evidence = GatherDiagnosisInputs(input, ex, weightedExcess, heavyExcess, idleExcess, broadExcess, fanUndershoot, powerNorm);
+        ThermalDiagnosis diagnosis = ThermalDiagnostician.Diagnose(evidence);
+        IReadOnlyList<AspectHealth> aspects = ThermalDiagnostician.AssessAspects(evidence);
 
         // A locked score is final; an unlocked one is a provisional estimate that
         // still carries its calibration confidence so the UI can show the band.
@@ -198,7 +269,35 @@ public static class ScoringEngine
             reasons, hint,
             locked ? "" : input.CalibrationConstraint,
             Provisional: !locked)
-        { Fan = fanNorm };
+        { Fan = fanNorm, Power = powerNorm, Diagnosis = diagnosis, Aspects = aspects, ExcessC = weightedExcess };
+    }
+
+    /// <summary>Gather the evidence the scoring pass already computed for the diagnosis
+    /// and the per-aspect health readout, so both judge from the same facts.</summary>
+    private static DiagnosisInputs GatherDiagnosisInputs(
+        ScoreInput input, ExcessResult ex, double? weightedExcess, double? heavyExcess,
+        double? idleExcess, bool broadExcess, bool fanUndershoot, PowerNormalization? powerNorm)
+    {
+        (double? gap, double? baseGap) = HotspotGap(input);
+
+        var heavyRows = input.Recent.Where(r => r.Bucket is LoadBucket.Heavy or LoadBucket.Max && r.Minutes >= 5).ToList();
+        double? heavyAvg = heavyRows.Count > 0 ? heavyRows.Average(r => r.TempAvg) : null;
+        double? heavyMax = heavyRows.Count > 0 ? heavyRows.Max(r => r.TempMax) : null;
+        bool nearLimit = input.LimitC is { } lim && heavyMax is { } hm && hm >= lim - 2;
+        bool beyondNorm = input.Profile is { } prof && heavyAvg is { } ha && ha >= prof.SustainedNormC;
+
+        double? fanRatio = ex.FanRecentMean is { } fr && ex.FanBaselineMean is { } fb && fb > 0 ? fr / fb : null;
+        double? soakRatio = input.SoakRateRecent is { } sr && input.SoakRateBaseline is { } sb && sb > 1 ? sr / sb : null;
+        double? coolRatio = input.CooldownRateRecent is { } cr && input.CooldownRateBaseline is { } cb && cb > 1 ? cr / cb : null;
+        double? powerRatio = ex.PowerRecentMean is { } pw && ex.PowerBaselineMean is { } pb && pb >= MinMeaningfulPowerW
+            ? pw / pb : null;
+
+        return new DiagnosisInputs(
+            input.Kind, weightedExcess, heavyExcess, idleExcess, broadExcess,
+            soakRatio, coolRatio, fanUndershoot, fanRatio,
+            powerNorm?.CorrectionC ?? 0, gap, baseGap,
+            input.ThrottleEvents, input.RecentWindowHours, nearLimit, beyondNorm,
+            powerRatio);
     }
 
     /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>
@@ -212,13 +311,17 @@ public static class ScoringEngine
     /// <summary>Weighted rpm context behind a fan-normalized comparison, for the reason line.</summary>
     public sealed record FanNormalization(double RecentRpm, double BaselineRpm, double CorrectionC);
 
-    private static (double? Weighted, double? Heavy, double? Idle, bool Broad, bool Adjacent, FanNormalization? Fan) ComputeExcess(ScoreInput input)
+    /// <summary>Weighted wattage context behind a power-normalized comparison, for the reason line.</summary>
+    public sealed record PowerNormalization(double RecentW, double BaselineW, double CorrectionC);
+
+    private static ExcessResult ComputeExcess(ScoreInput input)
     {
         double sumWeighted = 0, sumWeights = 0;
         double? heavyExcess = null, idleExcess = null;
         int bucketsInExcess = 0, bucketsCompared = 0;
         bool usedAdjacent = false;
         double fanCorrWeighted = 0, fanRecentWeighted = 0, fanBaseWeighted = 0, fanWeights = 0;
+        double powerCorrWeighted = 0, powerRecentWeighted = 0, powerBaseWeighted = 0, powerWeights = 0;
 
         foreach (LoadBucket bucket in new[] { LoadBucket.Max, LoadBucket.Heavy, LoadBucket.Medium, LoadBucket.Light, LoadBucket.Idle })
         {
@@ -243,7 +346,28 @@ public static class ScoringEngine
                          * Math.Min(1.0, r.Minutes / 60.0 + 0.5); // thin data counts a bit less
 
                 double delta = r.DeltaAvg!.Value;
-                double correction = 0;
+
+                // Source-side normalization: express the recent rise at BASELINE power.
+                // ΔT ≈ P × thermal-resistance, so scaling by (baseline W / recent W)
+                // recovers the resistance — the paste-only quantity. A power-limit,
+                // undervolt, overclock, or heavier real workload at the same load% moves
+                // the die temperature for reasons that aren't the paste; this removes it.
+                double powerCorrection = 0;
+                if (delta > 0
+                    && r.PowerAvg is { } recentPower && baseline.PowerAvg is { } basePower
+                    && recentPower >= MinMeaningfulPowerW && basePower >= MinMeaningfulPowerW)
+                {
+                    double pratio = Math.Clamp(basePower / recentPower, PowerRatioClampLo, PowerRatioClampHi);
+                    if (Math.Abs(pratio - 1) >= PowerRatioDeadband)
+                        powerCorrection = Math.Clamp(delta * pratio - delta, -MaxPowerCorrectionC, MaxPowerCorrectionC);
+                    powerRecentWeighted += recentPower * w;
+                    powerBaseWeighted += basePower * w;
+                    powerWeights += w;
+                }
+
+                // Sink-side normalization: fan/airflow, applied on the power-normalized rise.
+                double fanBase = delta + powerCorrection;
+                double fanCorrection = 0;
                 if (delta > 0
                     && r.FanAvg is { } recentFan && baseline.FanAvg is { } baseFan
                     && recentFan >= MinMeaningfulFanRpm && baseFan >= MinMeaningfulFanRpm)
@@ -251,13 +375,15 @@ public static class ScoringEngine
                     double ratio = recentFan / baseFan;
                     if (Math.Abs(ratio - 1) >= FanRatioDeadband)
                     {
-                        double normalized = delta * Math.Pow(ratio, FanNormalizationExponent);
-                        correction = Math.Clamp(normalized - delta, -MaxFanCorrectionC, MaxFanCorrectionC);
+                        double normalized = fanBase * Math.Pow(ratio, FanNormalizationExponent);
+                        fanCorrection = Math.Clamp(normalized - fanBase, -MaxFanCorrectionC, MaxFanCorrectionC);
                     }
                     fanRecentWeighted += recentFan * w;
                     fanBaseWeighted += baseFan * w;
                     fanWeights += w;
                 }
+
+                double correction = powerCorrection + fanCorrection;
 
                 // Same band → compare the rise directly. Different band → don't borrow the
                 // other band's rise (that's what inflates a cold-weather reading into false
@@ -273,7 +399,8 @@ public static class ScoringEngine
                 double excess = (sameBand is not null || baseline.TempAvg is not { } baseTemp || r.TempAvg <= 0)
                     ? delta + correction - baseline.DeltaAvg
                     : Math.Max(0, CrossBandExcess(r, baseline, baseTemp) + correction);
-                fanCorrWeighted += correction * w;
+                fanCorrWeighted += fanCorrection * w;
+                powerCorrWeighted += powerCorrection * w;
 
                 sumWeighted += excess * w;
                 sumWeights += w;
@@ -288,15 +415,40 @@ public static class ScoringEngine
         }
 
         if (sumWeights <= 0)
-            return (null, heavyExcess, idleExcess, false, usedAdjacent, null);
+            return new ExcessResult(null, heavyExcess, idleExcess, false, usedAdjacent, null, null, null, null, null, null);
 
         FanNormalization? fan = null;
         double corr = fanCorrWeighted / sumWeights;
         if (fanWeights > 0 && Math.Abs(corr) >= 1.0)
             fan = new FanNormalization(fanRecentWeighted / fanWeights, fanBaseWeighted / fanWeights, Math.Round(corr, 1));
 
+        PowerNormalization? power = null;
+        double pcorr = powerCorrWeighted / sumWeights;
+        if (powerWeights > 0 && Math.Abs(pcorr) >= 1.0)
+            power = new PowerNormalization(powerRecentWeighted / powerWeights, powerBaseWeighted / powerWeights, Math.Round(pcorr, 1));
+
+        double? fanRecentMean = fanWeights > 0 ? fanRecentWeighted / fanWeights : null;
+        double? fanBaseMean = fanWeights > 0 ? fanBaseWeighted / fanWeights : null;
+        double? powerRecentMean = powerWeights > 0 ? powerRecentWeighted / powerWeights : null;
+        double? powerBaseMean = powerWeights > 0 ? powerBaseWeighted / powerWeights : null;
+
         bool broad = bucketsCompared >= 3 && bucketsInExcess >= 3;
-        return (sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent, fan);
+        return new ExcessResult(sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent, fan, power, fanRecentMean, fanBaseMean, powerRecentMean, powerBaseMean);
+    }
+
+    private readonly record struct ExcessResult(
+        double? Weighted, double? Heavy, double? Idle, bool Broad, bool Adjacent,
+        FanNormalization? Fan, PowerNormalization? Power,
+        double? FanRecentMean, double? FanBaselineMean,
+        double? PowerRecentMean, double? PowerBaselineMean)
+    {
+        /// <summary>The fan is turning well below where this machine used to run it at the
+        /// same load — a hint at cause (failing/seizing fan, clogged intake, or a quieter
+        /// profile the user chose). Not itself a penalty: fan normalization already reflects
+        /// the airflow in the number, so scoring on it again would double-count.</summary>
+        public bool FanUndershoot =>
+            FanBaselineMean is { } b && b >= MinMeaningfulFanRpm
+            && FanRecentMean is { } r && r / b <= 0.80;
     }
 
     /// <summary>Nearest baseline cell in a *different* weather band for the same load
@@ -346,32 +498,35 @@ public static class ScoringEngine
 
         if (input.Profile is { } prof && heavyAvg is { } avg)
         {
-            if (avg >= prof.ConcernC)
+            // The concern threshold is user-overridable: a rig that runs hot by design
+            // (overclock, aggressive power limit) shouldn't be nagged by a stock number.
+            double concern = input.ConcernOverrideC ?? prof.ConcernC;
+            if (avg >= concern)
             {
                 double p = calibrating ? 0 : MaxAbsolutePenalty;
                 penalty += p;
                 reasons.Add(new ScoreReason("beyond-chassis",
-                    $"Averaging {fmtTemp(avg)} under heavy load - past the {fmtTemp(prof.ConcernC)} this chassis should ever sustain.", p));
+                    $"Averaging {fmtTemp(avg)} under heavy load, past the {fmtTemp(concern)} you've set as this machine's sustained ceiling.", p));
             }
-            else if (avg >= prof.SustainedNormC)
+            else if (avg >= prof.SustainedNormC && input.ConcernOverrideC is null)
             {
                 reasons.Add(new ScoreReason("chassis-norm",
                     $"Heavy-load average {fmtTemp(avg)} is warm but within what this chassis sustains by design ({fmtTemp(prof.SustainedNormC)}).", 0));
             }
         }
 
-        if (input.LimitC is { } limit && heavyMax is { } max && max >= limit - 2 && input.ThrottleEvents == 0)
+        if (input.HeadroomWarnings && input.LimitC is { } limit && heavyMax is { } max && max >= limit - 2 && input.ThrottleEvents == 0)
         {
             double p = calibrating ? 0 : 6;
             penalty += p;
             reasons.Add(new ScoreReason("headroom",
-                $"Peaks within 2 °C of the {fmtTemp(limit)} silicon limit - no headroom left.", p));
+                $"Peaks within 2 °C of the {fmtTemp(limit)} silicon limit, no headroom left.", p));
         }
 
         if (calibrating && input.ThrottleEvents > 0)
         {
             reasons.Add(new ScoreReason("throttle-early",
-                $"Already thermal-throttled {input.ThrottleEvents}× during calibration - expect a hard verdict once the baseline locks.", 0));
+                $"Already thermal-throttled {input.ThrottleEvents}× during calibration. Expect a hard verdict once the baseline locks.", 0));
         }
 
         penalty += AddHotspotGap(input, reasons, calibrating);
@@ -383,23 +538,32 @@ public static class ScoringEngine
     /// edge one hasn't crossed the paste. A widening gap against this card's OWN learned
     /// gap is the classic dried/pumped-out signature — often visible before the edge
     /// temperature moves at all. Loaded buckets only; idle gaps are noise.</summary>
-    private static double AddHotspotGap(ScoreInput input, List<ScoreReason> reasons, bool calibrating)
+    /// <summary>This machine's current loaded hotspot-to-edge gap and its own learned
+    /// healthy gap, shared by the hotspot penalty and the cause diagnosis.</summary>
+    private static (double? Gap, double? BaseGap) HotspotGap(ScoreInput input)
     {
         var rows = input.Recent
             .Where(r => r.Bucket is LoadBucket.Medium or LoadBucket.Heavy or LoadBucket.Max
                         && r.GapAvg is not null && r.Minutes >= 5)
             .ToList();
         if (rows.Count == 0)
-            return 0;
+            return (null, null);
         double gap = rows.Sum(r => r.GapAvg!.Value * r.Minutes) / rows.Sum(r => r.Minutes);
 
-        // Primary: drift vs the same loaded buckets of this machine's baseline.
         var baseRows = input.Baseline
             .Where(b => b.GapAvg is not null && rows.Any(r => r.Bucket == b.Bucket))
             .ToList();
         double? baseGap = baseRows.Count > 0
             ? baseRows.Sum(b => b.GapAvg!.Value * b.Minutes) / baseRows.Sum(b => b.Minutes)
             : null;
+        return (gap, baseGap);
+    }
+
+    private static double AddHotspotGap(ScoreInput input, List<ScoreReason> reasons, bool calibrating)
+    {
+        (double? gapMaybe, double? baseGap) = HotspotGap(input);
+        if (gapMaybe is not { } gap)
+            return 0;
 
         double driftPoints = 0;
         if (baseGap is { } bg && gap - bg > HotspotDriftDeadbandC)
@@ -416,27 +580,31 @@ public static class ScoringEngine
         if (p > 0 && driftPoints >= absPoints && baseGap is { } b1)
         {
             reasons.Add(new ScoreReason("hotspot-gap",
-                $"{label} hotspot gap widened to {gap:0.#}° from this card's own {b1:0.#}° baseline - heat is spreading less evenly than it used to. That drift is the paste, not the weather.", p));
+                $"{label} hotspot gap widened to {gap:0.#}° from this card's own {b1:0.#}° baseline. Heat is spreading less evenly than it used to. That drift is the paste, not the weather.", p));
         }
         else if (p > 0)
         {
             reasons.Add(new ScoreReason("hotspot-gap",
-                $"{label} hotspot runs {gap:0.#}° above the edge sensor under load - heat is pooling at one spot instead of crossing the paste.", p));
+                $"{label} hotspot runs {gap:0.#}° above the edge sensor under load. Heat is pooling at one spot instead of crossing the paste.", p));
         }
         else if (gap >= HotspotGapNoticeC && (baseGap is not { } b2 || gap - b2 > HotspotDriftDeadbandC))
         {
             reasons.Add(new ScoreReason("hotspot-gap",
-                $"{label} hotspot gap is {gap:0.#}° under load - wider than the usual healthy spread. Worth watching.", 0));
+                $"{label} hotspot gap is {gap:0.#}° under load, wider than the usual healthy spread. Worth watching.", 0));
         }
         return p;
     }
 
-    private static PatternHint InferPattern(ScoreInput input, double? heavyExcess, double? idleExcess, bool broadExcess)
+    private static PatternHint InferPattern(ScoreInput input, double? heavyExcess, double? idleExcess, bool broadExcess, bool fanUndershoot)
     {
         double pasteSignal = 0, dustSignal = 0;
 
         if (input.SoakRateRecent is { } s && input.SoakRateBaseline is { } b && b > 1 && s / b > 1.25)
             pasteSignal += 2;
+        // Sluggish cooldown is the falling-edge twin of a fast soak — the same paste
+        // resistance seen from the other side, so it corroborates a paste read.
+        if (input.CooldownRateRecent is { } cr && input.CooldownRateBaseline is { } cb && cb > 1 && cr / cb < 1 - (1 - CooldownSlowdownRatio))
+            pasteSignal += 1;
         if (input.ThrottleEvents >= 2)
             pasteSignal += 1;
         if (heavyExcess is { } he && (idleExcess is not { } ie || he - ie > 3))
@@ -444,6 +612,10 @@ public static class ScoringEngine
 
         if (broadExcess)
             dustSignal += 2;
+        // A fan that can no longer reach its old speed (or a clogged intake) is an
+        // airflow-side fault, which is the dust/airflow pattern, not the paste.
+        if (fanUndershoot)
+            dustSignal += 1;
         // Fan-speed corroboration when the machine exposes fans.
         var fansRecent = input.Recent.Where(r => r.FanAvg is not null).Select(r => r.FanAvg!.Value).ToList();
         var fansBase = input.Baseline.Where(bb => bb.FanAvg is not null).Select(bb => bb.FanAvg!.Value).ToList();

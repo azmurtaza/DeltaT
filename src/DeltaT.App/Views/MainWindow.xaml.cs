@@ -16,6 +16,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // The design height fits the whole dashboard without scrolling; on a smaller
+        // work area (1080p at high DPI scaling) shrink to fit rather than spill.
+        double usable = SystemParameters.WorkArea.Height - 16;
+        if (Height > usable)
+            Height = Math.Max(MinHeight, usable);
         Loaded += OnLoaded;
     }
 

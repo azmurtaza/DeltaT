@@ -193,6 +193,15 @@ public partial class App : Application
             await ShotTrends(0, "30d", "trends_cpu_30d");
             await ShotTrends(2, "24h", "trends_ssd_24h");
 
+            // Compare mode: overlay the last 7 days against the prior 7 (the seed spans 30).
+            win.SelectTrends(0, "7d");
+            _vm!.Trends.EnterCompareCommand.Execute(null);
+            _vm.Trends.SetComparePresetCommand.Execute("7d");
+            for (int i = 0; i < 40 && _vm.Trends.Loading; i++) await Task.Delay(50);
+            await _vm.Trends.RefreshAsync();
+            await Task.Delay(500);
+            await Shot(win, "trends_compare");
+
             foreach (string page in new[] { "device", "remarks", "settings" })
             {
                 win.NavigateTo(page);
@@ -211,21 +220,41 @@ public partial class App : Application
             onboarding.UpdateLayout();
             await Shot(onboarding, "onboarding");
 
+            var fpTest = new FingerprintTest(_monitor!, _ambient!);
             var fpVm = new FingerprintViewModel(
-                new FingerprintTest(_monitor!, _ambient!), _repo!, onBattery: false, hasGpu: true);
+                fpTest, new FingerprintSequence(fpTest, _monitor!), _repo!, onBattery: false, hasGpu: true);
             var fp = new FingerprintWindow { DataContext = fpVm };
             fp.Show();
             await Shot(fp, "fingerprint");
 
             // Also capture the live "in progress" state (the load phase with the ring
             // gauge tracking CPU temp) — drive the VM straight there instead of waiting
-            // out the real 3-minute test.
+            // out the real 3-minute test. Shown mid-workup so the step badge appears.
             fpVm.State = "running";
-            fpVm.Phase = "Full CPU load - let it cook";
+            fpVm.InSequence = true;
+            fpVm.StepBadge = "TEST 1 OF 2 · CPU";
+            fpVm.Phase = "Full CPU load, let it cook";
+            fpVm.PhaseIndex = 1;
             fpVm.SecondsLeft = 96;
             fpVm.CurrentTemp = 82.4;
             fpVm.HasCurrentTemp = true;
             await Shot(fp, "fingerprint_running");
+
+            // The workup done screen: one result section per component.
+            fpVm.State = "done";
+            fpVm.Sections.Clear();
+            fpVm.Sections.Add(new FingerprintSection("CPU FINGERPRINT", new StatCell[]
+            {
+                new("SUSTAINED", "84.2°"), new("PEAK", "91.0°"), new("SOAK RATE", "3.1°/min"),
+                new("Δ OUTSIDE", "+62.8°"), new("THROTTLING", "none"),
+            }, "Rerun monthly. A steady climb is the paste drying out.",
+            new FingerprintComparison("+2.4°", "hotter", "RUNNING HOTTER", "VS JUN 12 · WEATHER-CORRECTED")));
+            fpVm.Sections.Add(new FingerprintSection("GPU FINGERPRINT", new StatCell[]
+            {
+                new("SUSTAINED", "71.4°"), new("PEAK", "74.0°"), new("SOAK RATE", "2.6°/min"),
+                new("Δ OUTSIDE", "+50.1°"), new("THROTTLING", "none"),
+            }, "First GPU fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift."));
+            await Shot(fp, "fingerprint_workup");
 
             fp.Close();
         }
@@ -287,6 +316,10 @@ public partial class App : Application
 
         int intervalSeconds = Math.Clamp(_settings.GetInt(SettingsKeys.SampleIntervalSeconds) ?? 2, 1, 10);
         _monitor = new MonitoringService(source, TimeSpan.FromSeconds(intervalSeconds));
+        // Honour a user who paused background capture (frame-stutter concerns during
+        // gaming). The screenshot harness always samples so the demo views fill in.
+        if (_uishotDir is null)
+            _monitor.IsPaused = !_settings.GetBool(SettingsKeys.CaptureEnabled, true);
         _pipeline = new TelemetryPipeline(_monitor, _ambient, _repo);
         _scores = new ScoreCoordinator(_repo, _settings, profile, () => _monitor.Latest, FormatTemp);
         _remarks = new RemarksCoordinator(_monitor, _ambient, _repo, _scores, _settings);
@@ -296,7 +329,7 @@ public partial class App : Application
         _updates = new UpdateService(_settings);
         _feedback = new FeedbackService(machine, IsElevated());
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
-            _updates, () => _monitor.Latest, simulate, showUpdatesPanel: _uishotDir is not null);
+            _updates, _monitor, () => _monitor.Latest, simulate, showUpdatesPanel: _uishotDir is not null);
         var deviceVm = new DeviceViewModel(machine, profile, () => _monitor.Latest, _ambient, _settings);
         var onboarding = new OnboardingViewModel(_settings, _ambient, machine);
 
@@ -492,8 +525,10 @@ public partial class App : Application
     {
         if (_monitor is null || _ambient is null || _repo is null)
             return;
+        var test = new FingerprintTest(_monitor, _ambient);
         var vm = new FingerprintViewModel(
-            new FingerprintTest(_monitor, _ambient),
+            test,
+            new FingerprintSequence(test, _monitor),
             _repo,
             onBattery: _monitor.Latest is { OnAcPower: false },
             hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null);

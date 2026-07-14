@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:DeltaT.App.Controls"
         xmlns:ui="clr-namespace:DeltaT.App.Ui"
-        Title="DeltaT - thermal fingerprint" Width="520" Height="580"
+        Title="DeltaT - thermal fingerprint" Width="520" Height="600"
         Icon="pack://application:,,,/Assets/deltat.ico"
         Background="{StaticResource Brush.BgGlow}" Foreground="{StaticResource Brush.Text}"
         FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
@@ -27,15 +27,17 @@
         <Border Grid.Row="0" Background="{StaticResource Brush.Rail}"
                 BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
             <DockPanel Margin="16,0,4,0">
-                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Font.Display}"
-                           FontSize="15" FontWeight="Bold" VerticalAlignment="Center">
-                    <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
-                </TextBlock>
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ContentControl Style="{StaticResource Brand.Mark}"/>
+                    <Rectangle Width="22" Height="7" Fill="{StaticResource Brush.Hazard}"
+                               VerticalAlignment="Center" Margin="11,1,0,0"/>
+                    <Rectangle Width="1" Fill="{StaticResource Brush.Stroke}" Margin="14,7"/>
+                </StackPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource Button.Caption}" Content="&#xE8BB;"
                         Click="OnCloseChrome" ToolTip="Close"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
                 <TextBlock Style="{StaticResource Text.OverlineFaint}" VerticalAlignment="Center"
-                           Margin="14,1,0,0" ui:Tracking.Text="THERMAL FINGERPRINT"/>
+                           Margin="0,1,0,0" ui:Tracking.Text="THERMAL FINGERPRINT"/>
             </DockPanel>
         </Border>
 
@@ -43,84 +45,313 @@
 
         <!-- ============ intro ============ -->
         <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=intro}">
-            <TextBlock Style="{StaticResource Text.H1}" Text="A 3-minute honest look" Margin="0,4,0,10"/>
+            <TextBlock Style="{StaticResource Text.H1}" Text="A repeatable thermal reading" Margin="0,4,0,10"/>
             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap">
-                DeltaT idles for 25 seconds, then fully loads the component you pick - every CPU core,
-                or the GPU's compute engine - for 2½ minutes and watches: how fast the heat soaks in,
-                where it settles, and whether the silicon has to throttle.
-                Same test, same numbers - run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
+                DeltaT holds the machine still, then fully loads the component you pick (every CPU core,
+                or the GPU's compute engine) and watches: how fast the heat soaks in, where it settles,
+                and whether the silicon has to throttle.
+                Same test, same numbers. Run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
             </TextBlock>
-            <StackPanel Margin="0,16,0,0">
-                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="BEFORE YOU START"/>
-                <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="19" Margin="0,6,0,0" TextWrapping="Wrap"
-                           Text="Plug in the charger; battery runs aren't comparable. Close heavy apps so the idle phase is actually idle. Fans will spin up - that's the point."/>
+
+            <!-- the protocol, drawn as an instrument strip: three legs, labeled once.
+                 The load leg carries the ember tick; it is the reading. -->
+            <StackPanel Margin="0,18,0,0">
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="TEST PROTOCOL · PER COMPONENT"/>
+                <Grid Margin="0,9,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1*"/>
+                        <ColumnDefinition Width="1.9*"/>
+                        <ColumnDefinition Width="1*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="{StaticResource Brush.Panel}"
+                            BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1" Margin="0,0,6,0">
+                        <StackPanel Margin="10,8,10,9">
+                            <Rectangle Height="3" Fill="{StaticResource Brush.Cool}"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
+                                       Margin="0,7,0,0" ui:Tracking.Text="SETTLE"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="25 s idle"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Background="{StaticResource Brush.Panel}"
+                            BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1" Margin="0,0,6,0">
+                        <StackPanel Margin="10,8,10,9">
+                            <Rectangle Height="3" Fill="{StaticResource Brush.Accent}"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
+                                       Margin="0,7,0,0" ui:Tracking.Text="FULL LOAD"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="2½ min flat out, soak measured"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="2" Background="{StaticResource Brush.Panel}"
+                            BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1">
+                        <StackPanel Margin="10,8,10,9">
+                            <Rectangle Height="3" Fill="{StaticResource Brush.Cool}"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Foreground="{StaticResource Brush.TextDim}"
+                                       Margin="0,7,0,0" ui:Tracking.Text="COOLDOWN"/>
+                            <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0" Text="back to idle"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
             </StackPanel>
+
+            <Border Background="{StaticResource Brush.PanelHigh}" BorderBrush="{StaticResource Brush.Stroke}"
+                    BorderThickness="2,0,0,0" Padding="12,9,12,10" Margin="0,14,0,0">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="BEFORE YOU START"/>
+                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="19" Margin="0,5,0,0" TextWrapping="Wrap"
+                               Text="Plug in the charger; battery runs aren't comparable. Close heavy apps so the idle phase is actually idle. Fans will spin up. That's the point."/>
+                </StackPanel>
+            </Border>
             <Border Background="{StaticResource Brush.PanelHigh}" BorderBrush="{StaticResource Brush.Warm}"
                     BorderThickness="2,0,0,0"
-                    Padding="12,9" Margin="0,16,0,0"
+                    Padding="12,9" Margin="0,10,0,0"
                     Visibility="{Binding OnBattery, Converter={StaticResource BoolToVis}}">
                 <TextBlock FontSize="12" Foreground="{StaticResource Brush.Warm}"
-                           Text="You're on battery right now - results will be recorded but flagged."/>
+                           Text="You're on battery right now, so results will be recorded but flagged."/>
             </Border>
-            <StackPanel Orientation="Horizontal" Margin="0,22,0,0">
-                <Button Style="{StaticResource Button.Primary}" Content="TEST THE CPU" Padding="20,10"
-                        Command="{Binding StartCpuCommand}"/>
-                <Button Style="{StaticResource Button.Ghost}" Content="TEST THE GPU" Padding="20,10" Margin="12,0,0,0"
-                        Command="{Binding StartGpuCommand}"
-                        Visibility="{Binding HasGpu, Converter={StaticResource BoolToVis}}"/>
+
+            <!-- With a discrete GPU, the full workup is the headline: CPU, cool, then GPU. -->
+            <StackPanel Margin="0,22,0,0" Visibility="{Binding HasGpu, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <Button Style="{StaticResource Button.Primary}" Content="FULL WORKUP" Padding="20,10"
+                            Command="{Binding StartWorkupCommand}"/>
+                    <Button Style="{StaticResource Button.Ghost}" Content="JUST CPU" Padding="18,10" Margin="12,0,0,0"
+                            Command="{Binding StartCpuCommand}"/>
+                    <Button Style="{StaticResource Button.Ghost}" Content="JUST GPU" Padding="18,10" Margin="8,0,0,0"
+                            Command="{Binding StartGpuCommand}"/>
+                </StackPanel>
+                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17" Margin="2,11,0,0" TextWrapping="Wrap"
+                           Text="Full workup runs the CPU, waits for it to cool, then the GPU. About 7 minutes, one comparable reading for each."/>
             </StackPanel>
+            <!-- No discrete GPU: a single CPU test. -->
+            <Button Style="{StaticResource Button.Primary}" Content="TEST THE CPU" Padding="20,10" Margin="0,22,0,0"
+                    HorizontalAlignment="Left" Command="{Binding StartCpuCommand}"
+                    Visibility="{Binding HasGpu, Converter={StaticResource InvBoolToVis}}"/>
         </StackPanel>
 
         <!-- ============ running ============ -->
         <Grid Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=running}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <StackPanel Grid.Row="0">
+                <TextBlock Style="{StaticResource Text.Overline}" Foreground="{StaticResource Brush.Accent}"
+                           ui:Tracking.Text="{Binding StepBadge}" Margin="0,0,0,6"
+                           Visibility="{Binding InSequence, Converter={StaticResource BoolToVis}}"/>
                 <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Fingerprint in progress"/>
                 <TextBlock Style="{StaticResource Text.H1}" FontSize="18" Text="{Binding Phase}" Margin="0,9,0,0"/>
                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,4,0,0"
                            Text="{Binding SecondsLeft, StringFormat='{}{0:0} s remaining in this phase'}"/>
             </StackPanel>
-            <controls:RingGauge Grid.Row="1" Width="230" Height="230"
+
+            <!-- the protocol strip, live: the leg under way carries the ember tick -->
+            <Grid Grid.Row="1" Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,5,0">
+                    <Rectangle Height="3">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource Brush.Stroke}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="0">
+                                        <Setter Property="Fill" Value="{StaticResource Brush.Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                    <TextBlock Margin="0,6,0,0" ui:Tracking.Text="SETTLE">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="0">
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="0,0,5,0">
+                    <Rectangle Height="3">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource Brush.Stroke}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="1">
+                                        <Setter Property="Fill" Value="{StaticResource Brush.Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                    <TextBlock Margin="0,6,0,0" ui:Tracking.Text="FULL LOAD">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="1">
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <Rectangle Height="3">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource Brush.Stroke}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="2">
+                                        <Setter Property="Fill" Value="{StaticResource Brush.Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                    <TextBlock Margin="0,6,0,0" ui:Tracking.Text="COOLDOWN">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="2">
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+
+            <controls:RingGauge Grid.Row="2" Width="230" Height="230"
                                 Value="{Binding CurrentTemp}" Maximum="100"
                                 HasValue="{Binding HasCurrentTemp}" Unit="°C" SubText="{Binding TargetLabel}"/>
-            <Button Grid.Row="2" Style="{StaticResource Button.Ghost}" Content="STOP THE TEST"
+            <Button Grid.Row="3" Style="{StaticResource Button.Ghost}" Content="STOP THE TEST"
                     HorizontalAlignment="Center" Foreground="{StaticResource Brush.Hot}"
                     Command="{Binding StopCommand}"/>
         </Grid>
 
         <!-- ============ done ============ -->
-        <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=done}">
-            <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Fingerprint result"/>
-            <ItemsControl ItemsSource="{Binding ResultCells}" Margin="0,16,0,0">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <UniformGrid Columns="3"/>
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
-                                Padding="12,4,0,10" Margin="0,0,0,6">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Label}"/>
-                                <TextBlock Style="{StaticResource Text.Display}" FontSize="19"
-                                           Margin="0,5,0,0" Text="{Binding Value}"/>
+        <Grid Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=done}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Style="{StaticResource Text.Overline}" ui:Tracking.Text="Fingerprint result"/>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                <ItemsControl ItemsSource="{Binding Sections}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,0,0,16">
+                                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="{Binding Title}"/>
+                                <ItemsControl ItemsSource="{Binding Cells}" Margin="0,10,0,0">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Columns="3"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
+                                                    Padding="12,4,0,10" Margin="0,0,0,6">
+                                                <StackPanel>
+                                                    <TextBlock Style="{StaticResource Text.Caption}" Text="{Binding Label}"/>
+                                                    <TextBlock Style="{StaticResource Text.Display}" FontSize="19"
+                                                               Margin="0,5,0,0" Text="{Binding Value}"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <!-- the month-over-month verdict as an instrument readout: the signed
+                                     delta is the reading, colored by direction; the sentence only advises -->
+                                <Border Style="{StaticResource Card}" Margin="0,6,0,0" Padding="16,12,16,13">
+                                    <StackPanel>
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Comparison}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" FontFamily="{StaticResource Font.DisplayCond}"
+                                                       FontSize="34" FontWeight="Bold" VerticalAlignment="Center"
+                                                       Margin="0,0,18,0" Text="{Binding Comparison.DeltaText}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Comparison.Direction}" Value="hotter">
+                                                                <Setter Property="Foreground" Value="{StaticResource Brush.Warm}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Comparison.Direction}" Value="cooler">
+                                                                <Setter Property="Foreground" Value="{StaticResource Brush.Good}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
+                                                           FontWeight="SemiBold" ui:Tracking.Text="{Binding Comparison.Word}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Comparison.Direction}" Value="hotter">
+                                                                    <Setter Property="Foreground" Value="{StaticResource Brush.Warm}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Comparison.Direction}" Value="cooler">
+                                                                    <Setter Property="Foreground" Value="{StaticResource Brush.Good}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Style="{StaticResource Text.Caption}" Margin="0,5,0,0"
+                                                           Text="{Binding Comparison.Caption}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock FontSize="12.5" LineHeight="19"
+                                                   Text="{Binding Verdict}" TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Body}">
+                                                    <Setter Property="Margin" Value="0,9,0,0"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Comparison}" Value="{x:Null}">
+                                                            <Setter Property="Margin" Value="0,1,0,0"/>
+                                                            <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <Border Style="{StaticResource Card}" Margin="0,12,0,0" Padding="16,13">
-                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19"
-                           Text="{Binding VerdictText}" TextWrapping="Wrap"/>
-            </Border>
-            <Button Style="{StaticResource Button.Primary}" Content="DONE" Padding="22,9"
-                    HorizontalAlignment="Left" Margin="0,18,0,0" Click="OnDone"/>
-        </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+            <Button Grid.Row="2" Style="{StaticResource Button.Primary}" Content="DONE" Padding="22,9"
+                    HorizontalAlignment="Left" Margin="0,14,0,0" Click="OnDone"/>
+        </Grid>
         </Grid>
     </Grid>
 </Window>

@@ -26,3 +26,8 @@ sensor-dump.txt
 
 # Local agent instructions — not part of the shipped project
 CLAUDE.md
+AGENTS.md
+
+# Local dev scratch output (screenshots, spike dumps)
+scratchpad/
+uishot-recovery/

@@ -19,7 +19,7 @@ public partial class RemarksViewModel : ObservableObject
     public ObservableCollection<RemarkItem> Items { get; } = new();
 
     [ObservableProperty] private bool _importantOnly;
-    [ObservableProperty] private string _emptyText = "Nothing yet - DeltaT speaks when there's something worth saying.";
+    [ObservableProperty] private string _emptyText = "Nothing yet. DeltaT speaks when there's something worth saying.";
 
     public RemarksViewModel(TelemetryRepository repo)
     {

@@ -14,6 +14,34 @@ void Line(string s = "")
     sb.AppendLine(s);
 }
 
+// `--eval`: run the detection-accuracy benchmark and print the numbers. No hardware
+// needed; it drives the real scoring + diagnosis engine over known, noisy scenarios.
+if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
+{
+    var report = DeltaT.Core.Scoring.DetectionBenchmark.Run();
+    Console.WriteLine($"DeltaT detection accuracy benchmark  ({DateTime.Now:yyyy-MM-dd})");
+    Console.WriteLine(new string('=', 70));
+    Console.WriteLine();
+    Console.WriteLine("Cause attribution (does DeltaT name the right cause, or correctly clear it?)");
+    Console.WriteLine($"  {"condition",-16} {"trials",7} {"accuracy",9} {"mean score",11}");
+    foreach (var c in report.Conditions)
+        Console.WriteLine($"  {c.Condition,-16} {c.Trials,7} {c.Accuracy,8:P0} {c.MeanScore,10:0.0}");
+    Console.WriteLine();
+    Console.WriteLine($"  Fault detection rate (paste/dust/fan/mount): {report.FaultDetectionRate,6:P1}");
+    Console.WriteLine($"  Confounder clear rate (OC/undervolt/cold/healthy, i.e. NOT false-alarmed): {report.ConfounderClearRate,6:P1}");
+    Console.WriteLine($"  Overall accuracy: {report.OverallAccuracy,6:P1}");
+    Console.WriteLine();
+    Console.WriteLine("Detection sensitivity (severity at which DeltaT reacts)");
+    Console.WriteLine($"  {"fault",-18} {"watch (<85)",12} {"act (<70)",11} {"names cause",12}");
+    foreach (var s in report.Sensitivity)
+        Console.WriteLine($"  {s.Fault,-18} {FmtSev(s.FlagsAgingAtC),12} {FmtSev(s.FlagsActionAtC),11} {FmtSev(s.NamesCauseAtC),12}");
+    Console.WriteLine();
+    Console.WriteLine("  (watch/act columns are °C of extra load-rise for paste/dust, ° of hotspot gap for mount)");
+    return;
+
+    static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";
+}
+
 bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 Line($"DeltaT sensor spike - {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Line($"Elevated: {elevated}{(elevated ? "" : "   << CPU package temps + storage SMART need admin")}");

@@ -111,39 +111,40 @@
                            Text="{Binding AmbientText}"/>
             </Grid>
 
-            <Grid Grid.Row="1">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="10*"/>
-                    <ColumnDefinition Width="11*"/>
-                </Grid.ColumnDefinitions>
+            <!-- Organized as full-width bands: WHO this machine is (identity strip),
+                 HOW it's doing (the CPU/GPU pair, the lead modules), then the
+                 supporting envelopes (SSD + silicon limits). No ragged columns. -->
+            <StackPanel Grid.Row="1">
 
-                <!-- ================= identity column -->
-                <StackPanel Grid.Column="0" Margin="0,0,7,0">
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Identity" Margin="0,0,0,14">
-                        <StackPanel>
-                            <Grid Margin="0,0,0,10">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="96"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="PROCESSOR" Margin="0,2,0,9"/>
-                                <TextBlock Grid.Row="0" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5"
-                                           Text="{Binding CpuName}" TextWrapping="Wrap" Margin="0,0,0,9"/>
-                                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="GRAPHICS" Margin="0,2,0,9"/>
-                                <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5"
-                                           Text="{Binding GpuText}" TextWrapping="Wrap" LineHeight="17" Margin="0,0,0,9"/>
-                                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="CHASSIS" Margin="0,2,0,9"/>
-                                <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Text.Numeral}" FontSize="11.5" Margin="0,0,0,9">
+                <!-- ================= identity: one horizontal spec strip -->
+                <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Identity" Margin="0,0,0,14">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="10*"/>
+                                <ColumnDefinition Width="11*"/>
+                                <ColumnDefinition Width="7*"/>
+                                <ColumnDefinition Width="9*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,18,0">
+                                <TextBlock Style="{StaticResource Text.Caption}" Text="PROCESSOR" Margin="0,0,0,7"/>
+                                <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="17"
+                                           Text="{Binding CpuName}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,18,0">
+                                <TextBlock Style="{StaticResource Text.Caption}" Text="GRAPHICS" Margin="0,0,0,7"/>
+                                <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="17"
+                                           Text="{Binding GpuText}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Margin="0,0,18,0">
+                                <TextBlock Style="{StaticResource Text.Caption}" Text="CHASSIS" Margin="0,0,0,7"/>
+                                <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5">
                                     <Run Text="{Binding FormFactor, Mode=OneWay}"/><Run Text="  ·  " Foreground="{StaticResource Brush.TextFaint}"/><Run Text="{Binding ProfileClass, Mode=OneWay}"/>
                                 </TextBlock>
-                                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Text.Caption}" Text="PROFILE" VerticalAlignment="Center"/>
-                                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                            </StackPanel>
+                            <StackPanel Grid.Column="3">
+                                <TextBlock Style="{StaticResource Text.Caption}" Text="PROFILE" Margin="0,0,0,7"/>
+                                <StackPanel Orientation="Horizontal">
                                     <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5"
                                                Text="{Binding ProfileName}" VerticalAlignment="Center"/>
                                     <Border Style="{StaticResource Chip}" Margin="9,0,0,0" Padding="6,2"
@@ -153,17 +154,48 @@
                                                    Text="{Binding ProfileMatchLabel}"/>
                                     </Border>
                                 </StackPanel>
-                            </Grid>
-                            <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,1,0,0"
-                                    Padding="0,10,0,0"
-                                    Visibility="{Binding HasNotes, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17"
-                                           Text="{Binding ProfileNotes}"/>
-                            </Border>
-                        </StackPanel>
-                    </HeaderedContentControl>
+                            </StackPanel>
+                        </Grid>
+                        <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,1,0,0"
+                                Padding="0,10,0,0" Margin="0,12,0,0"
+                                Visibility="{Binding HasNotes, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17"
+                                       Text="{Binding ProfileNotes}"/>
+                        </Border>
+                    </StackPanel>
+                </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Silicon limits" Margin="0,0,0,14">
+                <!-- ================= the matched pair: expected vs measured -->
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <HeaderedContentControl Grid.Column="0" Style="{StaticResource Module}"
+                                            Header="CPU · expected vs measured" Margin="0,0,7,0">
+                        <ContentControl Content="{Binding CpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
+                    </HeaderedContentControl>
+                    <HeaderedContentControl Grid.Column="1" Style="{StaticResource Module}"
+                                            Header="GPU · expected vs measured" Margin="7,0,0,0">
+                        <ContentControl Content="{Binding GpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
+                    </HeaderedContentControl>
+                </Grid>
+
+                <!-- ================= supporting envelopes -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <HeaderedContentControl Grid.Column="0" Style="{StaticResource Module.Quiet}"
+                                            Header="SSD · thermal envelope" Margin="0,0,7,0">
+                        <ContentControl Content="{Binding SsdIntel}" ContentTemplate="{StaticResource IntelBlock}"
+                                        Focusable="False"/>
+                    </HeaderedContentControl>
+                    <HeaderedContentControl Grid.Column="1" Style="{StaticResource Module.Quiet}"
+                                            Header="Silicon limits" Margin="7,0,0,0">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="19"
                                        Text="{Binding LimitsText}" TextWrapping="Wrap"/>
@@ -171,26 +203,8 @@
                                        Text="throttle points come from the hardware, not the profile"/>
                         </StackPanel>
                     </HeaderedContentControl>
-
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="SSD · thermal envelope">
-                        <ContentControl Content="{Binding SsdIntel}" ContentTemplate="{StaticResource IntelBlock}"
-                                        Focusable="False"/>
-                    </HeaderedContentControl>
-                </StackPanel>
-
-                <!-- ================= expected vs measured column -->
-                <StackPanel Grid.Column="1" Margin="7,0,0,0">
-                    <HeaderedContentControl Style="{StaticResource Module}" Header="CPU · expected vs measured"
-                                            Margin="0,0,0,14">
-                        <ContentControl Content="{Binding CpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
-                                        Focusable="False"/>
-                    </HeaderedContentControl>
-                    <HeaderedContentControl Style="{StaticResource Module}" Header="GPU · expected vs measured">
-                        <ContentControl Content="{Binding GpuIntel}" ContentTemplate="{StaticResource IntelBlock}"
-                                        Focusable="False"/>
-                    </HeaderedContentControl>
-                </StackPanel>
-            </Grid>
+                </Grid>
+            </StackPanel>
         </Grid>
     </ScrollViewer>
 </UserControl>

@@ -17,7 +17,7 @@ namespace DeltaT.App.Services;
 /// <list type="bullet">
 /// <item><b>healthy</b> — recent deltas sit on baseline → "Fresh" (mid-90s score).</item>
 /// <item><b>repaste</b> — deltas ramp up over the last three weeks, throttling and
-/// heat-soaking faster → a real "Repaste now" on the CPU, "Degraded" on the GPU.</item>
+/// heat-soaking faster → a real "Critical" on the CPU, "Degraded" on the GPU.</item>
 /// </list>
 /// Both truths fall out of the ordinary scoring engine — this only supplies the data.</summary>
 public static class DemoSeeder
@@ -182,6 +182,16 @@ public static class DemoSeeder
         const int n = 30; // ~one 2-second sample every 2s for a minute
         double spread = 1.1 + load / 100.0 * 1.4;
         bool hasFan = fan >= 300;
+        // Package power tracks load (matching SimulatedSensorSource), and the GPU
+        // carries a steady healthy hotspot gap, so the demo's health matrix shows a
+        // real POWER state and MOUNT reading instead of dashes.
+        double power = kind switch
+        {
+            ComponentKind.Cpu => 8 + load / 100.0 * 38,
+            ComponentKind.GpuDiscrete => 6 + load / 100.0 * 64,
+            _ => 0,
+        };
+        double gap = kind == ComponentKind.GpuDiscrete ? 7.5 + load / 100.0 * 2.5 : 0;
         return new MinuteAccum
         {
             Minute = minute,
@@ -200,6 +210,10 @@ public static class DemoSeeder
             FanSum = hasFan ? fan * n : 0,
             FanN = hasFan ? n : 0,
             ThrottleN = throttle ? n : 0,
+            GapSum = gap > 0 ? gap * n : 0,
+            GapN = gap > 0 ? n : 0,
+            PowerSum = power > 0 ? power * n : 0,
+            PowerN = power > 0 ? n : 0,
         };
     }
 
@@ -209,10 +223,11 @@ public static class DemoSeeder
         using SqliteConnection conn = db.Open();
         using SqliteCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n)
+            INSERT INTO agg_hour(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n,power_sum,power_n)
             SELECT (minute/3600)*3600 AS hour, kind, name, bucket, band, on_ac,
                    SUM(n), SUM(temp_sum), MIN(temp_min), MAX(temp_max), SUM(load_sum),
-                   SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n)
+                   SUM(delta_sum), SUM(delta_n), SUM(fan_sum), SUM(fan_n), SUM(throttle_n),
+                   SUM(gap_sum), SUM(gap_n), SUM(power_sum), SUM(power_n)
             FROM agg_minute
             GROUP BY hour, kind, name, bucket, band, on_ac;
             """;
@@ -229,8 +244,8 @@ public static class DemoSeeder
 
         // Shared story: repasted a month ago, baseline learned, fingerprint captured.
         Ev(30, "repaste", null, 1, "Thermal paste replaced. New baseline learning started.");
-        Ev(29.6, "fingerprint", null, 1, "Fingerprint test complete - CPU and GPU load-response curves captured.");
-        Ev(25, "remark", null, 1, "Baseline locked in. From now on, DeltaT compares this machine against itself - the only comparison that means anything.");
+        Ev(29.6, "fingerprint", null, 1, "Fingerprint test complete. CPU and GPU load-response curves captured.");
+        Ev(25, "remark", null, 1, "Baseline locked in. From now on, DeltaT compares this machine against itself, the only comparison that means anything.");
 
         // Baseline-window heat-soak references (the "healthy" soak rate).
         foreach (double d in new[] { 28.0, 26.5, 24.0 })
@@ -242,8 +257,8 @@ public static class DemoSeeder
         if (!degraded)
         {
             Ev(19, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
-            Ev(12, "fingerprint", null, 1, "Fingerprint re-run - response curves unchanged since the last check.");
-            Ev(6, "remark", ComponentKind.GpuDiscrete, 1, "New record: GPU touched 71° under load - the hottest DeltaT has seen it, still well inside spec.");
+            Ev(12, "fingerprint", null, 1, "Fingerprint re-run. Response curves unchanged since the last check.");
+            Ev(6, "remark", ComponentKind.GpuDiscrete, 1, "New record: GPU touched 71° under load, the hottest DeltaT has seen it, still well inside spec.");
             Ev(1.5, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
             foreach (double d in new[] { 5.0, 3.0, 1.0 })
             {
@@ -272,8 +287,8 @@ public static class DemoSeeder
         foreach (double d in new[] { 3.4, 1.1, 0.5 })
             Ev(d, "throttle", ComponentKind.GpuDiscrete, 2, "GPU reached its thermal cap and trimmed the boost clock.");
 
-        Ev(2.2, "remark", ComponentKind.GpuDiscrete, 2, "GPU paste is degrading - the delta over baseline keeps widening. Start planning a repaste; no emergency, but the direction is clear.");
-        Ev(0.35, "remark", ComponentKind.Cpu, 3, "CPU paste has crossed into repaste territory. DeltaT's honest read: it's time - fresh paste should claw back several degrees.");
+        Ev(2.2, "remark", ComponentKind.GpuDiscrete, 2, "GPU cooling is degrading. The delta over baseline keeps widening. Start planning a repaste; no emergency, but the direction is clear.");
+        Ev(0.35, "remark", ComponentKind.Cpu, 3, "CPU thermal score has crossed into act-now territory. The evidence points at dust or blocked airflow, so start with a clean-out; that should claw back several degrees.");
     }
 
     // ------------------------------------------------------------------ helpers

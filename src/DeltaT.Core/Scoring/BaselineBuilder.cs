@@ -145,7 +145,7 @@ public static class BaselineBuilder
         if (cells.Count == 0)
         {
             dataConf = 0;
-            dataConstraint = "no heavy or medium load learned yet - run a game or a stress test so DeltaT can see the paste working";
+            dataConstraint = "no heavy or medium load learned yet. Run a game or a stress test so DeltaT can see the paste working";
         }
         else
         {
@@ -278,7 +278,7 @@ public static class BaselineBuilder
         double floorH = CureFloor.TotalHours, fullH = CureFull.TotalHours;
         double hoursToReady = floorH + (ReadyConfidence - CureFloorConfidence) / (1.0 - CureFloorConfidence) * (fullH - floorH);
         int left = Math.Max(1, (int)Math.Ceiling(hoursToReady - (now - epochStart).TotalHours));
-        return $"the fresh paste is still settling - about {left} more hour{(left == 1 ? "" : "s")} of use and DeltaT can lock the baseline (thermal paste keeps improving over its first few days)";
+        return $"the fresh paste is still settling, about {left} more hour{(left == 1 ? "" : "s")} of use and DeltaT can lock the baseline (thermal paste keeps improving over its first few days)";
     }
 
     private static string DescribeDataConstraint(CellConfidence binding, int totalSessions)
@@ -286,7 +286,7 @@ public static class BaselineBuilder
         if (totalSessions < MinLoadedSessions)
         {
             int more = MinLoadedSessions - totalSessions;
-            return $"need {more} more separate load session{(more == 1 ? "" : "s")} - each game or heavy task, split by a cool-down, sharpens the baseline";
+            return $"need {more} more separate load session{(more == 1 ? "" : "s")}: each game or heavy task, split by a cool-down, sharpens the baseline";
         }
         if (binding.Sessions < MinSessionsPerCell)
         {
@@ -294,7 +294,7 @@ public static class BaselineBuilder
             return $"{binding.Bucket.Label()} in {BandLabel(binding.Band)} needs {more} more session{(more == 1 ? "" : "s")} to pin down";
         }
         string spread = binding.SeC is { } se ? $" (±{se:0.#} °C)" : "";
-        return $"{binding.Bucket.Label()} readings still vary a little{spread} - a few more sessions will tighten it";
+        return $"{binding.Bucket.Label()} readings still vary a little{spread}, and a few more sessions will tighten it";
     }
 
     private static string BandLabel(int band) =>
@@ -326,7 +326,7 @@ public static class BaselineBuilder
             rows.Add(new BaselineRow(
                 epoch, kind, name, s.Band, s.Bucket,
                 deltaAvg, p95, soakRateAvg, s.FanAvg, s.Minutes,
-                now.ToUnixTimeSeconds(), se, s.TempAvg, s.GapAvg));
+                now.ToUnixTimeSeconds(), se, s.TempAvg, s.GapAvg, s.PowerAvg));
         }
         return rows;
     }

@@ -37,6 +37,19 @@ public partial class MainViewModel : ObservableObject
     public ScoreViewModel CpuScore { get; } = new("CPU");
     public ScoreViewModel GpuScore { get; } = new("GPU");
 
+    /// <summary>The health matrix: every characteristic the engine judges (paste,
+    /// airflow, fans, mount, headroom, power state) as its own CPU/GPU readout, so
+    /// a healthy subsystem is visibly healthy instead of silently absent.</summary>
+    public IReadOnlyList<AspectColumnViewModel> AspectColumns { get; } = new[]
+    {
+        new AspectColumnViewModel(HealthAspect.Paste, "PASTE"),
+        new AspectColumnViewModel(HealthAspect.Airflow, "AIRFLOW"),
+        new AspectColumnViewModel(HealthAspect.Fans, "FANS"),
+        new AspectColumnViewModel(HealthAspect.Mount, "MOUNT"),
+        new AspectColumnViewModel(HealthAspect.Headroom, "HEADROOM"),
+        new AspectColumnViewModel(HealthAspect.Power, "POWER"),
+    };
+
     public TrendsViewModel Trends { get; }
     public RemarksViewModel RemarksFeed { get; }
     public SettingsViewModel Settings { get; }
@@ -45,15 +58,31 @@ public partial class MainViewModel : ObservableObject
     public bool IsFirstRun { get; }
 
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
-    [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. The first verdict lands as soon as it has seen enough real load to be sure - games and heavy work teach it fastest.";
+    [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. The first verdict lands as soon as it has seen enough real load to be sure. Games and heavy work teach it fastest.";
     [ObservableProperty] private string _scoringBasis = "Normalized for weather · load";
-    [ObservableProperty] private string _fanNote = "";
-    [ObservableProperty] private bool _fanNoteActive;
+    // While nothing is scored yet, the hero leads with the calibration confidence
+    // itself: a big numeral and a fill bar, not a percentage buried in a sentence.
+    [ObservableProperty] private bool _heroCalibrating = true;
+    [ObservableProperty] private string _calibrationPercent = "0%";
+    [ObservableProperty] private double _calibrationPercentValue;
+
+    /// <summary>The hero's instrument readouts (Δ vs baseline, fan correction, power
+    /// correction, confidence): the numbers that used to live inside prose, drawn as
+    /// numerals with the sentence demoted to the tooltip.</summary>
+    public ObservableCollection<HeroStatViewModel> HeroStats { get; } = new();
+    // The leading likely cause and its evidence, so the dashboard says WHAT is wrong
+    // (airflow, a fan, the paste, a power change), not just how healthy. Empty when
+    // there's nothing worth diagnosing.
+    [ObservableProperty] private string _diagnosisHeadline = "";
+    [ObservableProperty] private string _diagnosisText = "";
+    [ObservableProperty] private bool _hasDiagnosis;
+    [ObservableProperty] private Brush _diagnosisColor = new SolidColorBrush(ThermalPalette.Accent);
     [ObservableProperty] private string _weatherText = "locating…";
-    [ObservableProperty] private string _weatherTooltip = "Resolving your location (cached afterwards - DeltaT never tracks you)";
+    [ObservableProperty] private string _weatherTooltip = "Resolving your location (cached afterwards, and DeltaT never tracks you)";
     [ObservableProperty] private bool _weatherStale;
     [ObservableProperty] private string _latestRemark = "DeltaT is warming up…";
     [ObservableProperty] private string _latestRemarkTime = "";
+    [ObservableProperty] private string _latestRemarkTag = "LOG";
     [ObservableProperty] private Brush _remarkDot = new SolidColorBrush(ThermalPalette.Accent);
     [ObservableProperty] private bool _simulated;
     private bool _hasFanSensor;
@@ -193,8 +222,6 @@ public partial class MainViewModel : ObservableObject
     {
         _hasFanSensor = true;
         ScoringBasis = "Normalized for weather · load · fan speed";
-        if (!FanNoteActive && FanNote.Length > 0)
-            FanNote = "";
     }
 
     /// <summary>Runs every 5 s while the window is visible; never while hidden.</summary>
@@ -203,16 +230,16 @@ public partial class MainViewModel : ObservableObject
         string notice = "";
         if (_monitor.IsPaused)
         {
-            notice = "MONITORING PAUSED - resume from the tray menu; readings below are frozen";
+            notice = "MONITORING PAUSED. Resume from the tray menu; readings below are frozen";
         }
         else if (_monitor.Latest is { } latest)
         {
             double ageSeconds = (DateTimeOffset.UtcNow - latest.TimestampUtc).TotalSeconds;
             double limit = Math.Max(10, _monitor.Interval.TotalSeconds * 4);
             if (ageSeconds > limit)
-                notice = $"SENSORS STALLED - last reading {ageSeconds:0} s ago; values shown may be outdated";
+                notice = $"SENSORS STALLED. Last reading {ageSeconds:0} s ago; values shown may be outdated";
             else if (_needsAdmin)
-                notice = "CPU TEMPERATURE LOCKED - reading the CPU needs administrator access (the kernel driver). Restart elevated to unlock it.";
+                notice = "CPU TEMPERATURE LOCKED. Reading the CPU needs administrator access (the kernel driver). Restart elevated to unlock it.";
         }
         SensorNotice = notice;
         // The recovery button only makes sense for the elevation case, never for a
@@ -227,7 +254,7 @@ public partial class MainViewModel : ObservableObject
         {
             WeatherText = _ambient.Location is null ? "location unknown" : "weather offline";
             WeatherTooltip = _ambient.Location is null
-                ? "Couldn't resolve a location automatically - set one in Settings."
+                ? "Couldn't resolve a location automatically. Set one in Settings."
                 : "Weather service unreachable; using the last known value once it exists.";
             WeatherStale = true;
             return;
@@ -238,15 +265,18 @@ public partial class MainViewModel : ObservableObject
         WeatherStale = _ambient.IsStale;
         double minutes = Math.Max(1, (DateTimeOffset.UtcNow - reading.FetchedUtc).TotalMinutes);
         string age = minutes > 90 ? $"{minutes / 60:0.#} h ago" : $"{minutes:0} min ago";
-        WeatherTooltip = $"Outside temperature in {reading.Location.Display} - fetched {age}. Refreshes every 3 h.";
+        WeatherTooltip = $"Outside temperature in {reading.Location.Display}, fetched {age}. Refreshes every 3 h.";
     }
 
     private void UpdateScores(IReadOnlyDictionary<ComponentKind, ComponentScore> scores)
     {
-        if (scores.TryGetValue(ComponentKind.Cpu, out ComponentScore? cpu))
+        scores.TryGetValue(ComponentKind.Cpu, out ComponentScore? cpu);
+        scores.TryGetValue(ComponentKind.GpuDiscrete, out ComponentScore? gpu);
+        if (cpu is not null)
             CpuScore.Update(cpu);
-        if (scores.TryGetValue(ComponentKind.GpuDiscrete, out ComponentScore? gpu))
+        if (gpu is not null)
             GpuScore.Update(gpu);
+        UpdateAspects(cpu, gpu);
 
         var all = scores.Values.ToList();
         if (all.Count == 0)
@@ -263,67 +293,156 @@ public partial class MainViewModel : ObservableObject
             if (estimates.Count > 0)
             {
                 ComponentScore worstEstimate = estimates[0];
-                UpdateFanNote(worstEstimate);
-                string why = worstEstimate.Reasons.Count > 0 ? worstEstimate.Reasons[0].Text : "";
+                HeroCalibrating = false;
+                BuildHeroStats(worstEstimate, calibrating: true);
                 VerdictTitle = $"{worstEstimate.Kind.Label()}: {worstEstimate.Verdict.Label()} (estimate)";
-                VerdictDetail = $"{why} Still calibrating, {worstEstimate.CalibrationProgress * 100:0}% confident"
-                    + (string.IsNullOrWhiteSpace(worstEstimate.CalibrationConstraint) ? "." : $"; {worstEstimate.CalibrationConstraint}.");
+                VerdictDetail = string.IsNullOrWhiteSpace(worstEstimate.CalibrationConstraint)
+                    ? "Still calibrating; the estimate sharpens as more comparable load lands."
+                    : $"Still calibrating; {worstEstimate.CalibrationConstraint}.";
+                UpdateDiagnosis(worstEstimate);
                 return;
             }
 
-            // Nothing comparable yet: show the furthest-along component and, honestly,
-            // the one thing still holding its baseline back — confidence, not a countdown.
+            // Nothing comparable yet: lead with the calibration confidence itself
+            // (big numeral, fill bar) and, honestly, the one thing still holding
+            // the baseline back — confidence, not a countdown.
             ComponentScore lead = all.OrderByDescending(s => s.CalibrationProgress).First();
-            UpdateFanNote(null);
+            HeroStats.Clear();
             string constraint = lead.CalibrationConstraint;
-            VerdictTitle = $"Learning your machine - {lead.CalibrationProgress * 100:0}% confident";
+            HeroCalibrating = true;
+            // Caps at 99 like the dials: "100% confident" while still calibrating reads broken.
+            CalibrationPercent = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
+            CalibrationPercentValue = Math.Clamp(lead.CalibrationProgress, 0, 1) * 100;
+            VerdictTitle = "Learning your machine";
             VerdictDetail = (string.IsNullOrWhiteSpace(constraint)
                 ? "Use the machine normally; games and heavy work teach DeltaT fastest."
                 : $"What's next: {constraint}.") + " Hard limits are enforced from day one.";
+            UpdateDiagnosis(null);
             return;
         }
 
         ComponentScore worst = all.Where(s => !s.Calibrating).OrderBy(s => s.Value).First();
-        UpdateFanNote(worst);
+        HeroCalibrating = false;
+        BuildHeroStats(worst, calibrating: false);
         VerdictTitle = $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
-        VerdictDetail = worst.Reasons.Count > 0
-            ? worst.Reasons[0].Text + (worst.Hint switch
-              {
-                  PatternHint.LooksLikeDust => "  Pattern points at dust/airflow more than paste - try compressed air first.",
-                  PatternHint.LooksLikePaste => "  Pattern (fast heat-soak, throttling) points squarely at the paste.",
-                  PatternHint.Mixed => "  Signals are mixed - likely both dust and aging paste.",
-                  _ => "",
-              })
-            : "All quiet.";
+        // The verdict's numbers now live in the stat readouts (tooltips carry the
+        // sentences), so a locked verdict needs no paragraph under it.
+        VerdictDetail = "";
+        UpdateDiagnosis(worst);
     }
 
-    private void UpdateFanNote(ComponentScore? worst)
+    /// <summary>The instrument readouts under the verdict title, built from the same
+    /// component the verdict describes. Every value keeps its full sentence as tooltip.</summary>
+    private void BuildHeroStats(ComponentScore score, bool calibrating)
     {
-        if (_hasFanSensor)
+        HeroStats.Clear();
+
+        // Δ vs baseline: the headline number, colored by severity.
+        string deltaTip = score.Reasons.FirstOrDefault(r => r.Code.StartsWith("delta"))?.Text
+                          ?? "Not enough recent comparable load to compare against baseline.";
+        HeroStats.Add(new HeroStatViewModel(
+            score.ExcessC is { } e ? $"{e:+0.0;-0.0;0.0}°" : "--",
+            "Δ VS BASELINE", new SolidColorBrush(ExcessColor(score.ExcessC)), deltaTip));
+
+        // Fans: the correction applied, or the honest reason there isn't one.
+        if (score.Fan is { } fan)
         {
-            if (worst is null)
-            {
-                FanNote = "";
-                FanNoteActive = false;
-            }
-            else
-            {
-                (FanNote, FanNoteActive) = ScoreViewModel.DescribeFan(worst);
-            }
+            HeroStats.Add(new HeroStatViewModel(
+                $"{fan.CorrectionC:+0.#;-0.#}°", "FAN CORRECTION",
+                new SolidColorBrush(ThermalPalette.TextDim), ScoreViewModel.DescribeFan(score).Note));
+        }
+        else if (_hasFanSensor)
+        {
+            HeroStats.Add(new HeroStatViewModel(
+                "MATCHED", "FANS", new SolidColorBrush(ThermalPalette.TextDim),
+                "Fans are running at this machine's baseline speed for the load, so no airflow correction was needed."));
         }
         else
         {
-            FanNote = _monitor.Latest is not null
-                ? "Fan speed isn't exposed on this machine (often locked behind vendor software), so airflow can't be scored - the verdict rests on weather-corrected rise."
-                : "";
-            FanNoteActive = false;
+            HeroStats.Add(new HeroStatViewModel(
+                "--", "FANS", new SolidColorBrush(ThermalPalette.TextFaint),
+                "Fan speed isn't exposed on this machine (often locked behind vendor software), so airflow can't be corrected for; the verdict rests on weather-corrected rise."));
         }
+
+        // Power: only when a correction was actually applied (stock rigs stay quiet).
+        if (score.Power is { } pw)
+        {
+            string tip = score.Reasons.FirstOrDefault(r => r.Code == "power-normalized")?.Text
+                         ?? $"Corrected {pw.CorrectionC:+0.#;-0.#}° for drawing {pw.RecentW:0} W against a {pw.BaselineW:0} W baseline.";
+            HeroStats.Add(new HeroStatViewModel(
+                $"{pw.CorrectionC:+0.#;-0.#}°", "POWER CORRECTION",
+                new SolidColorBrush(ThermalPalette.TextDim), tip));
+        }
+
+        if (calibrating)
+        {
+            HeroStats.Add(new HeroStatViewModel(
+                $"{Math.Min(score.CalibrationProgress * 100, 99):0}%", "CONFIDENCE",
+                new SolidColorBrush(ThermalPalette.Accent),
+                string.IsNullOrWhiteSpace(score.CalibrationConstraint)
+                    ? "How sure DeltaT is of this machine's baseline so far."
+                    : $"How sure DeltaT is of this machine's baseline so far. What's next: {score.CalibrationConstraint}."));
+        }
+    }
+
+    /// <summary>Severity color for the Δ-vs-baseline readout: green when cooler than
+    /// baseline, steel on it, then the thermal ramp as the excess grows.</summary>
+    private static Color ExcessColor(double? excess) => excess switch
+    {
+        null => ThermalPalette.TextFaint,
+        < -1.5 => ThermalPalette.Good,
+        <= 1.5 => ThermalPalette.Cool,
+        <= 4 => ThermalPalette.Warm,
+        <= 8 => ThermalPalette.HotWarn,
+        _ => ThermalPalette.Hot,
+    };
+
+    /// <summary>Feed the health matrix. Aspects the engine can't judge yet (or that this
+    /// hardware can't measure) stay as faint dashes with an honest tooltip.</summary>
+    private void UpdateAspects(ComponentScore? cpu, ComponentScore? gpu)
+    {
+        foreach (AspectColumnViewModel col in AspectColumns)
+        {
+            col.Cpu.Update(cpu?.Aspects.FirstOrDefault(a => a.Aspect == col.Aspect), cpu?.Calibrating ?? true);
+            col.Gpu.Update(gpu?.Aspects.FirstOrDefault(a => a.Aspect == col.Aspect), gpu?.Calibrating ?? true);
+        }
+    }
+
+    /// <summary>Surface the leading likely cause, so the dashboard reads as a diagnosis
+    /// ("looks like airflow", "a fan is slowing", "the paste") instead of a bare number.
+    /// A healthy machine, or one still calibrating, shows no cause chip.</summary>
+    private void UpdateDiagnosis(ComponentScore? score)
+    {
+        if (score?.Diagnosis is not { } dx || dx.IsHealthy || score.Value >= 90)
+        {
+            HasDiagnosis = false;
+            DiagnosisHeadline = "";
+            DiagnosisText = "";
+            return;
+        }
+        CauseFinding primary = dx.Primary;
+        HasDiagnosis = true;
+        DiagnosisHeadline = $"LIKELY CAUSE  {dx.Headline.ToUpperInvariant()}";
+        DiagnosisText = primary.Evidence;
+        DiagnosisColor = new SolidColorBrush(primary.Cause switch
+        {
+            ThermalCause.PowerConfig or ThermalCause.HighAmbient => ThermalPalette.Cool,
+            ThermalCause.Paste or ThermalCause.Mount => ThermalPalette.Hot,
+            _ => ThermalPalette.Accent,
+        });
     }
 
     public void OnRemark(Remark remark)
     {
         LatestRemark = remark.Text;
         LatestRemarkTime = remark.TimestampUtc.ToLocalTime().ToString("HH:mm");
+        LatestRemarkTag = remark.Severity switch
+        {
+            RemarkSeverity.Alert => "ALERT",
+            RemarkSeverity.Warning => "WARNING",
+            RemarkSeverity.Notice => "NOTICE",
+            _ => "LOG",
+        };
         Color c = remark.Severity switch
         {
             RemarkSeverity.Alert => ThermalPalette.Hot,

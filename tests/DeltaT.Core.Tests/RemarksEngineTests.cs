@@ -1,6 +1,7 @@
 using DeltaT.Core.Diagnostics;
 using DeltaT.Core.Monitoring;
 using DeltaT.Core.Remarks;
+using DeltaT.Core.Scoring;
 using Xunit;
 
 namespace DeltaT.Core.Tests;
@@ -165,5 +166,77 @@ public class RemarksEngineTests
         Assert.Single(engine.Evaluate(ctx), r => r.RuleId == "battery-wear");
         Assert.DoesNotContain(engine.Evaluate(ctx with { NowUtc = Now.AddDays(30) }), r => r.RuleId == "battery-wear");
         Assert.Single(engine.Evaluate(ctx with { NowUtc = Now.AddDays(91) }), r => r.RuleId == "battery-wear");
+    }
+
+    // ------------------------------------------------------------------ new detection rules
+
+    [Fact]
+    public void PasteDrift_FiresOnARisingTrend_WithProjection()
+    {
+        var trends = new Dictionary<ComponentKind, TrendResult>
+        {
+            [ComponentKind.Cpu] = new(HasTrend: true, SlopePerMonthC: 1.4, Weeks: 8, CurrentExcessC: 2.5, MonthsToConcern: 2.1, Step: null),
+        };
+        Remark r = Fire(Ctx() with { Trends = trends }, "paste-drift").Single();
+        Assert.Equal(RemarkSeverity.Warning, r.Severity);
+        Assert.Contains("month", r.Text);
+    }
+
+    [Fact]
+    public void PasteDrift_SilentWhenNotTrendingOrCooling()
+    {
+        var flat = new Dictionary<ComponentKind, TrendResult> { [ComponentKind.Cpu] = TrendResult.None };
+        Assert.Empty(Fire(Ctx() with { Trends = flat }, "paste-drift"));
+
+        var cooling = new Dictionary<ComponentKind, TrendResult>
+        {
+            [ComponentKind.Cpu] = new(true, SlopePerMonthC: -1.2, 8, CurrentExcessC: -1, null, null),
+        };
+        Assert.Empty(Fire(Ctx() with { Trends = cooling }, "paste-drift"));
+    }
+
+    [Fact]
+    public void ThermalStep_FlagsADiscreteJumpWithTiming()
+    {
+        long weekTs = Now.AddDays(-21).ToUnixTimeSeconds();
+        var trends = new Dictionary<ComponentKind, TrendResult>
+        {
+            [ComponentKind.GpuDiscrete] = new(false, 0, 8, 5, null, new StepChange(weekTs, 0.5, 5.5)),
+        };
+        Remark r = Fire(Ctx() with { Trends = trends }, "thermal-step").Single();
+        Assert.Equal(RemarkSeverity.Warning, r.Severity);
+        Assert.Contains("weeks ago", r.Text);
+    }
+
+    [Fact]
+    public void FanSlowing_SurfacesTheScoresUndershootHint()
+    {
+        var reasons = new List<ScoreReason>
+        {
+            new("fan-undershoot", "Fans are running about 35% slower than this machine's baseline at the same load.", 0),
+        };
+        var scores = new Dictionary<ComponentKind, ComponentScore>
+        {
+            [ComponentKind.Cpu] = new(ComponentKind.Cpu, "CPU", 88, Verdict.Good, false, 1.0, reasons, PatternHint.None),
+        };
+        Remark r = Fire(Ctx() with { Scores = scores }, "fan-slowing").Single();
+        Assert.Equal(RemarkSeverity.Notice, r.Severity);
+        Assert.Contains("slower", r.Text);
+
+        // No such reason → no remark.
+        var clean = new Dictionary<ComponentKind, ComponentScore>
+        {
+            [ComponentKind.Cpu] = new(ComponentKind.Cpu, "CPU", 95, Verdict.Fresh, false, 1.0, Array.Empty<ScoreReason>(), PatternHint.None),
+        };
+        Assert.Empty(Fire(Ctx() with { Scores = clean }, "fan-slowing"));
+    }
+
+    [Fact]
+    public void CheckupDue_NudgesAfterAMonthWithABaseline()
+    {
+        Assert.Empty(Fire(Ctx() with { DaysSinceLastFingerprint = 10 }, "checkup-due"));
+        Assert.Single(Fire(Ctx() with { DaysSinceLastFingerprint = 35 }, "checkup-due"));
+        // Needs a baseline first — no point nudging a machine still calibrating.
+        Assert.Empty(Fire(Ctx() with { BaselineReady = false, DaysSinceLastFingerprint = 40 }, "checkup-due"));
     }
 }

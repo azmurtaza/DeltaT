@@ -78,6 +78,57 @@ public class SoakTrackerTests
     }
 }
 
+public class CooldownTrackerTests
+{
+    [Fact]
+    public void HotThenDrop_MeasuresCooldownRate()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        CooldownMeasurement? measured = null;
+        monitor.CooldownMeasured += m => measured = m;
+
+        DateTimeOffset t = Snap.T0;
+        // 70 s of sustained heavy load at 90 °C so the die is genuinely heat-soaked…
+        for (int i = 0; i < 35; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 90, load: 95));
+        // …then load drops to idle and the die sheds 90 → 55 °C over ~60 s, then plateaus.
+        for (int i = 0; i < 55; i++, t += TimeSpan.FromSeconds(2))
+        {
+            double temp = Math.Max(55, 90 - i * (35 / 30.0));
+            source.Enqueue(Snap.Cpu(t, temp, load: 3));
+        }
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.NotNull(measured);
+        Assert.Equal(90, measured!.StartTempC, 1.0);
+        Assert.Equal(55, measured.SettledTempC, 1.5);
+        Assert.InRange(measured.RatePerMinute, 25, 50); // 35 °C shed in ~60–90 s
+    }
+
+    [Fact]
+    public void DropWithoutSustainedHeat_NoMeasurement()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        CooldownMeasurement? measured = null;
+        monitor.CooldownMeasured += m => measured = m;
+
+        DateTimeOffset t = Snap.T0;
+        // Only ~20 s of heavy load (below the 60 s heat-soak requirement)…
+        for (int i = 0; i < 10; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 88, load: 95));
+        // …then idle. Too little soak to have real heat to shed → no clean measurement.
+        for (int i = 0; i < 40; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, Math.Max(52, 88 - i * 2.0), load: 3));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.Null(measured);
+    }
+}
+
 public class ThrottleDetectionTests
 {
     [Fact]
@@ -143,6 +194,35 @@ public class TelemetryPipelineTests : IDisposable
         Assert.Equal(60, heavy.DeltaAvg!.Value, 1.0);
         Assert.Equal(90, heavy.TempAvg, 1.0);
         Assert.True(heavy.Minutes >= 3);
+    }
+
+    [Fact]
+    public void MinuteAggregation_AveragesPackagePower()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        DateTimeOffset t = Snap.T0;
+        // 3 minutes at heavy load drawing a steady 45 W.
+        for (int i = 0; i < 90; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(new SensorSnapshot(t, true, new[]
+            {
+                new ComponentReading(ComponentKind.Cpu, "CPU", 90, null, 80, null, 45, null, false, 100),
+            }));
+        source.Enqueue(new SensorSnapshot(t.AddSeconds(2), true, new[]
+        {
+            new ComponentReading(ComponentKind.Cpu, "CPU", 50, null, 5, null, 10, null, false, 100),
+        }));
+        while (source.Remaining > 0)
+            monitor.Capture();
+        pipeline.Flush();
+
+        var stats = _repo.GetBucketStats(ComponentKind.Cpu, "CPU",
+            Snap.T0.AddMinutes(-1).ToUnixTimeSeconds(), Snap.T0.AddMinutes(10).ToUnixTimeSeconds());
+        BucketStat heavy = Assert.Single(stats, s => s.Bucket == LoadBucket.Heavy);
+        Assert.NotNull(heavy.PowerAvg);
+        Assert.Equal(45, heavy.PowerAvg!.Value, 1.0);
     }
 
     [Fact]

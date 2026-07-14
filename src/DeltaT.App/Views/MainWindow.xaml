@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:ui="clr-namespace:DeltaT.App.Ui"
-        Title="DeltaT" Width="1040" Height="740" MinWidth="840" MinHeight="620"
+        Title="DeltaT" Width="1040" Height="920" MinWidth="840" MinHeight="620"
         Icon="pack://application:,,,/Assets/deltat.ico"
         Background="{StaticResource Brush.BgGlow}"
         Foreground="{StaticResource Brush.Text}"
@@ -43,12 +43,10 @@
                 BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
             <DockPanel Margin="18,0,6,0">
 
-                <!-- wordmark -->
+                <!-- wordmark: the machined ΔT (Brand.Mark in the theme) with its hazard
+                     registration mark. Reads as machined, not typed. -->
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock FontFamily="{StaticResource Font.Display}" FontSize="21" FontWeight="Bold"
-                               VerticalAlignment="Center">
-                        <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
-                    </TextBlock>
+                    <ContentControl Style="{StaticResource Brand.Mark}"/>
                     <Rectangle Width="26" Height="7" Fill="{StaticResource Brush.Hazard}"
                                VerticalAlignment="Center" Margin="12,1,0,0"/>
                     <Rectangle Width="1" Fill="{StaticResource Brush.Stroke}" Margin="16,13"/>

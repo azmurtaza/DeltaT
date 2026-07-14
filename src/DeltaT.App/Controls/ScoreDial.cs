@@ -5,7 +5,7 @@ using System.Windows.Media.Animation;
 
 namespace DeltaT.App.Controls;
 
-/// <summary>The paste-health dial: a 270° tick scale like a faceplate meter —
+/// <summary>The overall thermal-health dial: a 270° tick scale like a faceplate meter —
 /// minor tick every 2 points, major every 10 — lit up to the score in the
 /// verdict color (fading in along the sweep, ember-console style), bold
 /// condensed DIN numeral in the middle, verdict word under it. While
@@ -139,9 +139,13 @@ public sealed class ScoreDial : FrameworkElement
             ? Color.FromArgb(190, ThermalPalette.Accent.R, ThermalPalette.Accent.G, ThermalPalette.Accent.B)
             : litColor;
         if (Calibrating && !Provisional)
-            // No score yet, so the meter says so: dashes for the reading, the
-            // learning progress spelled out small (the ticks fill with it too).
-            DrawCenter(dc, center, size, dip, "--", $"CAL {Progress * 100:0}%", ThermalPalette.TextFaint, subColor);
+            // No score yet, so the meter reads its one honest quantity: learning
+            // progress, big, in dim ember (the ticks fill with it too). The word
+            // beneath says what the number is, so it can't be mistaken for health.
+            // Display caps at 99: a "100% confident" meter that is still calibrating
+            // reads as broken (the last percent is a session-count gate, not data).
+            DrawCenter(dc, center, size, dip, $"{Math.Min(Progress * 100, 99):0}%", "CALIBRATING",
+                Dim(ThermalPalette.Accent, 215), ThermalPalette.TextFaint);
         else if (Provisional)
             // A real estimate before lock: the number in a muted verdict color, with
             // the verdict word and how confident DeltaT is in it so far.

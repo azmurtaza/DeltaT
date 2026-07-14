@@ -26,15 +26,17 @@
         <Border Grid.Row="0" Background="{StaticResource Brush.Rail}"
                 BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
             <DockPanel Margin="16,0,4,0">
-                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Font.Display}"
-                           FontSize="15" FontWeight="Bold" VerticalAlignment="Center">
-                    <Run Text="Δ" Foreground="{StaticResource Brush.Accent}"/><Run Text="T" Foreground="{StaticResource Brush.Text}"/>
-                </TextBlock>
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ContentControl Style="{StaticResource Brand.Mark}"/>
+                    <Rectangle Width="22" Height="7" Fill="{StaticResource Brush.Hazard}"
+                               VerticalAlignment="Center" Margin="11,1,0,0"/>
+                    <Rectangle Width="1" Fill="{StaticResource Brush.Stroke}" Margin="14,7"/>
+                </StackPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource Button.Caption}" Content="&#xE8BB;"
                         Click="OnCloseChrome" ToolTip="Close"
                         shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
                 <TextBlock Style="{StaticResource Text.OverlineFaint}" VerticalAlignment="Center"
-                           Margin="14,1,0,0" ui:Tracking.Text="FEEDBACK"/>
+                           Margin="0,1,0,0" ui:Tracking.Text="FEEDBACK"/>
             </DockPanel>
         </Border>
 
@@ -44,7 +46,7 @@
             <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=compose}">
                 <TextBlock Style="{StaticResource Text.H1}" Text="Found a bug? Got an idea?" Margin="0,4,0,8"/>
                 <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap"
-                           Text="Tell me what happened or what you'd like to see. It comes straight to me - no account, no public thread."/>
+                           Text="Tell me what happened or what you'd like to see. It comes straight to me. No account, no public thread."/>
 
                 <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="WHAT IS THIS" Margin="0,18,0,8"/>
                 <StackPanel Orientation="Horizontal">
@@ -93,7 +95,7 @@
             <StackPanel VerticalAlignment="Center"
                         Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=done}">
                 <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Sent"/>
-                <TextBlock Style="{StaticResource Text.H1}" FontSize="20" Text="Thanks - it's in." Margin="0,10,0,10"/>
+                <TextBlock Style="{StaticResource Text.H1}" FontSize="20" Text="Thanks, it's in." Margin="0,10,0,10"/>
                 <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap"
                            Text="Your note landed with me directly. If you left an email and it needs a follow-up, I'll be in touch."/>
                 <Button Style="{StaticResource Button.Primary}" Content="DONE" Padding="24,9"

@@ -86,7 +86,17 @@ public static class SettingsKeys
     public const string CloseToTray = "ui.closeToTray";
     public const string NotificationsEnabled = "ui.notifications";
     public const string SampleIntervalSeconds = "monitor.intervalSeconds";
+    public const string CaptureEnabled = "monitor.captureEnabled";  // background sensor sampling on/off (off = pause polling)
     public const string AutostartEnabled = "app.autostart";
     public const string AutoUpdate = "app.autoUpdate";             // check GitHub for newer releases and self-update
     public const string FirstRunDone = "app.firstRunDone";
+
+    // Overclocker-friendly warning limits. Concern override is the sustained-average
+    // temperature past which DeltaT treats the machine as too hot; null = use the
+    // chassis profile's number. Headroom warnings flag peaks that kiss the silicon
+    // limit; a rig pinned near TjMax by design can turn them off (real throttle
+    // EVENTS are always still counted).
+    public const string ConcernOverrideCpuC = "scoring.concernCpuC";
+    public const string ConcernOverrideGpuC = "scoring.concernGpuC";
+    public const string HeadroomWarnings = "scoring.headroomWarnings";
 }

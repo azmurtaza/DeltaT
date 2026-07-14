@@ -58,7 +58,12 @@ public sealed record RemarkContext(
     // Weather city changed since the last evaluation (a real move or a manual pick).
     bool CityChanged = false,
     // A fingerprint completed since the last evaluation - announced once.
-    FingerprintEcho? Fingerprint = null);
+    FingerprintEcho? Fingerprint = null,
+    // Per paste-component long-term drift/step verdict against the frozen baseline.
+    IReadOnlyDictionary<ComponentKind, TrendResult>? Trends = null,
+    // Days since the last fingerprint of ANY kind completed; null = never run one.
+    // Feeds the periodic "time for a controlled check-up" nudge.
+    int? DaysSinceLastFingerprint = null);
 
 /// <summary>DeltaT's voice: dry, precise, occasionally warm. Rules fire against a
 /// context snapshot and are rate-limited per rule (and per component where it
@@ -138,7 +143,7 @@ public sealed class RemarksEngine
             }.Where(s => s is not null));
             string outside = ctx.AmbientC is { } a ? $" It's {a:0}° outside{(ctx.City is { } city ? $" in {city}" : "")}." : "";
             return One("hello", ctx, RemarkSeverity.Notice,
-                $"First readings are in - {temps}.{outside} DeltaT is watching now; give it about a week to learn what normal looks like here.");
+                $"First readings are in: {temps}.{outside} DeltaT is watching now; give it about a week to learn what normal looks like here.");
         }),
 
         new Rule("temp-climbing", TimeSpan.FromHours(2), ctx =>
@@ -174,7 +179,7 @@ public sealed class RemarksEngine
                 if (snap.Find(kind) is { TemperatureC: { } t }
                     && ctx.AllTimeMax.TryGetValue(kind, out double max) && max > 40 && t > max)
                     list.Add(new Remark("record-high", ctx.NowUtc, RemarkSeverity.Notice,
-                        $"New record: {kind.Label()} just hit {t:0}° - the hottest DeltaT has ever seen it.", kind));
+                        $"New record: {kind.Label()} just hit {t:0}°, the hottest DeltaT has ever seen it.", kind));
             }
             return list;
         }),
@@ -182,25 +187,25 @@ public sealed class RemarksEngine
         new Rule("weather-hot", TimeSpan.FromHours(8), ctx =>
             ctx.AmbientC is { } a && a >= 38
                 ? One("weather-hot", ctx, RemarkSeverity.Info,
-                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the paste - DeltaT corrects for it.")
+                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the paste. DeltaT corrects for it.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("weather-cold", TimeSpan.FromHours(12), ctx =>
             ctx.AmbientC is { } a && a <= 8
                 ? One("weather-cold", ctx, RemarkSeverity.Info,
-                    $"{a:0}° outside - free cooling day. Don't let today's pretty temps fool the long-term picture; DeltaT won't.")
+                    $"{a:0}° outside, a free cooling day. Don't let today's pretty temps fool the long-term picture; DeltaT won't.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("weather-stale", TimeSpan.FromHours(12), ctx =>
             ctx.AmbientStale
                 ? One("weather-stale", ctx, RemarkSeverity.Info,
-                    "Can't reach the weather service - using the last known outside temperature until it's back.")
+                    "Can't reach the weather service, so DeltaT is using the last known outside temperature until it's back.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("on-battery", TimeSpan.FromHours(4), ctx =>
             !ctx.OnAcPower && ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket is LoadBucket.Heavy or LoadBucket.Max
                 ? One("on-battery", ctx, RemarkSeverity.Info,
-                    "Heavy load on battery - these readings don't count toward paste scoring (battery power limits change the physics).")
+                    "Heavy load on battery, so these readings don't count toward paste scoring (battery power limits change the physics).")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("learning-daily", TimeSpan.FromHours(20), ctx =>
@@ -208,14 +213,14 @@ public sealed class RemarksEngine
                 ? One("learning-daily", ctx, RemarkSeverity.Info,
                     $"Learning day {ctx.LearningDay}: baseline is {ctx.CalibrationProgress * 100:0}% calibrated"
                     + (string.IsNullOrWhiteSpace(ctx.CalibrationConstraint)
-                        ? ". Use the machine normally - games and heavy work teach DeltaT the most."
-                        : $" - {ctx.CalibrationConstraint}."))
+                        ? ". Use the machine normally. Games and heavy work teach DeltaT the most."
+                        : $": {ctx.CalibrationConstraint}."))
                 : Enumerable.Empty<Remark>()),
 
         new Rule("baseline-ready", TimeSpan.MaxValue, ctx =>
             ctx.BaselineJustBecameReady
                 ? One("baseline-ready", ctx, RemarkSeverity.Notice,
-                    "Baseline locked in. From now on, DeltaT compares this machine against itself - the only comparison that means anything.")
+                    "Baseline locked in. From now on, DeltaT compares this machine against itself, the only comparison that means anything.")
                 : Enumerable.Empty<Remark>()),
 
         // The repaste verdict is one-shot (host consumes it once), so no real cooldown needed.
@@ -237,7 +242,7 @@ public sealed class RemarksEngine
         new Rule("baseline-stale", TimeSpan.FromDays(3), ctx =>
             ctx.BaselineStale
                 ? One("baseline-stale", ctx, RemarkSeverity.Warning,
-                    $"DeltaT hadn't run in about {StaleGap(ctx.DormantDays)}. A lot can change while it's off - dust, a moved fan, a cleaning, even a repaste - so the current score is judging against an old, unverified baseline. Recalibrate (Settings) to trust it again.")
+                    $"DeltaT hadn't run in about {StaleGap(ctx.DormantDays)}. A lot can change while it's off (dust, a moved fan, a cleaning, even a repaste), so the current score is judging against an old, unverified baseline. Recalibrate (Settings) to trust it again.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("monthly-report", TimeSpan.FromDays(28), ctx =>
@@ -248,10 +253,10 @@ public sealed class RemarksEngine
             {
                 int drop = lastMonth - now;
                 string line = drop >= 6
-                    ? $"Monthly check: {kind.Label()} paste score is {now}, down {drop} from last month ({lastMonth}). The drift is real, not weather - DeltaT already corrected for that."
+                    ? $"Monthly check: {kind.Label()} thermal score is {now}, down {drop} from last month ({lastMonth}). The drift is real, not weather. DeltaT already corrected for that."
                     : drop <= -4
-                        ? $"Monthly check: {kind.Label()} paste score is {now}, up {-drop} from last month ({lastMonth}). Whatever changed, the paste is happier."
-                        : $"Monthly check: {kind.Label()} paste score is {now}, about the same as last month ({lastMonth}). Holding steady.";
+                        ? $"Monthly check: {kind.Label()} thermal score is {now}, up {-drop} from last month ({lastMonth}). Whatever changed, the cooling is happier."
+                        : $"Monthly check: {kind.Label()} thermal score is {now}, about the same as last month ({lastMonth}). Holding steady.";
                 list.Add(new Remark("monthly-report", ctx.NowUtc, RemarkSeverity.Info, line, kind));
             }
             return list;
@@ -265,7 +270,7 @@ public sealed class RemarksEngine
             {
                 if (drop >= 8)
                     list.Add(new Remark("score-drop", ctx.NowUtc, RemarkSeverity.Warning,
-                        $"{kind.Label()} paste score slid {drop} points this week. One bad week isn't a verdict, but the trend has DeltaT's attention.", kind));
+                        $"{kind.Label()} thermal score slid {drop} points this week. One bad week isn't a verdict, but the trend has DeltaT's attention.", kind));
             }
             return list;
         }),
@@ -276,20 +281,87 @@ public sealed class RemarksEngine
             var list = new List<Remark>();
             foreach ((ComponentKind kind, ComponentScore score) in ctx.Scores)
             {
+                // The action names the DIAGNOSED cause, not reflexively the paste: a score
+                // of 25 driven by dust wants a clean-out, not a repaste.
                 if (score.Verdict == Verdict.RepasteNow)
                     list.Add(new Remark("verdict-repaste", ctx.NowUtc, RemarkSeverity.Alert,
-                        $"{kind.Label()} paste score is {score.Value}. DeltaT's honest read: it's time. Fresh paste should claw back several degrees.", kind));
+                        $"{kind.Label()} thermal score is {score.Value}. DeltaT's honest read: it's time. {VerdictAction(score, urgent: true)}", kind));
                 else if (score.Verdict == Verdict.Degraded)
                     list.Add(new Remark("verdict-repaste", ctx.NowUtc, RemarkSeverity.Warning,
-                        $"{kind.Label()} paste is degrading (score {score.Value}). Start planning a repaste - no emergency, but the direction is clear.", kind));
+                        $"{kind.Label()} cooling is degrading (score {score.Value}). {VerdictAction(score, urgent: false)} No emergency, but the direction is clear.", kind));
             }
             return list;
         }),
 
+        // Long-term drift: the per-bucket score sees "hotter than baseline now"; this sees
+        // the machine trending hotter week over week and projects roughly how long until it
+        // matters. Weather-corrected upstream, so it's paste/dust drift, not a season.
+        new Rule("paste-drift", TimeSpan.FromDays(7), ctx =>
+        {
+            if (ctx.Trends is null) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach ((ComponentKind kind, TrendResult tr) in ctx.Trends)
+            {
+                if (!tr.HasTrend || tr.SlopePerMonthC <= 0 || tr.CurrentExcessC < 1.5)
+                    continue;
+                string eta = tr.MonthsToConcern is { } m && m > 0
+                    ? m < 1.5 ? " At this rate it reaches a repaste-worthy level within a month."
+                              : $" At this rate it's about {m:0} months from a repaste-worthy level."
+                    : "";
+                list.Add(new Remark("paste-drift", ctx.NowUtc, RemarkSeverity.Warning,
+                    $"{kind.Label()} has been creeping up about {tr.SlopePerMonthC:0.#}° a month over the last {tr.Weeks} weeks at matched load and weather, a slow drift the weekly numbers hide.{eta} Worth keeping an eye on.", kind));
+            }
+            return list;
+        }),
+
+        // Step change: a discrete jump in the weather-corrected level, not a slow ramp -
+        // the signature of an event (a knocked cooler, a fan that started failing, a moved
+        // case) rather than paste aging. DeltaT can't name the cause, only the date to look at.
+        new Rule("thermal-step", TimeSpan.FromDays(7), ctx =>
+        {
+            if (ctx.Trends is null) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach ((ComponentKind kind, TrendResult tr) in ctx.Trends)
+            {
+                if (tr.Step is not { } step || step.JumpC < TrendAnalyzer.MinStepC)
+                    continue;
+                int weeksAgo = Math.Max(1, (int)Math.Round((ctx.NowUtc.ToUnixTimeSeconds() - step.AtWeekStartTs) / 604800.0));
+                list.Add(new Remark("thermal-step", ctx.NowUtc, RemarkSeverity.Warning,
+                    $"{kind.Label()} stepped up about {step.JumpC:0.#}° at matched load and weather around {weeksAgo} week{(weeksAgo == 1 ? "" : "s")} ago and stayed there. That's a sudden change, not gradual wear. Think back to anything around then: a bump to the cooler, a fan, a case move, new paste. DeltaT flags the timing; the cause is yours to spot.", kind));
+            }
+            return list;
+        }),
+
+        // Surface the score's fan-undershoot cause-hint in the ticker: a fan that can no
+        // longer reach its old speed at the same load points at a failing fan or clogged
+        // intake. Read off the computed score so the two never disagree.
+        new Rule("fan-slowing", TimeSpan.FromDays(3), ctx =>
+        {
+            if (ctx.Scores is null) return Enumerable.Empty<Remark>();
+            var list = new List<Remark>();
+            foreach ((ComponentKind kind, ComponentScore score) in ctx.Scores)
+            {
+                if (score.Reasons.FirstOrDefault(r => r.Code == "fan-undershoot") is { } reason)
+                    list.Add(new Remark("fan-slowing", ctx.NowUtc, RemarkSeverity.Notice, reason.Text, kind));
+            }
+            return list;
+        }),
+
+        // Controlled check-up nudge: the fingerprint test runs an identical, repeatable load,
+        // so month-over-month fingerprints are the most scientifically comparable reading
+        // DeltaT has. Prompt one periodically once there's a baseline to compare against.
+        new Rule("checkup-due", TimeSpan.FromDays(14), ctx =>
+            ctx is { BaselineReady: true, DaysSinceLastFingerprint: >= 30 }
+                ? One("checkup-due", ctx, RemarkSeverity.Info,
+                    ctx.DaysSinceLastFingerprint is { } d && d >= 60
+                        ? $"It's been about {d / 30} months since the last fingerprint test. A fresh run is the cleanest way to compare thermals like-for-like: same load, weather-corrected. A good habit every month or two."
+                        : "It's been about a month since the last fingerprint test. Running one now gives you a controlled, weather-corrected data point to compare against, the most rigorous check of thermal health DeltaT offers.")
+                : Enumerable.Empty<Remark>()),
+
         new Rule("ssd-hot", TimeSpan.FromHours(2), ctx =>
             ctx.Latest?.Components.FirstOrDefault(c => c.Kind == ComponentKind.Storage && c.TemperatureC >= 70) is { TemperatureC: { } t }
                 ? One("ssd-hot", ctx, RemarkSeverity.Warning,
-                    $"SSD at {t:0}° - beyond comfortable. It has no paste to blame; check airflow around the drive bay.")
+                    $"SSD at {t:0}°, beyond comfortable. It has no paste to blame; check airflow around the drive bay.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("all-quiet", TimeSpan.FromDays(7), ctx =>
@@ -328,9 +400,9 @@ public sealed class RemarksEngine
             return gap switch
             {
                 >= 28 => One("gpu-hotspot-gap", ctx, RemarkSeverity.Warning,
-                    $"GPU hotspot is running {gap:0}° above the edge sensor under load - heat is trapped in one spot. That pattern is classic dried or pumped-out paste.", ComponentKind.GpuDiscrete),
+                    $"GPU hotspot is running {gap:0}° above the edge sensor under load. Heat is trapped in one spot. That pattern is classic dried or pumped-out paste.", ComponentKind.GpuDiscrete),
                 >= 20 => One("gpu-hotspot-gap", ctx, RemarkSeverity.Notice,
-                    $"GPU hotspot is {gap:0}° above its edge sensor under load - a wide gap like that is how paste looks when it stops spreading heat evenly. Worth watching.", ComponentKind.GpuDiscrete),
+                    $"GPU hotspot is {gap:0}° above its edge sensor under load. A wide gap like that is how paste looks when it stops spreading heat evenly. Worth watching.", ComponentKind.GpuDiscrete),
                 _ => Enumerable.Empty<Remark>(),
             };
         }),
@@ -358,8 +430,8 @@ public sealed class RemarksEngine
                 return Enumerable.Empty<Remark>();
             string cycles = bat.BatteryCycles is { } c ? $" after {c:0} charge cycles" : "";
             return One("battery-wear", ctx, RemarkSeverity.Info, wear >= 30
-                ? $"Battery check: {wear:0}% of design capacity is gone{cycles}. Expect shorter unplugged sessions - that's chemistry aging, not paste."
-                : $"Battery check: {wear:0}% of design capacity gone{cycles}. Normal aging - noted for the record.", ComponentKind.Battery);
+                ? $"Battery check: {wear:0}% of design capacity is gone{cycles}. Expect shorter unplugged sessions. That's chemistry aging, not paste."
+                : $"Battery check: {wear:0}% of design capacity gone{cycles}. Normal aging, noted for the record.", ComponentKind.Battery);
         }),
 
         new Rule("ssd-wear", TimeSpan.FromDays(90), ctx =>
@@ -367,8 +439,8 @@ public sealed class RemarksEngine
             if (ctx.Latest?.Find(ComponentKind.Storage) is not { WearPercent: >= 50 and { } wear })
                 return Enumerable.Empty<Remark>();
             return One("ssd-wear", ctx, wear >= 80 ? RemarkSeverity.Notice : RemarkSeverity.Info, wear >= 80
-                ? $"SSD has used {wear:0}% of its rated write endurance. Start thinking about a successor - and keep the backups honest."
-                : $"SSD wear check: {wear:0}% of rated write endurance used. No action needed - just bookkeeping.", ComponentKind.Storage);
+                ? $"SSD has used {wear:0}% of its rated write endurance. Start thinking about a successor, and keep the backups honest."
+                : $"SSD wear check: {wear:0}% of rated write endurance used. No action needed, just bookkeeping.", ComponentKind.Storage);
         }),
 
         new Rule("night-owl", TimeSpan.FromHours(20), ctx =>
@@ -378,7 +450,7 @@ public sealed class RemarksEngine
                 || ctx.Latest?.Find(ComponentKind.GpuDiscrete)?.Bucket is LoadBucket.Heavy or LoadBucket.Max;
             return working
                 ? One("night-owl", ctx, RemarkSeverity.Info,
-                    $"Heavy load at {ctx.LocalHour} a.m. - no judgment. The readings are just as good at this hour.")
+                    $"Heavy load at {ctx.LocalHour} a.m., no judgment. The readings are just as good at this hour.")
                 : Enumerable.Empty<Remark>();
         }),
 
@@ -421,9 +493,9 @@ public sealed class RemarksEngine
                     + (r.ThrottleSamples > 0 ? $" with {r.ThrottleSamples} throttling samples" : "")
                     + ". Every future run measures drift against it.", fp.Kind),
                 >= 3 and { } d => One("fingerprint-echo", ctx, RemarkSeverity.Warning,
-                    $"{label} fingerprint came back {d:0.#}° hotter than the last run, weather-corrected. Once is a data point - rerun in a few days; twice is a trend.", fp.Kind),
+                    $"{label} fingerprint came back {d:0.#}° hotter than the last run, weather-corrected. Once is a data point; rerun in a few days, twice is a trend.", fp.Kind),
                 <= -3 and { } d => One("fingerprint-echo", ctx, RemarkSeverity.Notice,
-                    $"{label} fingerprint came back {-d:0.#}° cooler than the last run, weather-corrected. Whatever changed - a cleaning, a repaste, better airflow - it's real.", fp.Kind),
+                    $"{label} fingerprint came back {-d:0.#}° cooler than the last run, weather-corrected. Whatever changed (a cleaning, a repaste, better airflow), it's real.", fp.Kind),
                 { } d => One("fingerprint-echo", ctx, RemarkSeverity.Info,
                     $"{label} fingerprint matches the last run ({d:+0.#;-0.#}° weather-corrected). Consistency is exactly what healthy paste looks like.", fp.Kind),
             };
@@ -441,4 +513,29 @@ public sealed class RemarksEngine
         >= 21 => $"{(int)Math.Round(days / 7.0)} weeks",
         _ => $"{days} days",
     };
+
+    /// <summary>The recommended action for a bad verdict, taken from the diagnosed cause
+    /// so the remark never reflexively blames the paste for dust or a fan.</summary>
+    private static string VerdictAction(ComponentScore score, bool urgent) =>
+        score.Diagnosis?.Primary.Cause switch
+        {
+            ThermalCause.Airflow => urgent
+                ? "The evidence points at dust or blocked airflow, so start with a clean-out; that should claw back several degrees."
+                : "The evidence points at dust or blocked airflow; a clean-out is the first move.",
+            ThermalCause.FanFault => urgent
+                ? "A fan can't reach its old speed anymore, so check the fan and its intake before blaming the paste."
+                : "A fan is running slower than it used to; check it and its intake first.",
+            ThermalCause.Mount => urgent
+                ? "The hotspot pattern points at an uneven mount or pumped-out paste, so a remount with fresh paste should claw back several degrees."
+                : "The hotspot pattern points at the mount; plan a remount with fresh paste.",
+            ThermalCause.CoolingHeadroom => urgent
+                ? "It's throttling with no headroom left; whatever the root cause, the cooling needs attention now."
+                : "It's running out of thermal headroom; plan to improve the cooling.",
+            ThermalCause.Paste => urgent
+                ? "Fresh paste should claw back several degrees."
+                : "Start planning a repaste.",
+            _ => urgent
+                ? "Fresh paste or a clean-out should claw back several degrees."
+                : "Start planning a repaste or a clean-out.",
+        };
 }

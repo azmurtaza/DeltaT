@@ -35,6 +35,7 @@ public sealed class TelemetryPipeline : IDisposable
         _monitor.SnapshotCaptured += OnSnapshot;
         _monitor.ThrottleDetected += OnThrottle;
         _monitor.SoakMeasured += OnSoak;
+        _monitor.CooldownMeasured += OnCooldown;
     }
 
     private void OnSnapshot(SensorSnapshot snap)
@@ -152,6 +153,14 @@ public sealed class TelemetryPipeline : IDisposable
             acc.GapSum += hot - temp;
             acc.GapN++;
         }
+        // Package power drives thermal-resistance scoring (ΔT ∝ P). Only positive,
+        // physically-plausible readings; a zero or negative power sample is a sensor
+        // dropout, not real dissipation, and would poison the cell's mean watts.
+        if (c.PowerW is { } power && power > 0)
+        {
+            acc.PowerSum += power;
+            acc.PowerN++;
+        }
         if (c.IsThrottling)
             acc.ThrottleN++;
     }
@@ -203,6 +212,19 @@ public sealed class TelemetryPipeline : IDisposable
         catch (Exception ex) { Error?.Invoke("soak event write failed", ex); }
     }
 
+    private void OnCooldown(CooldownMeasurement m)
+    {
+        try
+        {
+            _repo.InsertEvent(
+                m.TimestampUtc.ToUnixTimeSeconds(), "cooldown", m.Kind.ToString(), m.Name,
+                severity: 0,
+                message: $"{m.Kind.Label()} cooldown: {m.StartTempC:0}→{m.SettledTempC:0}°C in {m.SecondsToSettle:0}s ({m.RatePerMinute:0.0}°C/min).",
+                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, settled = m.SettledTempC, seconds = m.SecondsToSettle, rate = m.RatePerMinute }));
+        }
+        catch (Exception ex) { Error?.Invoke("cooldown event write failed", ex); }
+    }
+
     /// <summary>Flush everything buffered (call on shutdown). Also rolls up the hour in
     /// progress — without this, the hour a session ends in never reached agg_hour.</summary>
     public void Flush()
@@ -222,6 +244,7 @@ public sealed class TelemetryPipeline : IDisposable
         _monitor.SnapshotCaptured -= OnSnapshot;
         _monitor.ThrottleDetected -= OnThrottle;
         _monitor.SoakMeasured -= OnSoak;
+        _monitor.CooldownMeasured -= OnCooldown;
         Flush();
     }
 }

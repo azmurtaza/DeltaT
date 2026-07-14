@@ -19,6 +19,10 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
                 <!-- ================= left column -->
                 <StackPanel Grid.Column="0" Margin="0,0,7,0">
@@ -58,7 +62,7 @@
                                 <StackPanel Grid.Column="0" Margin="0,0,14,0">
                                     <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Indoor offset"/>
                                     <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
-                                               Text="Room warmer/cooler than outside (AC, heating). Display only - scoring self-corrects."/>
+                                               Text="Room warmer/cooler than outside (AC, heating). Display only; scoring self-corrects."/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Slider Style="{StaticResource Fader}" Width="120" Minimum="-10" Maximum="8"
@@ -93,6 +97,15 @@
                                           IsChecked="{Binding NotificationsEnabled}"/>
                             </Grid>
                             <Grid Style="{StaticResource SettingRow}">
+                                <StackPanel Margin="0,0,54,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Background monitoring"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="Sample sensors while DeltaT runs. Turn off to pause all polling; some rigs stutter in games when sensors are read constantly."/>
+                                </StackPanel>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          IsChecked="{Binding CaptureEnabled}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5"
                                                Text="Start with Windows"/>
@@ -117,8 +130,86 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Updates"
-                                            Margin="0,14,0,0" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
+                </StackPanel>
+
+                <!-- ================= right column -->
+                <StackPanel Grid.Column="1" Margin="7,0,0,0">
+
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Baseline &amp; repaste"
+                                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12"
+                                       Text="Just repasted? Tell DeltaT. The baseline resets, and once the new one locks you get a before/after verdict, weather-corrected."/>
+                            <Button Style="{StaticResource Button.Primary}" Content="I REPASTED THIS MACHINE"
+                                    HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,16,0,12"
+                                       Text="Changed the cooling but not the paste (new fans, a clean-out, a moved rig), or DeltaT sat idle for months? Recalibrate to relearn the baseline. No before/after claim, just a fresh reference."/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="RECALIBRATE BASELINE"
+                                    HorizontalAlignment="Left" Command="{Binding RecalibrateCommand}"/>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Warning limits" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
+                                       Text="Running hot on purpose? Set the sustained temperature DeltaT treats as too hot, so an overclock doesn't trip stock warnings. Drift against your own baseline is tracked regardless."/>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource Text.Body}" FontSize="12.5"
+                                           VerticalAlignment="Center" Text="CPU concern limit"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Slider Style="{StaticResource Fader}" Width="120" Minimum="70" Maximum="110"
+                                            TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding CpuConcernC}"/>
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="12.5" Width="44"
+                                               Margin="10,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
+                                               Text="{Binding CpuConcernC, StringFormat='{}{0:0}°'}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Style="{StaticResource Text.Body}" FontSize="12.5"
+                                           VerticalAlignment="Center" Text="GPU concern limit"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Slider Style="{StaticResource Fader}" Width="120" Minimum="60" Maximum="105"
+                                            TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding GpuConcernC}"/>
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="12.5" Width="44"
+                                               Margin="10,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
+                                               Text="{Binding GpuConcernC, StringFormat='{}{0:0}°'}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}" Margin="0">
+                                <StackPanel Margin="0,0,54,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5"
+                                               Text="Warn near the silicon limit"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="Flag peaks that sit right at TjMax. Turn off for a rig pinned there by design; real throttling still counts either way."/>
+                                </StackPanel>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          IsChecked="{Binding HeadroomWarnings}"/>
+                            </Grid>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
+                </StackPanel>
+
+                <!-- ================= maintenance band: one uniform row across the
+                     bottom (updates / data / feedback), so the page ends level
+                     instead of trailing off in ragged blocks -->
+                <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <HeaderedContentControl Grid.Column="0" Style="{StaticResource Module.Quiet}" Header="Updates"
+                                            Margin="0,0,7,0" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
                             <Grid Style="{StaticResource SettingRow}">
                                 <Grid.ColumnDefinitions>
@@ -128,7 +219,7 @@
                                 <StackPanel Grid.Column="0" Margin="0,0,14,0">
                                     <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Update automatically"/>
                                     <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
-                                               Text="Install new versions from GitHub on startup. Turn off to update only when you ask."/>
+                                               Text="Install new versions from GitHub on startup."/>
                                 </StackPanel>
                                 <CheckBox Grid.Column="1" Style="{StaticResource Toggle}" VerticalAlignment="Center"
                                           IsChecked="{Binding AutoUpdateEnabled}"/>
@@ -137,31 +228,14 @@
                                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" VerticalAlignment="Center"
                                            FontFamily="{StaticResource Font.Mono}"
                                            Text="{Binding CurrentVersionText, StringFormat='Current: {0}'}"/>
-                                <Button Style="{StaticResource Button.Ghost}" Content="CHECK FOR UPDATES"
+                                <Button Style="{StaticResource Button.Ghost}" Content="CHECK NOW"
                                         HorizontalAlignment="Right" Command="{Binding CheckForUpdatesCommand}"/>
                             </Grid>
                         </StackPanel>
                     </HeaderedContentControl>
-                </StackPanel>
 
-                <!-- ================= right column -->
-                <StackPanel Grid.Column="1" Margin="7,0,0,0">
-
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Paste lifecycle"
-                                            Margin="0,0,0,14">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12"
-                                       Text="Just repasted? Tell DeltaT. The baseline resets, and once the new one locks you get a before/after verdict - weather-corrected."/>
-                            <Button Style="{StaticResource Button.Primary}" Content="I REPASTED THIS MACHINE"
-                                    HorizontalAlignment="Left" Command="{Binding RegisterRepasteCommand}"/>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,16,0,12"
-                                       Text="Changed the cooling but not the paste - new fans, a clean-out, a moved rig - or DeltaT sat idle for months? Recalibrate to relearn the baseline. No before/after claim, just a fresh reference."/>
-                            <Button Style="{StaticResource Button.Ghost}" Content="RECALIBRATE BASELINE"
-                                    HorizontalAlignment="Left" Command="{Binding RecalibrateCommand}"/>
-                        </StackPanel>
-                    </HeaderedContentControl>
-
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Data" Margin="0,0,0,14">
+                    <HeaderedContentControl Grid.Column="1" Style="{StaticResource Module.Quiet}" Header="Data"
+                                            Margin="7,0,7,0">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11"
                                        FontFamily="{StaticResource Font.Mono}" Text="{Binding DbText}"
@@ -172,15 +246,16 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Feedback">
+                    <HeaderedContentControl Grid.Column="2" Style="{StaticResource Module.Quiet}" Header="Feedback"
+                                            Margin="7,0,0,0">
                         <StackPanel>
-                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
-                                       Text="Hit a bug or want a feature? Send it straight to the developer - no account, no public thread. Your app version, Windows version, and PC model ride along so it's reproducible."/>
-                            <Button Style="{StaticResource Button.Primary}" Content="REPORT A BUG OR IDEA"
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,0,0,12" TextWrapping="Wrap"
+                                       Text="Bug or idea? It goes straight to the developer, no account needed. App version, Windows version, and PC model ride along."/>
+                            <Button Style="{StaticResource Button.Ghost}" Content="REPORT A BUG OR IDEA"
                                     HorizontalAlignment="Left" Click="OnSendFeedback"/>
                         </StackPanel>
                     </HeaderedContentControl>
-                </StackPanel>
+                </Grid>
             </Grid>
         </ScrollViewer>
 

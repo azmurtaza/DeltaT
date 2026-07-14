@@ -6,7 +6,13 @@ namespace DeltaT.Core.Diagnostics;
 
 public enum FingerprintTarget { Cpu, Gpu }
 
-public sealed record FingerprintProgress(string Phase, double SecondsLeft, double? TempC, double? Load);
+/// <summary>Which leg of the test protocol is running — the machine-readable twin of
+/// the prose <c>Phase</c>, so a UI can light the matching segment of a protocol strip
+/// without parsing the phrase.</summary>
+public enum FingerprintStage { Settle, Load, Cooldown }
+
+public sealed record FingerprintProgress(
+    string Phase, FingerprintStage Stage, double SecondsLeft, double? TempC, double? Load);
 
 /// <summary>One fingerprint run's numbers. The primary Start/Peak/Sustained fields
 /// describe whichever component was loaded (<see cref="Target"/>); their JSON names
@@ -65,6 +71,7 @@ public sealed class FingerprintTest
         // phase change, read on the monitor thread in Collect — stable within a phase, so
         // a torn read at worst mislabels a single frame's countdown by a tick.
         string phase = "";
+        FingerprintStage stage = FingerprintStage.Settle;
         DateTimeOffset phaseEnd = DateTimeOffset.UtcNow;
 
         void Collect(SensorSnapshot snap)
@@ -77,7 +84,7 @@ public sealed class FingerprintTest
                 // window renders from — so the fingerprint gauge can't trail it by a tick.
                 if (phase.Length > 0)
                     progress?.Report(new FingerprintProgress(
-                        phase, Math.Max(0, (phaseEnd - DateTimeOffset.UtcNow).TotalSeconds), t, null));
+                        phase, stage, Math.Max(0, (phaseEnd - DateTimeOffset.UtcNow).TotalSeconds), t, null));
             }
             if (target == FingerprintTarget.Cpu
                 && snap.Find(ComponentKind.GpuDiscrete) is { TemperatureC: { } gt, LoadPercent: { } gl })
@@ -87,7 +94,7 @@ public sealed class FingerprintTest
         _monitor.SnapshotCaptured += Collect;
         try
         {
-            await TickPhase("Settling - hands off the machine", Settle, progress, ct).ConfigureAwait(false);
+            await TickPhase("Settling. Hands off the machine", FingerprintStage.Settle, Settle, progress, ct).ConfigureAwait(false);
 
             double start = TailAverage(samples, TimeSpan.FromSeconds(10)) ?? samples.LastOrDefault().Temp;
             int loadStartIndex = samples.Count;
@@ -96,7 +103,7 @@ public sealed class FingerprintTest
 
             using (IDisposable burner = CreateBurner(target))
             {
-                await TickPhase($"Full {label} load - let it cook", Load, progress, ct).ConfigureAwait(false);
+                await TickPhase($"Full {label} load, let it cook", FingerprintStage.Load, Load, progress, ct).ConfigureAwait(false);
             }
 
             var loadSamples = samples.Skip(loadStartIndex).ToList();
@@ -135,7 +142,7 @@ public sealed class FingerprintTest
             // Cooldown ticks like any other phase — the countdown counts down and the
             // gauge keeps tracking the component as it falls — but a Stop here just ends
             // the wait and still returns the finished result: the numbers are already in hand.
-            await TickPhase("Cooling down", Cooldown, progress, ct, cancelable: false).ConfigureAwait(false);
+            await TickPhase("Cooling down", FingerprintStage.Cooldown, Cooldown, progress, ct, cancelable: false).ConfigureAwait(false);
             return result;
         }
         finally
@@ -143,10 +150,11 @@ public sealed class FingerprintTest
             _monitor.SnapshotCaptured -= Collect;
         }
 
-        async Task TickPhase(string phaseName, TimeSpan duration, IProgress<FingerprintProgress>? prog,
-            CancellationToken token, bool cancelable = true)
+        async Task TickPhase(string phaseName, FingerprintStage phaseStage, TimeSpan duration,
+            IProgress<FingerprintProgress>? prog, CancellationToken token, bool cancelable = true)
         {
             phase = phaseName;
+            stage = phaseStage;
             DateTimeOffset end = DateTimeOffset.UtcNow + duration;
             phaseEnd = end;
             while (DateTimeOffset.UtcNow < end)
@@ -159,7 +167,7 @@ public sealed class FingerprintTest
                 // Countdown tick every half second so the timer never stalls. The
                 // temperature rides in live from Collect; null here means "unchanged",
                 // so the gauge holds the last reading between snapshots.
-                prog?.Report(new FingerprintProgress(phaseName, (end - DateTimeOffset.UtcNow).TotalSeconds, null, null));
+                prog?.Report(new FingerprintProgress(phaseName, phaseStage, (end - DateTimeOffset.UtcNow).TotalSeconds, null, null));
                 try { await Task.Delay(500, token).ConfigureAwait(false); }
                 catch (OperationCanceledException) { if (cancelable) throw; return; }
             }

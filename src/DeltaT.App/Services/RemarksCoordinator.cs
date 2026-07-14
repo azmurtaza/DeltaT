@@ -101,7 +101,9 @@ public sealed class RemarksCoordinator : IDisposable
             ThrottleEventsLast30Days: _repo.CountEvents("throttle", null, nowTs - 30L * 86400, nowTs),
             DaysTogether: DaysTogether(nowTs),
             CityChanged: TrackCityChange(),
-            Fingerprint: BuildFingerprintEcho(nowTs));
+            Fingerprint: BuildFingerprintEcho(nowTs),
+            Trends: BuildTrends(now),
+            DaysSinceLastFingerprint: DaysSinceLastFingerprint(nowTs));
 
         IReadOnlyList<Remark> fired = _engine.Evaluate(ctx);
         foreach (Remark remark in fired)
@@ -115,6 +117,34 @@ public sealed class RemarksCoordinator : IDisposable
         }
         if (fired.Count > 0)
             _settings.Set("remarks.cooldowns", _engine.ExportCooldownState());
+    }
+
+    private IReadOnlyDictionary<ComponentKind, TrendResult>? _trendsCache;
+    private DateTimeOffset _trendsComputedAt = DateTimeOffset.MinValue;
+
+    /// <summary>Long-term drift/step per paste component. A weeks-scale signal, so it's
+    /// recomputed at most every few hours (and cached between) rather than every minute —
+    /// the underlying data barely moves in that span.</summary>
+    private IReadOnlyDictionary<ComponentKind, TrendResult>? BuildTrends(DateTimeOffset now)
+    {
+        if (_trendsCache is not null && now - _trendsComputedAt < TimeSpan.FromHours(6))
+            return _trendsCache;
+        var trends = new Dictionary<ComponentKind, TrendResult>();
+        foreach (ComponentKind kind in new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete })
+        {
+            TrendResult tr = _scores.ComputeTrend(kind, now);
+            if (tr.HasTrend || tr.Step is not null)
+                trends[kind] = tr;
+        }
+        _trendsComputedAt = now;
+        return _trendsCache = trends.Count > 0 ? trends : null;
+    }
+
+    /// <summary>Days since the most recent fingerprint of any kind, or null if none ever ran.</summary>
+    private int? DaysSinceLastFingerprint(long nowTs)
+    {
+        StoredEvent? last = _repo.GetEvents("fingerprint", 0, nowTs, 1).FirstOrDefault();
+        return last is null ? null : (int)((nowTs - last.Ts) / 86400);
     }
 
     /// <summary>Days since DeltaT first ever evaluated on this machine. Persisted
@@ -225,7 +255,7 @@ public sealed class RemarksCoordinator : IDisposable
             long last = long.TryParse(_settings.Get(key), out long l) ? l : 0;
             if (nowTs - last < 20 * 3600)
                 continue;
-            _repo.InsertEvent(nowTs, "score", kind.ToString(), null, 0, $"{kind.Label()} paste score {score.Value}",
+            _repo.InsertEvent(nowTs, "score", kind.ToString(), null, 0, $"{kind.Label()} thermal score {score.Value}",
                 JsonSerializer.Serialize(new { value = score.Value }));
             _settings.Set(key, nowTs.ToString());
         }

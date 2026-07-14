@@ -215,6 +215,41 @@
         <Setter Property="Height" Value="2"/>
     </Style>
 
+    <!-- ============================== brand mark -->
+
+    <!-- The wordmark's delta carries the ember→red identity gradient — the one
+         licensed non-data gradient besides the window glow. -->
+    <LinearGradientBrush x:Key="Brush.BrandDelta" StartPoint="0.5,0" EndPoint="0.5,1" po:Freeze="True">
+        <GradientStop Color="{StaticResource Col.AccentBright}" Offset="0"/>
+        <GradientStop Color="{StaticResource Col.Accent}" Offset="0.55"/>
+        <GradientStop Color="{StaticResource Col.Hot}" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Brand.Mark: the machined ΔT — a chamfered outline delta with the identity
+         gradient, the T nested into the empty space above its right slope so the
+         pair reads as one ligature. Defined once; every window chrome uses this
+         (wrap in a Viewbox to scale, e.g. the onboarding hero). -->
+    <Style x:Key="Brand.Mark" TargetType="ContentControl">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <StackPanel Orientation="Horizontal">
+                        <Path VerticalAlignment="Center" Margin="0,1,3,0" SnapsToDevicePixels="True"
+                              Fill="{StaticResource Brush.BrandDelta}"
+                              Data="M 9,0 L 18,16 H 0 Z M 9,5.6 L 13.3,13.2 H 4.7 Z" Stretch="None"/>
+                        <!-- T cap height matched to the delta's 16px (Bahnschrift cap ≈ 0.72 em) -->
+                        <TextBlock FontFamily="{StaticResource Font.Display}" FontSize="22" FontWeight="Bold"
+                                   Foreground="{StaticResource Brush.Text}" VerticalAlignment="Center"
+                                   Margin="-4,4,0,0" Text="T"/>
+                    </StackPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Module: the lead section container — ember overline + hairline rule +
          hazard ribbon, chamfered top-right corner, L-brackets. ONE lead module
          (or one matched pair) per screen; everything else uses Module.Quiet. -->
