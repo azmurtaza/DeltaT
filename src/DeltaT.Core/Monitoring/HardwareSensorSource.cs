@@ -607,11 +607,18 @@ public sealed class HardwareSensorSource : ISensorSource
         false,
         null);
 
-    private static ComponentReading MapStorage(IHardware hw) => new(
+    /// <summary>Drive activity is a rate, so LHM needs two samples to state one: it reports
+    /// 100 - (idle time elapsed / wall time elapsed), each side diffed against the previous
+    /// refresh. The first refresh of a session has nothing to diff against and the two
+    /// counters are not even on the same clock there (idle time counts from boot, query time
+    /// is an absolute timestamp), so the ratio collapses to ~0 and the drive reads a flat
+    /// 100% busy. Storage refreshes once a minute, so that phantom sat on screen for the
+    /// first minute of every run. Report no load until a real interval exists.</summary>
+    private ComponentReading MapStorage(IHardware hw) => new(
         ComponentKind.Storage, hw.Name,
         Temp(Find(hw, SensorType.Temperature, "Temperature") ?? FirstOfType(hw, SensorType.Temperature)),
         null,
-        Percent(Find(hw, SensorType.Load, "Total Activity")),
+        _visitor.RefreshCount(hw) >= 2 ? Percent(Find(hw, SensorType.Load, "Total Activity")) : null,
         null, null,
         Percent(Find(hw, SensorType.Level, "Percentage Used")),
         false, null);
@@ -747,6 +754,12 @@ public sealed class HardwareSensorSource : ISensorSource
     private sealed class UpdateVisitor : IVisitor
     {
         private readonly Dictionary<IHardware, DateTimeOffset> _lastUpdate = new();
+        private readonly Dictionary<IHardware, int> _refreshes = new();
+
+        /// <summary>How many times this hardware item has actually been refreshed since the
+        /// session opened. Sensors whose value is a rate between two refreshes (drive
+        /// activity) are meaningless until this reaches 2.</summary>
+        public int RefreshCount(IHardware hw) => _refreshes.TryGetValue(hw, out int n) ? n : 0;
 
         /// <summary>Zero = every tick. The rest are paced by how fast the reading can
         /// move: a GPU die swings in seconds, SMART wear and battery temperature do not
@@ -777,7 +790,11 @@ public sealed class HardwareSensorSource : ISensorSource
 
         /// <summary>Forget pacing state (call when the LHM session is reopened: the old
         /// hardware instances are gone and the new ones must all refresh immediately).</summary>
-        public void Reset() => _lastUpdate.Clear();
+        public void Reset()
+        {
+            _lastUpdate.Clear();
+            _refreshes.Clear();
+        }
 
         public void VisitComputer(IComputer computer) => computer.Traverse(this);
 
@@ -793,6 +810,7 @@ public sealed class HardwareSensorSource : ISensorSource
             {
                 hardware.Update();
                 _lastUpdate[hardware] = now;
+                _refreshes[hardware] = RefreshCount(hardware) + 1;
             }
 
             // Sub-hardware inherits the parent's cadence: it is the same physical part
