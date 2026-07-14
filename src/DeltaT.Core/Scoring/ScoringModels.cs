@@ -6,6 +6,9 @@ namespace DeltaT.Core.Scoring;
 public enum Verdict
 {
     Calibrating,
+    // The baseline is locked, but nothing comparable has happened since, so there is
+    // no evidence to put a number on. Not health, and emphatically not a 100.
+    AwaitingData,
     Fresh,       // 85–100
     Good,        // 70–84
     Aging,       // 50–69
@@ -44,6 +47,17 @@ public sealed record ComponentScore(
     public ScoringEngine.FanNormalization? Fan { get; init; }
     public ScoringEngine.PowerNormalization? Power { get; init; }
 
+    /// <summary>The baseline is locked but nothing comparable has been measured against
+    /// it yet, so there is no number to show. The score starts at 100 and comes DOWN on
+    /// evidence, so an absence of evidence would otherwise read as a confident "100,
+    /// Excellent" while every aspect honestly reads "--".</summary>
+    public bool AwaitingData => Verdict == Verdict.AwaitingData;
+
+    /// <summary>True when <see cref="Value"/> is a final reading judged against a locked
+    /// baseline, as opposed to a calibrating, provisional or awaiting-data placeholder.
+    /// Anything that records, compares or announces the number gates on this.</summary>
+    public bool Scored => !Calibrating && !AwaitingData;
+
     /// <summary>The weighted fan+power-normalized excess over baseline (°C), the number
     /// behind the "running N° hotter" sentence, exposed so the UI can draw it as an
     /// instrument readout instead of prose. Null when nothing was comparable.</summary>
@@ -61,6 +75,13 @@ public sealed record ComponentScore(
 
     public static ComponentScore CalibratingScore(ComponentKind kind, string name, double progress, IReadOnlyList<ScoreReason> reasons, string constraint = "") =>
         new(kind, name, 0, Verdict.Calibrating, true, progress, reasons, PatternHint.None, constraint);
+
+    /// <summary>Locked baseline, nothing to compare against it yet: no number, no verdict,
+    /// no cause. The aspects still ride along, so the subsystems that CAN be read without a
+    /// comparison (headroom, throttling) show their state while the rest stay "--".</summary>
+    public static ComponentScore AwaitingDataScore(
+        ComponentKind kind, string name, IReadOnlyList<ScoreReason> reasons, IReadOnlyList<AspectHealth> aspects) =>
+        new(kind, name, 0, Verdict.AwaitingData, false, 1.0, reasons, PatternHint.None) { Aspects = aspects };
 }
 
 /// <summary>Recent behaviour of one (bucket, ambient band) cell.</summary>
@@ -160,6 +181,7 @@ public static class Verdicts
     public static string Label(this Verdict verdict) => verdict switch
     {
         Verdict.Calibrating => "Calibrating",
+        Verdict.AwaitingData => "Waiting for load",
         Verdict.Fresh => "Excellent",
         Verdict.Good => "Good",
         Verdict.Aging => "Drifting, watch it",
@@ -173,6 +195,7 @@ public static class Verdicts
     public static string ShortLabel(this Verdict verdict) => verdict switch
     {
         Verdict.Calibrating => "Calibrating",
+        Verdict.AwaitingData => "Waiting",
         Verdict.Fresh => "Excellent",
         Verdict.Good => "Good",
         Verdict.Aging => "Drifting",

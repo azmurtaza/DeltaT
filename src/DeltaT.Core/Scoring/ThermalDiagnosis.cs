@@ -58,7 +58,7 @@ public sealed record ThermalDiagnosis(IReadOnlyList<CauseFinding> Findings)
         ThermalCause.Airflow => "Airflow",
         ThermalCause.FanFault => "Fan",
         ThermalCause.Mount => "Mount",
-        ThermalCause.PowerConfig => "Power/OC",
+        ThermalCause.PowerConfig => "Power",
         ThermalCause.HighAmbient => "Ambient",
         _ => "Headroom",
     };
@@ -137,8 +137,9 @@ public static class ThermalDiagnostician
         double powerConf = PowerConfidence(e);
         if (powerConf >= SurfaceFloor)
         {
-            string dir = e.PowerCorrectionC < 0 ? "more power than baseline (an overclock or raised limit)"
-                                                : "less power than baseline (an undervolt or lower limit)";
+            string dir = e.PowerCorrectionC < 0
+                ? "more power than the baseline learned (a boost or turbo mode switched on, a raised power limit, a faster power plan, or an overclock)"
+                : "less power than the baseline learned (boost switched off, a lower power limit, a battery-saver plan, or an undervolt)";
             findings.Add(new CauseFinding(ThermalCause.PowerConfig, powerConf,
                 $"About {Math.Abs(e.PowerCorrectionC):0.#}° of the difference is {dir}, not cooling. Judged at equal wattage, the cooler is treated fairly."));
         }
@@ -263,15 +264,19 @@ public static class ThermalDiagnostician
         // Power: a state, not a health. Stock / overclock / undervolt vs baseline watts.
         if (e.PowerRatio is { } pr)
         {
+            // A watt reading, not a verdict, and not an accusation: the common reason a
+            // machine draws more or less than its baseline is a boost/turbo mode or power
+            // plan change, not an overclock. So the cell states the measured difference and
+            // lets the tooltip list the reasons it could have.
             if (pr >= 1 + PowerStateDeadband)
-                list.Add(new AspectHealth(HealthAspect.Power, null, "OC",
-                    $"Drawing about {(pr - 1) * 100:0}% more power than baseline (an overclock or a raised limit). Comparisons are corrected to equal wattage, so this never counts against the cooling."));
+                list.Add(new AspectHealth(HealthAspect.Power, null, $"+{(pr - 1) * 100:0}%",
+                    $"Drawing about {(pr - 1) * 100:0}% more power than the baseline learned. Usually a boost or turbo mode turned on, a raised power limit, or a faster power plan; an overclock does it too. Comparisons are corrected to equal wattage, so this never counts against the cooling."));
             else if (pr <= 1 - PowerStateDeadband)
-                list.Add(new AspectHealth(HealthAspect.Power, null, "UV",
-                    $"Drawing about {(1 - pr) * 100:0}% less power than baseline (an undervolt or a lower limit). Comparisons are corrected to equal wattage, so real degradation can't hide behind the lower heat."));
+                list.Add(new AspectHealth(HealthAspect.Power, null, $"-{(1 - pr) * 100:0}%",
+                    $"Drawing about {(1 - pr) * 100:0}% less power than the baseline learned. Usually boost turned off, a lower power limit, or a battery-saver plan; an undervolt does it too. Comparisons are corrected to equal wattage, so real degradation can't hide behind the lower heat."));
             else
-                list.Add(new AspectHealth(HealthAspect.Power, null, "STOCK",
-                    "Package power sits where the baseline learned it. No overclock or undervolt in play."));
+                list.Add(new AspectHealth(HealthAspect.Power, null, "MATCHED",
+                    "Package power sits where the baseline learned it, so the comparison needs no wattage correction."));
         }
         else
         {

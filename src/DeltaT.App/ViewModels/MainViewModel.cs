@@ -240,6 +240,8 @@ public partial class MainViewModel : ObservableObject
                 notice = $"SENSORS STALLED. Last reading {ageSeconds:0} s ago; values shown may be outdated";
             else if (_needsAdmin)
                 notice = "CPU TEMPERATURE LOCKED. Reading the CPU needs administrator access (the kernel driver). Restart elevated to unlock it.";
+            else if (!Simulated && !PawnIoStatus.IsInstalled)
+                notice = "SENSOR DRIVER MISSING. CPU temperature, package power and throttle detection need the PawnIO driver. Install it from Settings.";
         }
         SensorNotice = notice;
         // The recovery button only makes sense for the elevation case, never for a
@@ -285,7 +287,8 @@ public partial class MainViewModel : ObservableObject
         if (!_hasFanSensor && all.Any(s => s.Fan is not null))
             OnFanSensorFound();
 
-        if (all.All(s => s.Calibrating))
+        List<ComponentScore> scored = all.Where(s => s.Scored).OrderBy(s => s.Value).ToList();
+        if (scored.Count == 0)
         {
             // Once there's real load to compare, show the estimated verdict (worst
             // first) with its confidence, rather than hiding behind a bare percentage.
@@ -303,12 +306,27 @@ public partial class MainViewModel : ObservableObject
                 return;
             }
 
+            // Every baseline is locked, but nothing comparable has run against them yet,
+            // so there is genuinely nothing to score. Say so instead of letting the "100
+            // minus evidence" arithmetic report a hollow Excellent.
+            List<ComponentScore> waiting = all.Where(s => s.AwaitingData).ToList();
+            if (waiting.Count == all.Count)
+            {
+                ComponentScore first = waiting[0];
+                HeroCalibrating = false;
+                BuildHeroStats(first, calibrating: false);
+                VerdictTitle = "Waiting for a comparable load";
+                VerdictDetail = "The baseline is locked, but nothing has run against it since. Play a game, run a render, or run the fingerprint test, and DeltaT will score it.";
+                UpdateDiagnosis(null);
+                return;
+            }
+
             // Nothing comparable yet: lead with the calibration confidence itself
             // (big numeral, fill bar) and, honestly, the one thing still holding
             // the baseline back — confidence, not a countdown. The headline is the
             // LEAST confident component: the baseline isn't trustworthy until every
             // component locks, so a confident CPU must not paper over a raw GPU.
-            ComponentScore lead = all.OrderBy(s => s.CalibrationProgress).First();
+            ComponentScore lead = all.Where(s => s.Calibrating).OrderBy(s => s.CalibrationProgress).First();
             HeroStats.Clear();
             string constraint = lead.CalibrationConstraint;
             HeroCalibrating = true;
@@ -326,7 +344,7 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        ComponentScore worst = all.Where(s => !s.Calibrating).OrderBy(s => s.Value).First();
+        ComponentScore worst = scored[0];
         HeroCalibrating = false;
         BuildHeroStats(worst, calibrating: false);
         VerdictTitle = $"{worst.Kind.Label()}: {worst.Verdict.Label()}";

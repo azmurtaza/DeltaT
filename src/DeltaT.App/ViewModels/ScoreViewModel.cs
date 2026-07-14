@@ -24,6 +24,8 @@ public partial class ScoreViewModel : ObservableObject
     [ObservableProperty] private string _calibrationConstraint = "";
     // A pre-lock estimate: show the number, but marked as provisional with its confidence.
     [ObservableProperty] private bool _provisional;
+    // Locked, but nothing comparable measured yet: the dial shows "--", not a hollow 100.
+    [ObservableProperty] private bool _awaitingData;
 
     public ScoreViewModel(string label) => Label = label;
 
@@ -38,6 +40,7 @@ public partial class ScoreViewModel : ObservableObject
         Value = score.Value;
         Calibrating = score.Calibrating;
         Provisional = score.Provisional;
+        AwaitingData = score.AwaitingData;
 
         double incoming = score.CalibrationProgress;
         if (!score.Calibrating)

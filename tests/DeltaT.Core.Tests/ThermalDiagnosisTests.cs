@@ -111,7 +111,7 @@ public class AspectHealthTests
             Assert.True(a.Known);
             Assert.True(a.Score >= 85, $"{a.Aspect} should read healthy, got {a.Score}");
         }
-        Assert.Equal("STOCK", Get(e, HealthAspect.Power).Status);
+        Assert.Equal("MATCHED", Get(e, HealthAspect.Power).Status);
     }
 
     [Fact]
@@ -159,11 +159,14 @@ public class AspectHealthTests
     }
 
     [Fact]
-    public void PowerState_ReflectsOverclockAndUndervolt()
+    public void PowerState_StatesTheMeasuredDifference_NotAnAccusation()
     {
-        Assert.Equal("OC", Get(Base(powerRatio: 1.25), HealthAspect.Power).Status);
-        Assert.Equal("UV", Get(Base(powerRatio: 0.8), HealthAspect.Power).Status);
+        // A boost/turbo mode change is the common reason watts move, so the cell reports
+        // the measured difference rather than calling the machine overclocked.
+        Assert.Equal("+25%", Get(Base(powerRatio: 1.25), HealthAspect.Power).Status);
+        Assert.Equal("-20%", Get(Base(powerRatio: 0.8), HealthAspect.Power).Status);
         Assert.Null(Get(Base(powerRatio: 1.25), HealthAspect.Power).Score);
+        Assert.DoesNotContain("overclock", Get(Base(powerRatio: 0.8), HealthAspect.Power).Detail);
     }
 
     [Fact]

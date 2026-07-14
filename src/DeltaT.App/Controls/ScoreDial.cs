@@ -30,6 +30,10 @@ public sealed class ScoreDial : FrameworkElement
         nameof(Provisional), typeof(bool), typeof(ScoreDial),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender, OnFractionSourceChanged));
 
+    public static readonly DependencyProperty AwaitingDataProperty = DependencyProperty.Register(
+        nameof(AwaitingData), typeof(bool), typeof(ScoreDial),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender, OnFractionSourceChanged));
+
     public static readonly DependencyProperty LabelProperty = DependencyProperty.Register(
         nameof(Label), typeof(string), typeof(ScoreDial),
         new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.AffectsRender));
@@ -46,6 +50,7 @@ public sealed class ScoreDial : FrameworkElement
     public bool Calibrating { get => (bool)GetValue(CalibratingProperty); set => SetValue(CalibratingProperty, value); }
     public double Progress { get => (double)GetValue(ProgressProperty); set => SetValue(ProgressProperty, value); }
     public bool Provisional { get => (bool)GetValue(ProvisionalProperty); set => SetValue(ProvisionalProperty, value); }
+    public bool AwaitingData { get => (bool)GetValue(AwaitingDataProperty); set => SetValue(AwaitingDataProperty, value); }
     public string Label { get => (string)GetValue(LabelProperty); set => SetValue(LabelProperty, value); }
     public string Verdict { get => (string)GetValue(VerdictProperty); set => SetValue(VerdictProperty, value); }
     private double RenderFraction => (double)GetValue(RenderFractionProperty);
@@ -76,10 +81,13 @@ public sealed class ScoreDial : FrameworkElement
     {
         var dial = (ScoreDial)d;
         // Provisional and locked both fill to the score; a bare calibrating dial
-        // (no number yet) fills to learning progress.
-        double target = dial.Calibrating && !dial.Provisional
-            ? Math.Clamp(dial.Progress, 0, 1)
-            : Math.Clamp(dial.Score / 100.0, 0, 1);
+        // (no number yet) fills to learning progress; an awaiting-data dial has nothing
+        // to fill with and stays dark.
+        double target = dial.AwaitingData
+            ? 0
+            : dial.Calibrating && !dial.Provisional
+                ? Math.Clamp(dial.Progress, 0, 1)
+                : Math.Clamp(dial.Score / 100.0, 0, 1);
         var anim = new DoubleAnimation(target, TimeSpan.FromMilliseconds(600))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
@@ -135,10 +143,16 @@ public sealed class ScoreDial : FrameworkElement
             dc.DrawLine(pen, a, b);
         }
 
-        Color subColor = Calibrating && !Provisional
-            ? Color.FromArgb(190, ThermalPalette.Accent.R, ThermalPalette.Accent.G, ThermalPalette.Accent.B)
-            : litColor;
-        if (Calibrating && !Provisional)
+        Color subColor = AwaitingData
+            ? ThermalPalette.TextFaint
+            : Calibrating && !Provisional
+                ? Color.FromArgb(190, ThermalPalette.Accent.R, ThermalPalette.Accent.G, ThermalPalette.Accent.B)
+                : litColor;
+        if (AwaitingData)
+            // Locked, but nothing comparable measured against the baseline yet. The dial
+            // has no honest number to show, so it shows none: a dash, not a hollow 100.
+            DrawCenter(dc, center, size, dip, "--", Verdict, ThermalPalette.TextDim, subColor);
+        else if (Calibrating && !Provisional)
             // No score yet, so the meter reads its one honest quantity: learning
             // progress, big, in dim ember (the ticks fill with it too). The word
             // beneath says what the number is, so it can't be mistaken for health.

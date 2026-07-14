@@ -44,11 +44,13 @@ public sealed partial class AspectCellViewModel : ObservableObject
         }
         else
         {
-            // Power state: a fact, not a health. Steel marks a deliberate change
-            // (the only cool hue in the app, reserved for "not a fault").
+            // Power state: a fact, not a health, so it carries no bar and no verdict color.
+            // A measured difference (+38%, -22%) reads in steel, the one cool hue in the
+            // app, reserved for "this moved, and it isn't a fault"; a machine drawing its
+            // baseline watts just says MATCHED, dim, like the fan readout.
             Value = aspect.Status;
             HasBar = false;
-            ValueBrush = aspect.Status == "STOCK" ? DimBrush : CoolBrush;
+            ValueBrush = aspect.Status == "MATCHED" ? DimBrush : CoolBrush;
         }
     }
 

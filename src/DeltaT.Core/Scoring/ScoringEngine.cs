@@ -51,8 +51,14 @@ public static class ScoringEngine
     public const double PowerRatioClampHi = 2.0;
 
     /// <summary>Final backstop on the °C a cell's rise may be shifted by power normalization,
-    /// after the ratio clamp — a large but not unbounded correction for a big power swing.</summary>
-    public const double MaxPowerCorrectionC = 20;
+    /// after the ratio clamp — a large but not unbounded correction for a big power swing.
+    /// Sized against the physics, not intuition: a 50 °C load rise (an ordinary laptop under
+    /// full load) with CPU boost switched on after a boost-off baseline needs the full 0.5–2.0
+    /// ratio range to be expressible, which is a correction of tens of degrees. At 20 °C the
+    /// cap clipped exactly those legitimate cases and left a residual "excess" that the score
+    /// then charged to the paste; the ratio clamp above is what guards against sensor
+    /// glitches, so this only needs to stop a runaway.</summary>
+    public const double MaxPowerCorrectionC = 35;
 
     /// <summary>Below this wattage a "power reading" is idle/noise, not a load the paste
     /// is meaningfully conducting — don't normalize against it.</summary>
@@ -182,8 +188,8 @@ public static class ScoringEngine
             if (powerNorm is { } pn)
             {
                 reasons.Add(new ScoreReason("power-normalized", pn.RecentW > pn.BaselineW
-                    ? $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline. More power means a hotter die for reasons that aren't the paste, so the comparison was corrected by {pn.CorrectionC:0.#} °C. Same-wattage, the paste is judged fairly."
-                    : $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline. Less power (an undervolt or lower limit) cools the die on its own, so the comparison was corrected by +{pn.CorrectionC:0.#} °C rather than credited to the paste.",
+                    ? $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (a boost mode, a power limit, or an overclock). More power means a hotter die for reasons that aren't the paste, so the comparison was corrected by {pn.CorrectionC:0.#} °C. Same wattage, the paste is judged fairly."
+                    : $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (boost off, a lower power limit, or an undervolt). Less power cools the die on its own, so the comparison was corrected by +{pn.CorrectionC:0.#} °C rather than credited to the paste.",
                     0));
             }
 
@@ -222,8 +228,16 @@ public static class ScoringEngine
                 $"Hit the thermal limit {input.ThrottleEvents}× in the last {input.RecentWindowHours / 24:0.#} days.", p));
         }
 
+        // The soak and cooldown rates are power-dependent too, so they get the same
+        // source-side correction as the rise itself (see PowerRateScale). Without it,
+        // switching CPU boost/turbo on after a boost-off baseline reads as "heat-soaks
+        // faster" (a paste tell), and switching it off reads as "sheds heat slower".
+        double rateScale = PowerRateScale(ex);
+        double? soakRecent = input.SoakRateRecent * rateScale;
+        double? cooldownRecent = input.CooldownRateRecent * rateScale;
+
         // 3) Heat-soak rate: drying paste makes temperature spike faster on load onset.
-        if (input.SoakRateRecent is { } soakNow && input.SoakRateBaseline is { } soakBase && soakBase > 1)
+        if (soakRecent is { } soakNow && input.SoakRateBaseline is { } soakBase && soakBase > 1)
         {
             double ratio = soakNow / soakBase;
             if (ratio > 1.15)
@@ -239,7 +253,7 @@ public static class ScoringEngine
         // degraded paste also sheds heat sluggishly when a load ends. This is the opposite
         // edge of the soak signal and shows up whenever a game or render finishes, so a
         // machine used in long steady sessions still yields it. Slower-than-baseline = worse.
-        if (input.CooldownRateRecent is { } coolNow && input.CooldownRateBaseline is { } coolBase && coolBase > 1)
+        if (cooldownRecent is { } coolNow && input.CooldownRateBaseline is { } coolBase && coolBase > 1)
         {
             double ratio = coolNow / coolBase;
             if (ratio < CooldownSlowdownRatio)
@@ -254,11 +268,22 @@ public static class ScoringEngine
         // 4) Absolute sanity vs silicon limit and chassis norms.
         penalty += AddAbsoluteObservations(input, reasons, fmtTemp, calibrating: false);
 
-        int score = (int)Math.Round(Math.Clamp(100 - penalty, 0, 100));
         PatternHint hint = InferPattern(input, heavyExcess, idleExcess, broadExcess, fanUndershoot);
-        DiagnosisInputs evidence = GatherDiagnosisInputs(input, ex, weightedExcess, heavyExcess, idleExcess, broadExcess, fanUndershoot, powerNorm);
-        ThermalDiagnosis diagnosis = ThermalDiagnostician.Diagnose(evidence);
+        DiagnosisInputs evidence = GatherDiagnosisInputs(input, ex, weightedExcess, heavyExcess, idleExcess, broadExcess, fanUndershoot, powerNorm, soakRecent, cooldownRecent);
         IReadOnlyList<AspectHealth> aspects = ThermalDiagnostician.AssessAspects(evidence);
+
+        // The score starts at 100 and comes down on evidence, so no evidence at all is not
+        // a 100 — it's an unanswered question. A locked baseline with nothing comparable
+        // measured against it (the state right after a lock, before the next real load)
+        // would otherwise report a confident "100, Excellent" while every aspect it claims
+        // to judge honestly reads "--". Say "waiting for load" instead of inventing health.
+        // Any real evidence at all (a throttle event, peaks at the silicon wall) still
+        // scores: a fault is never hidden behind a waiting state.
+        if (weightedExcess is null && penalty <= 0)
+            return ComponentScore.AwaitingDataScore(input.Kind, input.Name, reasons, aspects);
+
+        int score = (int)Math.Round(Math.Clamp(100 - penalty, 0, 100));
+        ThermalDiagnosis diagnosis = ThermalDiagnostician.Diagnose(evidence);
 
         // A locked score is final; an unlocked one is a provisional estimate that
         // still carries its calibration confidence so the UI can show the band.
@@ -276,7 +301,8 @@ public static class ScoringEngine
     /// and the per-aspect health readout, so both judge from the same facts.</summary>
     private static DiagnosisInputs GatherDiagnosisInputs(
         ScoreInput input, ExcessResult ex, double? weightedExcess, double? heavyExcess,
-        double? idleExcess, bool broadExcess, bool fanUndershoot, PowerNormalization? powerNorm)
+        double? idleExcess, bool broadExcess, bool fanUndershoot, PowerNormalization? powerNorm,
+        double? soakRecent, double? cooldownRecent)
     {
         (double? gap, double? baseGap) = HotspotGap(input);
 
@@ -287,8 +313,8 @@ public static class ScoringEngine
         bool beyondNorm = input.Profile is { } prof && heavyAvg is { } ha && ha >= prof.SustainedNormC;
 
         double? fanRatio = ex.FanRecentMean is { } fr && ex.FanBaselineMean is { } fb && fb > 0 ? fr / fb : null;
-        double? soakRatio = input.SoakRateRecent is { } sr && input.SoakRateBaseline is { } sb && sb > 1 ? sr / sb : null;
-        double? coolRatio = input.CooldownRateRecent is { } cr && input.CooldownRateBaseline is { } cb && cb > 1 ? cr / cb : null;
+        double? soakRatio = soakRecent is { } sr && input.SoakRateBaseline is { } sb && sb > 1 ? sr / sb : null;
+        double? coolRatio = cooldownRecent is { } cr && input.CooldownRateBaseline is { } cb && cb > 1 ? cr / cb : null;
         double? powerRatio = ex.PowerRecentMean is { } pw && ex.PowerBaselineMean is { } pb && pb >= MinMeaningfulPowerW
             ? pw / pb : null;
 
@@ -307,6 +333,24 @@ public static class ScoringEngine
         >= 21 => $"~{(int)Math.Round(days / 7.0)} weeks",
         _ => $"{days} days",
     };
+
+    /// <summary>Factor that expresses a recent RATE (°C/min) at baseline power, the rate-side
+    /// twin of the °C correction applied to the rise. Both the heat-soak rate (dT/dt ≈ P/C)
+    /// and the post-load cooldown rate (which starts from a die temperature that itself
+    /// scales with P) move roughly linearly with dissipated power, so a power change alters
+    /// them for reasons that have nothing to do with the paste: disabling Intel turbo/boost
+    /// slows the soak AND the cooldown, enabling it speeds both. Uncorrected, that fires the
+    /// "sheds heat slower" penalty on boost-off and the "heat-soaks faster" paste tell on
+    /// boost-on. Returns 1.0 when there's no usable power reading on both sides, or when the
+    /// difference is inside the normal run-to-run deadband.</summary>
+    private static double PowerRateScale(ExcessResult ex)
+    {
+        if (ex.PowerBaselineMean is not { } baseW || ex.PowerRecentMean is not { } recentW
+            || baseW < MinMeaningfulPowerW || recentW < MinMeaningfulPowerW)
+            return 1.0;
+        double ratio = Math.Clamp(baseW / recentW, PowerRatioClampLo, PowerRatioClampHi);
+        return Math.Abs(ratio - 1) >= PowerRatioDeadband ? ratio : 1.0;
+    }
 
     /// <summary>Weighted rpm context behind a fan-normalized comparison, for the reason line.</summary>
     public sealed record FanNormalization(double RecentRpm, double BaselineRpm, double CorrectionC);

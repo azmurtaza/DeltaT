@@ -249,7 +249,7 @@ public sealed class RemarksCoordinator : IDisposable
     {
         foreach ((ComponentKind kind, ComponentScore score) in scores)
         {
-            if (score.Calibrating)
+            if (!score.Scored)
                 continue;
             string key = $"remarks.lastScoreSnap.{kind}";
             long last = long.TryParse(_settings.Get(key), out long l) ? l : 0;
@@ -268,7 +268,7 @@ public sealed class RemarksCoordinator : IDisposable
         var drops = new Dictionary<ComponentKind, int>();
         foreach ((ComponentKind kind, ComponentScore score) in scores)
         {
-            if (score.Calibrating)
+            if (!score.Scored)
                 continue;
             // Oldest score snapshot from the last 8 days = "a week ago".
             StoredEvent? reference = _repo
@@ -297,7 +297,7 @@ public sealed class RemarksCoordinator : IDisposable
         var result = new Dictionary<ComponentKind, (int, int)>();
         foreach ((ComponentKind kind, ComponentScore score) in scores)
         {
-            if (score.Calibrating)
+            if (!score.Scored)
                 continue;
             // Snapshots from 25–40 days ago; pick the one closest to a month back.
             StoredEvent? reference = _repo

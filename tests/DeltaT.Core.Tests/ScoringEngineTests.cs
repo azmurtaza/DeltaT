@@ -70,6 +70,40 @@ public class ScoringEngineTests
     }
 
     [Fact]
+    public void LockedBaseline_WithNothingComparableMeasured_RefusesToClaimHealth()
+    {
+        // The state right after a lock: the reference is frozen, but no load has run
+        // against it yet. The score is 100 minus evidence, so no evidence must not read
+        // as a confident "100, Excellent" while every aspect honestly reads "--".
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: Array.Empty<RecentBucketObs>(),
+            baseline: new[] { HeavyBase(delta: 60) }), Fmt);
+
+        Assert.Equal(Verdict.AwaitingData, score.Verdict);
+        Assert.True(score.AwaitingData);
+        Assert.False(score.Scored);
+        Assert.NotEqual(100, score.Value);
+        Assert.Contains(score.Reasons, r => r.Code == "delta-no-data");
+        Assert.All(score.Aspects.Where(a => a.Aspect is HealthAspect.Paste or HealthAspect.Airflow),
+            a => Assert.False(a.Known));
+    }
+
+    [Fact]
+    public void LockedBaseline_NoComparison_ButRealThrottling_StillScores()
+    {
+        // A waiting state must never hide a fault: hard evidence (throttle events) is
+        // scoreable on its own, with or without a like-for-like comparison.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: Array.Empty<RecentBucketObs>(),
+            baseline: new[] { HeavyBase(delta: 60) },
+            throttleEvents: 4), Fmt);
+
+        Assert.True(score.Scored);
+        Assert.False(score.AwaitingData);
+        Assert.True(score.Value < 100, $"expected a penalty for throttling, got {score.Value}");
+    }
+
+    [Fact]
     public void NotReadyWithComparableLoad_ProducesProvisionalScore()
     {
         // Before lock, but there's real like-for-like load: show an estimate, not "--".

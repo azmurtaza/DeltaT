@@ -190,13 +190,22 @@ public static class DetectionBenchmark
                 case Condition.MountPumpout:
                     if (c.Bucket != LoadBucket.Idle) gap += severity; // hotspot pulls away from edge
                     break;
+                // A power change (an overclock, an undervolt, a raised/lowered limit, or CPU
+                // boost switched on or off) moves the RATES as well as the temperatures: the
+                // die soaks up heat proportionally faster on more watts, and it starts its
+                // cooldown from a proportionally hotter point. Both must be modelled, or the
+                // benchmark can't see the engine mistaking a boost-mode change for paste.
                 case Condition.Overclock:
                     power *= 1 + severity;                       // more watts → proportionally hotter
                     delta *= 1 + severity;
+                    soakRecent = soakBase * (1 + severity);
+                    coolRecent = coolBase * (1 + severity);
                     break;
                 case Condition.Undervolt:
                     power *= 1 - severity;
                     delta *= 1 - severity;
+                    soakRecent = soakBase * (1 - severity);
+                    coolRecent = coolBase * (1 - severity);
                     break;
             }
 

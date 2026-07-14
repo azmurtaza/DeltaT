@@ -385,7 +385,7 @@ public partial class App : Application
                 catch (Exception ex) { Log("score", ex); }
             });
             bool calibrating = _scores!.Latest.Count == 0
-                || _scores.Latest.Values.Any(s => s.Calibrating);
+                || _scores.Latest.Values.Any(s => !s.Scored);
             _scoreTimer!.Interval = calibrating ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(5);
         };
         _scoreTimer.Start();
