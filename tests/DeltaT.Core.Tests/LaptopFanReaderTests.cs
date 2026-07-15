@@ -117,6 +117,36 @@ public class LaptopFanReaderCoordinatorTests
     }
 
     [Fact]
+    public void ImplausibleSpike_IsDroppedToNull_RealFanKept()
+    {
+        // A torn read splices a wild value onto one fan. The coordinator's vendor-neutral sanity
+        // net nulls just that reading (it shows "--" for the tick) while the other fan's real RPM
+        // passes untouched, so a spike never surfaces as a fake number for any vendor.
+        var omen = new FakeProbe("HP Omen", new LaptopFanSample(11000, 2400));
+        var reader = new LaptopFanReader(new ILaptopFanProbe[] { omen });
+
+        LaptopFanSample s = reader.Read();
+
+        Assert.Null(s.CpuRpm);
+        Assert.Equal(2400, s.GpuRpm);
+        Assert.Equal("HP Omen", reader.ActiveVendor);
+    }
+
+    [Fact]
+    public void ConfirmedZero_SurvivesTheSanityNet_AsARealParkedReading()
+    {
+        // A genuine 0 (a fan measurably stopped, reported by a probe that has confirmed the fan
+        // exists) is a real "0 rpm" reading, not an out-of-range spike, so the net leaves it be.
+        var omen = new FakeProbe("HP Omen", new LaptopFanSample(0, 2400));
+        var reader = new LaptopFanReader(new ILaptopFanProbe[] { omen });
+
+        LaptopFanSample s = reader.Read();
+
+        Assert.Equal(0, s.CpuRpm);
+        Assert.Equal(2400, s.GpuRpm);
+    }
+
+    [Fact]
     public void DeadProbes_AreSkipped_AndReaderStaysDark()
     {
         var acer = new FakeProbe("Acer", default);

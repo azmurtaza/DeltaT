@@ -178,7 +178,7 @@ public static class ScoringEngine
             else if (excess < -1.5)
             {
                 reasons.Add(new ScoreReason("delta-cooler",
-                    $"Running {-excess:0.#} °C cooler than baseline. The paste is doing great.", 0));
+                    $"Running {-excess:0.#} °C cooler than baseline. Cooling is doing great.", 0));
             }
             else
             {
@@ -188,8 +188,8 @@ public static class ScoringEngine
             if (powerNorm is { } pn)
             {
                 reasons.Add(new ScoreReason("power-normalized", pn.RecentW > pn.BaselineW
-                    ? $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (a boost mode, a power limit, or an overclock). More power means a hotter die for reasons that aren't the paste, so the comparison was corrected by {pn.CorrectionC:0.#} °C. Same wattage, the paste is judged fairly."
-                    : $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (boost off, a lower power limit, or an undervolt). Less power cools the die on its own, so the comparison was corrected by +{pn.CorrectionC:0.#} °C rather than credited to the paste.",
+                    ? $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (a boost mode, a power limit, or an overclock). More power means a hotter die for reasons that aren't the cooling, so the comparison was corrected by {pn.CorrectionC:0.#} °C. Same wattage, the cooling is judged fairly."
+                    : $"Drawing {pn.RecentW:0} W against a {pn.BaselineW:0} W baseline (boost off, a lower power limit, or an undervolt). Less power cools the die on its own, so the comparison was corrected by +{pn.CorrectionC:0.#} °C rather than credited to the cooling.",
                     0));
             }
 
@@ -378,8 +378,14 @@ public static class ScoringEngine
 
             foreach (RecentBucketObs r in recentRows)
             {
-                // Prefer the exact same weather band: a like-for-like rise comparison.
-                BaselineBucket? sameBand = input.Baseline.FirstOrDefault(b => b.Bucket == bucket && b.Band == r.Band);
+                // Prefer the exact same weather band, and within it the cell whose learned
+                // POWER is closest to the reading's — so a bucket learned across two power
+                // regimes (CPU boost on and off, or two power-plan limits) is compared against
+                // the matching regime's power-tagged sub-cell rather than the blended mean.
+                // That is the like-for-like that needs the least power correction, so the clamp
+                // and the small leakage nonlinearity in ΔT∝P can't bias the comparison. A bucket
+                // with no sub-cells returns its one blended cell, exactly as before.
+                BaselineBucket? sameBand = NearestBaselinePower(input.Baseline, bucket, r.Band, r.PowerAvg);
                 BaselineBucket? baseline = sameBand ?? NearestBaselineBand(input.Baseline, bucket, r);
                 if (baseline is null)
                     continue;
@@ -495,10 +501,32 @@ public static class ScoringEngine
             && FanRecentMean is { } r && r / b <= 0.80;
     }
 
+    /// <summary>The same-band baseline cell whose learned power sits closest to the reading's,
+    /// among all cells for this (bucket, band) — the blended cell plus any power-tagged sub-cells.
+    /// Picking the nearest-power cell minimizes the power correction, so a reading taken with
+    /// boost on is judged against the boost-on regime it was learned at, not a blended average.
+    /// When no power is known on either side, or there are no sub-cells, this returns the first
+    /// (blended) match, i.e. exactly the previous behavior.</summary>
+    private static BaselineBucket? NearestBaselinePower(IReadOnlyList<BaselineBucket> baseline, LoadBucket bucket, int band, double? recentPower)
+    {
+        BaselineBucket? best = null;
+        double bestDist = double.MaxValue;
+        foreach (BaselineBucket b in baseline)
+        {
+            if (b.Bucket != bucket || b.Band != band)
+                continue;
+            double dist = recentPower is { } rp && b.PowerAvg is { } bp ? Math.Abs(bp - rp) : double.MaxValue;
+            if (best is null || dist < bestDist) { bestDist = dist; best = b; }
+        }
+        return best;
+    }
+
     /// <summary>Nearest baseline cell in a *different* weather band for the same load
     /// bucket, chosen by how close its learned ambient (TempAvg − DeltaAvg) sits to the
     /// recent reading's ambient. Falls back to nearest band index for legacy rows that
-    /// carry no absolute-temp anchor yet.</summary>
+    /// carry no absolute-temp anchor yet. Power-tagged sub-cells are skipped here: the
+    /// cross-band anchor is a per-(bucket,band) judgement, and the blended cell is its
+    /// one representative.</summary>
     private static BaselineBucket? NearestBaselineBand(IReadOnlyList<BaselineBucket> baseline, LoadBucket bucket, RecentBucketObs r)
     {
         BaselineBucket? best = null;
@@ -506,7 +534,7 @@ public static class ScoringEngine
         double recentAmbient = r.TempAvg - (r.DeltaAvg ?? 0);
         foreach (BaselineBucket b in baseline)
         {
-            if (b.Bucket != bucket)
+            if (b.Bucket != bucket || b.IsPowerSubcell)
                 continue;
             double dist = b.TempAvg is { } t
                 ? Math.Abs((t - b.DeltaAvg) - recentAmbient)
@@ -595,7 +623,7 @@ public static class ScoringEngine
         double gap = rows.Sum(r => r.GapAvg!.Value * r.Minutes) / rows.Sum(r => r.Minutes);
 
         var baseRows = input.Baseline
-            .Where(b => b.GapAvg is not null && rows.Any(r => r.Bucket == b.Bucket))
+            .Where(b => !b.IsPowerSubcell && b.GapAvg is not null && rows.Any(r => r.Bucket == b.Bucket))
             .ToList();
         double? baseGap = baseRows.Count > 0
             ? baseRows.Sum(b => b.GapAvg!.Value * b.Minutes) / baseRows.Sum(b => b.Minutes)
@@ -662,7 +690,7 @@ public static class ScoringEngine
             dustSignal += 1;
         // Fan-speed corroboration when the machine exposes fans.
         var fansRecent = input.Recent.Where(r => r.FanAvg is not null).Select(r => r.FanAvg!.Value).ToList();
-        var fansBase = input.Baseline.Where(bb => bb.FanAvg is not null).Select(bb => bb.FanAvg!.Value).ToList();
+        var fansBase = input.Baseline.Where(bb => !bb.IsPowerSubcell && bb.FanAvg is not null).Select(bb => bb.FanAvg!.Value).ToList();
         if (fansRecent.Count > 0 && fansBase.Count > 0 && fansBase.Average() > 100
             && fansRecent.Average() / fansBase.Average() > 1.15)
             dustSignal += 2;

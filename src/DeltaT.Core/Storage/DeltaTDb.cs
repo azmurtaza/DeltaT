@@ -279,5 +279,43 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 7)
+        {
+            // Per-cell power-state tagging. A single load bucket is often learned across two
+            // power regimes — CPU boost/turbo ON and OFF, or two power-plan limits — because the
+            // machine oscillates between them in normal use. Blended into the one baseline cell,
+            // the mean power and rise sit BETWEEN the regimes, and because ΔT∝P is not perfectly
+            // linear (leakage), the power-normalizer can't fully recover a reading taken at one
+            // extreme: a healthy machine running boost-on then reads a small false "aging" bias
+            // (measured ~1.5 score points) against a boost-off-blended cell. This table stores the
+            // regime-separated SUB-cells (one row per power band within a bucket) beside the main
+            // blended baseline, so scoring can match a reading to its own regime. It is purely
+            // additive: only the scoring rise/power comparison consults it; the repaste verdict,
+            // trend, adoption and calibration all keep reading the blended `baseline` table
+            // unchanged, and a bucket that was only ever seen at one power regime gets no sub-cell
+            // (the blended cell is the reference, exactly as before). pband = the power band index.
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS baseline_power(
+                    epoch     INTEGER NOT NULL,
+                    kind      TEXT    NOT NULL,
+                    name      TEXT    NOT NULL,
+                    band      INTEGER NOT NULL,
+                    bucket    INTEGER NOT NULL,
+                    pband     INTEGER NOT NULL,
+                    delta_avg REAL    NOT NULL,
+                    fan_avg   REAL,
+                    temp_avg  REAL,
+                    gap_avg   REAL,
+                    power_avg REAL,
+                    minutes   INTEGER NOT NULL,
+                    updated   INTEGER NOT NULL,
+                    PRIMARY KEY(epoch, kind, name, band, bucket, pband)
+                );
+                PRAGMA user_version = 7;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }

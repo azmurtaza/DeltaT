@@ -187,7 +187,7 @@ public sealed class RemarksEngine
         new Rule("weather-hot", TimeSpan.FromHours(8), ctx =>
             ctx.AmbientC is { } a && a >= 38
                 ? One("weather-hot", ctx, RemarkSeverity.Info,
-                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the paste. DeltaT corrects for it.")
+                    $"It's {a:0}° outside. If today's numbers look scary, blame the sun before the hardware. DeltaT corrects for it.")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("weather-cold", TimeSpan.FromHours(12), ctx =>
@@ -205,7 +205,7 @@ public sealed class RemarksEngine
         new Rule("on-battery", TimeSpan.FromHours(4), ctx =>
             !ctx.OnAcPower && ctx.Latest?.Find(ComponentKind.Cpu)?.Bucket is LoadBucket.Heavy or LoadBucket.Max
                 ? One("on-battery", ctx, RemarkSeverity.Info,
-                    "Heavy load on battery, so these readings don't count toward paste scoring (battery power limits change the physics).")
+                    "Heavy load on battery, so these readings don't count toward thermal scoring (battery power limits change the physics).")
                 : Enumerable.Empty<Remark>()),
 
         new Rule("learning-daily", TimeSpan.FromHours(20), ctx =>
@@ -370,7 +370,7 @@ public sealed class RemarksEngine
             bool allHealthy = ctx.Scores.Values.All(s => s.Verdict is Verdict.Fresh or Verdict.Good);
             return allHealthy && ctx.ThrottleEventsLastHour == 0
                 ? One("all-quiet", ctx, RemarkSeverity.Info,
-                    "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.")
+                    "Weekly check-in: deltas on baseline, no throttling, nothing drifting. Cooling is earning its keep.")
                 : Enumerable.Empty<Remark>();
         }),
 
@@ -497,7 +497,7 @@ public sealed class RemarksEngine
                 <= -3 and { } d => One("fingerprint-echo", ctx, RemarkSeverity.Notice,
                     $"{label} fingerprint came back {-d:0.#}° cooler than the last run, weather-corrected. Whatever changed (a cleaning, a repaste, better airflow), it's real.", fp.Kind),
                 { } d => One("fingerprint-echo", ctx, RemarkSeverity.Info,
-                    $"{label} fingerprint matches the last run ({d:+0.#;-0.#}° weather-corrected). Consistency is exactly what healthy paste looks like.", fp.Kind),
+                    $"{label} fingerprint matches the last run ({d:+0.#;-0.#}° weather-corrected). Consistency is exactly what healthy cooling looks like.", fp.Kind),
             };
         }),
     };

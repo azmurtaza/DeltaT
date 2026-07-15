@@ -21,6 +21,64 @@ public class BaselineBuilderTests
     private static Func<LoadBucket, int, IReadOnlyList<double>> HeavyMeans(params double[] means) =>
         (bucket, band) => bucket == LoadBucket.Heavy && band == 2 ? means : Array.Empty<double>();
 
+    private static readonly DateTimeOffset Now = new(2026, 7, 5, 0, 0, 0, TimeSpan.Zero);
+
+    private static PowerBandStat PBand(LoadBucket bucket, int pband, double power, int minutes = 30, double delta = 60, int band = 2) =>
+        new(bucket, band, pband, minutes, delta, 4000, 85, null, power);
+
+    [Fact]
+    public void PowerSubcells_SplitAMultiModalBucketIntoItsRegimes()
+    {
+        // Heavy learned across boost-off (~24 W) and boost-on (~44 W), each with enough minutes
+        // and well separated: two sub-cells, one per regime.
+        var stats = new[]
+        {
+            PBand(LoadBucket.Heavy, 3, 24, delta: 50),
+            PBand(LoadBucket.Heavy, 5, 44, delta: 66),
+        };
+        List<BaselinePowerRow> rows = BaselineBuilder.BuildPowerSubcells(1, ComponentKind.Cpu, "cpu", stats, Now);
+
+        Assert.Equal(2, rows.Count);
+        Assert.Contains(rows, r => r.Bucket == LoadBucket.Heavy && r.PowerAvg == 24 && r.DeltaAvg == 50);
+        Assert.Contains(rows, r => r.Bucket == LoadBucket.Heavy && r.PowerAvg == 44 && r.DeltaAvg == 66);
+    }
+
+    [Fact]
+    public void PowerSubcells_LeaveAUnimodalBucketAlone()
+    {
+        // One power band only: the blended cell already compares like-for-like, so no sub-cell.
+        var stats = new[] { PBand(LoadBucket.Heavy, 5, 44) };
+        Assert.Empty(BaselineBuilder.BuildPowerSubcells(1, ComponentKind.Cpu, "cpu", stats, Now));
+    }
+
+    [Fact]
+    public void PowerSubcells_IgnoreRegimesTooCloseToMatter()
+    {
+        // 42 W vs 44 W is under the separation threshold: the power-normalizer already handles a
+        // gap that small, so splitting would only add noise. No sub-cells.
+        var stats = new[]
+        {
+            PBand(LoadBucket.Heavy, 5, 42),
+            PBand(LoadBucket.Heavy, 5, 44),
+        };
+        Assert.Empty(BaselineBuilder.BuildPowerSubcells(1, ComponentKind.Cpu, "cpu", stats, Now));
+    }
+
+    [Fact]
+    public void PowerSubcells_SkipThinRegimesAndIdle()
+    {
+        // A regime with too few minutes doesn't qualify, leaving a lone regime (no split); idle is
+        // never split (it isn't a loaded bucket). Both yield nothing.
+        var stats = new[]
+        {
+            PBand(LoadBucket.Heavy, 3, 24, minutes: 3),   // too thin
+            PBand(LoadBucket.Heavy, 5, 44, minutes: 30),
+            PBand(LoadBucket.Idle, 1, 8, minutes: 90),
+            PBand(LoadBucket.Idle, 2, 14, minutes: 90),
+        };
+        Assert.Empty(BaselineBuilder.BuildPowerSubcells(1, ComponentKind.Cpu, "cpu", stats, Now));
+    }
+
     [Fact]
     public void NotReady_WhileCuring_EvenWithPerfectData()
     {

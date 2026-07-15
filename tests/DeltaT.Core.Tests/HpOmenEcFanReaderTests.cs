@@ -53,6 +53,50 @@ public class HpOmenEcFanReaderTests
         Assert.Equal(HpOmenEcFanReader.FanDecode.Implausible, HpOmenEcFanReader.DecodeFan(0xB8, 0x00, out _));
     }
 
+    [Fact]
+    public void TornRead_StaleLowByte_IsRejected_NotAnElevenThousandSpike()
+    {
+        // The EC updates its 16-bit fan word non-atomically. A poll landing mid-update reads a
+        // stale 0x00 low byte beside a fresh high byte: 0x00 + 0x2A decodes little-endian to
+        // 0x2A00 = 10,752, the bogus "~11000 rpm" spike users reported. The tightened ceiling
+        // (real Omen fans top near 6000) must reject it in both byte orders.
+        Assert.Equal(HpOmenEcFanReader.FanDecode.Implausible, HpOmenEcFanReader.DecodeFan(0x00, 0x2A, out double rpm));
+        Assert.Equal(0, rpm);
+    }
+
+    [Fact]
+    public void LatchedLittleEndian_DoesNotRescueAWordPlausibleOnlyBigEndian()
+    {
+        // Once the byte order is known to be little-endian, a word believable only big-endian is
+        // rejected rather than rescued. 0x0B,0xB8 reads 0xB80B little-endian (implausible), so a
+        // latched little-endian reader reports Implausible instead of falling back to 3000.
+        Assert.Equal(HpOmenEcFanReader.FanDecode.Implausible,
+            HpOmenEcFanReader.DecodeFan(0x0B, 0xB8, bigEndian: false, out double rpm, out bool usedBig));
+        Assert.Equal(0, rpm);
+        Assert.False(usedBig);
+    }
+
+    [Fact]
+    public void LatchedBigEndian_ReadsTheBigEndianWordDirectly()
+    {
+        // 3000 rpm stored high-byte-first (b0=0x0B, b1=0xB8). With the order latched big-endian it
+        // decodes straight to 3000 and reports the order back for the caller's latch.
+        Assert.Equal(HpOmenEcFanReader.FanDecode.Rpm,
+            HpOmenEcFanReader.DecodeFan(0x0B, 0xB8, bigEndian: true, out double rpm, out bool usedBig));
+        Assert.Equal(3000, rpm);
+        Assert.True(usedBig);
+    }
+
+    [Fact]
+    public void UnknownOrder_ReportsWhichEndiannessTheDecodeUsed()
+    {
+        // Little-endian 3000 (0xB8,0x0B): with the order still unknown the reader decodes it and
+        // reports it used little-endian, so the caller can latch that order for every later tick.
+        HpOmenEcFanReader.DecodeFan(0xB8, 0x0B, bigEndian: null, out double rpm, out bool usedBig);
+        Assert.Equal(3000, rpm);
+        Assert.False(usedBig);
+    }
+
     // -------------------------------------------------------------------- gate
 
     [Theory]

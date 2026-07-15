@@ -59,9 +59,21 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine();
     FidelityTable("well-targeted workout", DeltaT.Core.Scoring.DetectionBenchmark.WellTargetedWorkoutBias);
     FidelityTable("naive burner", DeltaT.Core.Scoring.DetectionBenchmark.NaiveBurnerBias);
+
+    // Per-cell power-state contamination: does a bucket learned across boost-on AND boost-off
+    // mislead a healthy machine's score, and does keeping the regimes in separate power-tagged
+    // cells fix it? Blended vs tagged, error against a same-regime reference.
+    var cont = DeltaT.Core.Scoring.DetectionBenchmark.RunPowerContamination();
+    Console.WriteLine("Per-cell power-state contamination (healthy machine, bucket learned across boost on+off)");
+    Console.WriteLine($"  {"baseline",-18} {"mean err",9} {"signed",8} {"max err",9} {"false faults",13}");
+    Console.WriteLine($"  {"reference",-18} {"-",8} {"-",8} {"-",8} {cont.ReferenceFalseFaults,10}/{cont.Trials}");
+    Console.WriteLine($"  {"blended (mixed)",-18} {cont.BlendedMeanAbsErr,8:0.00} {Signed(cont.BlendedSignedErr),7} {cont.BlendedMaxAbsErr,8:0.0} {cont.BlendedFalseFaults,10}/{cont.Trials}");
+    Console.WriteLine($"  {"power-tagged",-18} {cont.TaggedMeanAbsErr,8:0.00} {Signed(cont.TaggedSignedErr),7} {cont.TaggedMaxAbsErr,8:0.0} {cont.TaggedFalseFaults,10}/{cont.Trials}");
+    Console.WriteLine();
     return;
 
     static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";
+    static string Signed(double v) => (v >= 0 ? "+" : "-") + Math.Abs(v).ToString("0.0");
 }
 
 // `--baseline`: dump this machine's LEARNED baseline (delta/power/fan per load bucket) from

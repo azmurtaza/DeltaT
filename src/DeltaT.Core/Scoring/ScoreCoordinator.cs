@@ -572,6 +572,7 @@ public sealed class ScoreCoordinator
                 (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs, BaselineBuilder.SessionGapSeconds),
                 soakAvg, nowUtc);
             _repo.UpsertBaseline(rows);
+            PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc);
         }
         else
         {
@@ -593,6 +594,7 @@ public sealed class ScoreCoordinator
                     (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs, BaselineBuilder.SessionGapSeconds),
                     soakAvg, nowUtc);
                 _repo.UpsertBaseline(rows);
+                PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc);
             }
 
             // Keep the baseline honest about weather it meets after the lock: learn a
@@ -618,7 +620,28 @@ public sealed class ScoreCoordinator
                 }
             }
         }
-        return rows.Select(r => new BaselineBucket(r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg, r.PowerAvg)).ToList();
+        var cells = rows.Select(r => new BaselineBucket(
+            r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg, r.PowerAvg)).ToList();
+
+        // Append the power-tagged sub-cells (multi-modal loaded buckets only) so scoring can match
+        // a reading to its own power regime. They sit beside the blended cells; the scoring
+        // rise/power match picks the nearest-power one, and every other consumer ignores them
+        // (IsPowerSubcell). A bucket with no sub-cells is unchanged.
+        foreach (BaselinePowerRow s in _repo.GetBaselinePower(Epoch, c.Kind, c.Name))
+            cells.Add(new BaselineBucket(s.Bucket, s.Band, s.DeltaAvg, null, s.FanAvg, s.Minutes,
+                s.TempAvg, s.GapAvg, s.PowerAvg, IsPowerSubcell: true));
+        return cells;
+    }
+
+    /// <summary>Rebuild and persist this component's power-tagged baseline sub-cells from the
+    /// given window (the same window the blended baseline was built from), so they freeze with the
+    /// lock. Passing an empty result clears stale sub-cells, so a bucket that stops being
+    /// multi-modal falls back to its blended cell.</summary>
+    private void PersistPowerSubcells(ComponentReading c, long fromTs, long toTs, DateTimeOffset nowUtc)
+    {
+        IReadOnlyList<PowerBandStat> pstats = _repo.GetPowerBandStats(c.Kind, c.Name, fromTs, toTs, BaselineBuilder.PowerBandWidthW);
+        List<BaselinePowerRow> sub = BaselineBuilder.BuildPowerSubcells(Epoch, c.Kind, c.Name, pstats, nowUtc);
+        _repo.UpsertBaselinePower(Epoch, c.Kind, c.Name, sub);
     }
 
     /// <summary>Paste scoring only trusts samples on AC power with known ambient —

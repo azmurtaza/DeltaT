@@ -51,6 +51,14 @@ public sealed class LaptopFanReader : IDisposable
     private readonly List<ILaptopFanProbe> _probes;
     private ILaptopFanProbe? _winner;
 
+    // Vendor-neutral sanity ceiling. No laptop EC/WMI fan tachometer legitimately reports above
+    // this; a higher value is a torn or mis-decoded read (an EC updates its 16-bit fan word
+    // non-atomically, so a poll landing mid-update can splice a stale byte onto a fresh one and
+    // produce a wild number). Each probe also range-checks in its own units; this is the final
+    // net that catches any vendor, so a bogus spike surfaces as "--" for that tick instead of a
+    // fake RPM. A real 0 (a parked fan that a latched probe has confirmed) passes untouched.
+    private const double MaxPlausibleRpm = 8000;
+
     // Order is audition order. Acer first: it is the one verified on real hardware, so a
     // machine that has it never spends a sample on a probe that has to be gated dark.
     public LaptopFanReader()
@@ -76,7 +84,7 @@ public sealed class LaptopFanReader : IDisposable
     public LaptopFanSample Read()
     {
         if (_winner is not null)
-            return _winner.Read();
+            return Sanitize(_winner.Read());
 
         // Still auditioning: try each probe that hasn't ruled itself out. The first to
         // return real airflow wins the machine for good. Parked fans (a valid 0) don't
@@ -86,7 +94,7 @@ public sealed class LaptopFanReader : IDisposable
         {
             if (p.IsDead)
                 continue;
-            LaptopFanSample sample = p.Read();
+            LaptopFanSample sample = Sanitize(p.Read());
             if (sample.HasAny)
             {
                 _winner = p;
@@ -100,6 +108,15 @@ public sealed class LaptopFanReader : IDisposable
         }
         return default;
     }
+
+    /// <summary>Drop any RPM outside the plausible laptop-fan range to null, so a torn or
+    /// mis-decoded spike shows "--" for that tick rather than a fake number. A confirmed 0
+    /// (parked fan) and any absent (null) reading pass through unchanged.</summary>
+    private static LaptopFanSample Sanitize(LaptopFanSample s) =>
+        s with { CpuRpm = Plausible(s.CpuRpm), GpuRpm = Plausible(s.GpuRpm) };
+
+    private static double? Plausible(double? rpm) =>
+        rpm is { } r && r >= 0 && r <= MaxPlausibleRpm ? r : null;
 
     public void Dispose()
     {

@@ -65,8 +65,21 @@ public partial class FingerprintViewModel : ObservableObject
     [ObservableProperty] private double _gaugeMax = 100;
     [ObservableProperty] private string _gaugeSub = "CPU";
 
+    // Multi-session workout progress: one workout is one independent loaded bout, and the
+    // baseline locks on several spaced-out bouts (not one long burn), so the calibration strip
+    // tracks how many DeltaT has banked this epoch against the target. Sourced from the real
+    // loaded-session count so it reflects organic gaming bouts too, not just workouts.
+    [ObservableProperty] private bool _showBoutProgress;
+    [ObservableProperty] private string _boutProgressText = "";
+    [ObservableProperty] private string _boutProgressHint = "";
+    [ObservableProperty] private double _boutProgressValue; // 0..1 for the segment meter
+    [ObservableProperty] private int _boutTarget;
+
+    private readonly Func<(int Bouts, int Target)>? _boutProgress;
+
     public FingerprintViewModel(FingerprintTest test, FingerprintSequence sequence,
-        TelemetryRepository repo, Func<double?> cpuLoad, bool onBattery, bool hasGpu)
+        TelemetryRepository repo, Func<double?> cpuLoad, bool onBattery, bool hasGpu,
+        Func<(int Bouts, int Target)>? boutProgress = null)
     {
         _test = test;
         _sequence = sequence;
@@ -74,7 +87,36 @@ public partial class FingerprintViewModel : ObservableObject
         _cpuLoad = cpuLoad;
         _onBattery = onBattery;
         HasGpu = hasGpu;
+        _boutProgress = boutProgress;
         _dispatcher = System.Windows.Application.Current.Dispatcher;
+        RefreshBoutProgress();
+    }
+
+    /// <summary>Recompute the banked-bout tracker from the live loaded-session count. Called when
+    /// the window opens and after a workout finishes, so the user sees the count tick up.</summary>
+    public void RefreshBoutProgress()
+    {
+        if (_boutProgress is null)
+            return;
+        (int bouts, int target) = _boutProgress();
+        if (target <= 0)
+        {
+            ShowBoutProgress = false;
+            return;
+        }
+        BoutTarget = target;
+        BoutProgressValue = Math.Clamp(bouts / (double)target, 0, 1);
+        ShowBoutProgress = true;
+        if (bouts >= target)
+        {
+            BoutProgressText = $"{bouts} independent bouts banked";
+            BoutProgressHint = "Enough spaced bouts to lock the loaded buckets once the readings are consistent. Extra bouts keep sharpening it.";
+        }
+        else
+        {
+            BoutProgressText = $"{bouts} of about {target} independent bouts banked";
+            BoutProgressHint = "The baseline locks on several bouts spread over time, not one long run. Come back and run another later (a game counts too).";
+        }
     }
 
     [RelayCommand]
@@ -130,6 +172,7 @@ public partial class FingerprintViewModel : ObservableObject
         try
         {
             await Task.Run(() => workout.RunAsync(u => new CpuBurner(u), _cpuLoad, progress, _cts.Token));
+            RefreshBoutProgress();
             Sections.Clear();
             Sections.Add(new FingerprintSection("CALIBRATION WORKOUT", Array.Empty<StatCell>(),
                 "Done. Those medium and heavy minutes are recorded. Run it again in a little while (spaced out, "
@@ -294,8 +337,8 @@ public partial class FingerprintViewModel : ObservableObject
                 $"VS {when} · WEATHER-CORRECTED");
             verdict = direction switch
             {
-                "steady" => "The paste is holding steady.",
-                "hotter" => "Rerun monthly. A steady climb is the paste drying out.",
+                "steady" => "Cooling is holding steady.",
+                "hotter" => "Rerun monthly. A steady climb points to cooling wearing down.",
                 _ => "Whatever you did, it worked.",
             };
         }

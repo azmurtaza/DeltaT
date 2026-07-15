@@ -1,4 +1,5 @@
 using DeltaT.Core.Monitoring;
+using DeltaT.Core.Scoring;
 using DeltaT.Core.Storage;
 using DeltaT.Core.Weather;
 using Xunit;
@@ -223,6 +224,49 @@ public class TelemetryPipelineTests : IDisposable
         BucketStat heavy = Assert.Single(stats, s => s.Bucket == LoadBucket.Heavy);
         Assert.NotNull(heavy.PowerAvg);
         Assert.Equal(45, heavy.PowerAvg!.Value, 1.0);
+    }
+
+    [Fact]
+    public void PowerBandStats_SeparateRegimes_AndSubcellsRoundTrip()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        // The same heavy bucket, learned first at ~24 W (boost off, 80 °C) then at ~44 W
+        // (boost on, 90 °C): 15 minutes in each regime.
+        DateTimeOffset t = Snap.T0;
+        foreach ((double watts, double temp) in new[] { (24.0, 80.0), (44.0, 90.0) })
+            for (int s = 0; s < 15 * 30; s++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(new SensorSnapshot(t, true, new[]
+                {
+                    new ComponentReading(ComponentKind.Cpu, "CPU", temp, null, 80, 4000, watts, null, false, 100),
+                }));
+        source.Enqueue(new SensorSnapshot(t.AddSeconds(2), true, new[]
+        {
+            new ComponentReading(ComponentKind.Cpu, "CPU", 50, null, 5, 1500, 10, null, false, 100),
+        }));
+        while (source.Remaining > 0)
+            monitor.Capture();
+        pipeline.Flush();
+
+        long from = Snap.T0.AddMinutes(-1).ToUnixTimeSeconds();
+        long to = Snap.T0.AddMinutes(60).ToUnixTimeSeconds();
+        var pstats = _repo.GetPowerBandStats(ComponentKind.Cpu, "CPU", from, to, BaselineBuilder.PowerBandWidthW);
+
+        // Two distinct power bands for the one heavy bucket: ~24 W and ~44 W.
+        var heavy = pstats.Where(s => s.Bucket == LoadBucket.Heavy).ToList();
+        Assert.Contains(heavy, s => s.PowerAvg is > 20 and < 30);
+        Assert.Contains(heavy, s => s.PowerAvg is > 40 and < 48);
+
+        // Build the sub-cells and round-trip them through the store.
+        var subs = BaselineBuilder.BuildPowerSubcells(1, ComponentKind.Cpu, "CPU", pstats, Snap.T0);
+        Assert.True(subs.Count >= 2);
+        _repo.UpsertBaselinePower(1, ComponentKind.Cpu, "CPU", subs);
+        var back = _repo.GetBaselinePower(1, ComponentKind.Cpu, "CPU");
+        Assert.Equal(subs.Count, back.Count);
+        Assert.Contains(back, r => r.Bucket == LoadBucket.Heavy && r.PowerAvg is > 20 and < 30);
+        Assert.Contains(back, r => r.Bucket == LoadBucket.Heavy && r.PowerAvg is > 40 and < 48);
     }
 
     [Fact]

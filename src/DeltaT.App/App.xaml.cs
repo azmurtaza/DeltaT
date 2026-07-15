@@ -224,7 +224,8 @@ public partial class App : Application
             var fpVm = new FingerprintViewModel(
                 fpTest, new FingerprintSequence(fpTest, _monitor!), _repo!,
                 cpuLoad: () => _monitor!.Latest?.Find(ComponentKind.Cpu)?.LoadPercent,
-                onBattery: false, hasGpu: true);
+                onBattery: false, hasGpu: true,
+                boutProgress: () => (2, 3)); // demo values so the shot captures the tracker
             var fp = new FingerprintWindow { DataContext = fpVm };
             fp.Show();
             await Shot(fp, "fingerprint");
@@ -266,7 +267,7 @@ public partial class App : Application
             {
                 new("SUSTAINED", "84.2°"), new("PEAK", "91.0°"), new("SOAK RATE", "3.1°/min"),
                 new("Δ OUTSIDE", "+62.8°"), new("THROTTLING", "none"),
-            }, "Rerun monthly. A steady climb is the paste drying out.",
+            }, "Rerun monthly. A steady climb points to cooling wearing down.",
             new FingerprintComparison("+2.4°", "hotter", "RUNNING HOTTER", "VS JUN 12 · WEATHER-CORRECTED")));
             fpVm.Sections.Add(new FingerprintSection("GPU FINGERPRINT", new StatCell[]
             {
@@ -551,8 +552,23 @@ public partial class App : Application
             _repo,
             cpuLoad: () => _monitor.Latest?.Find(ComponentKind.Cpu)?.LoadPercent,
             onBattery: _monitor.Latest is { OnAcPower: false },
-            hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null);
+            hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null,
+            boutProgress: BoutProgress);
         new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();
+    }
+
+    /// <summary>Independent loaded CPU bouts banked this epoch, and the target the baseline wants,
+    /// for the workout's multi-session tracker. Counts organic gaming bouts too, not just workouts.</summary>
+    private (int Bouts, int Target) BoutProgress()
+    {
+        if (_scores is null || _repo is null)
+            return (0, DeltaT.Core.Scoring.BaselineBuilder.MinLoadedSessions);
+        string cpuName = _monitor?.Latest?.Find(ComponentKind.Cpu)?.Name ?? "CPU";
+        long from = _scores.EpochStart.ToUnixTimeSeconds();
+        long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        int bouts = _repo.CountLoadedSessions(ComponentKind.Cpu, cpuName, onAc: true, from, to,
+            DeltaT.Core.Scoring.BaselineBuilder.SessionGapSeconds);
+        return (bouts, DeltaT.Core.Scoring.BaselineBuilder.MinLoadedSessions);
     }
 
     public void OpenFeedbackWindow()

@@ -222,7 +222,7 @@ public partial class TrendsViewModel : ObservableObject
         if (Math.Abs(change) < 1.5)
             return $"{kindLabel} runs essentially the same under load as {earlierPhrase} ({change:+0.#;-0.#}°, {corrected}{weather}). No meaningful drift.";
         return change > 0
-            ? $"{kindLabel} runs {change:0.#}° hotter under load than {earlierPhrase} ({corrected}{weather}). A steady month-over-month climb is the paste drying out."
+            ? $"{kindLabel} runs {change:0.#}° hotter under load than {earlierPhrase} ({corrected}{weather}). A steady month-over-month climb means cooling is losing ground (drying paste, dust, or a tiring fan)."
             : $"{kindLabel} runs {-change:0.#}° cooler under load than {earlierPhrase} ({corrected}{weather}). Cleaner airflow, fresh paste, or a cooler room.";
     }
 

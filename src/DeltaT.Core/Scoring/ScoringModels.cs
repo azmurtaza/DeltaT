@@ -118,7 +118,14 @@ public sealed record BaselineBucket(
     // Mean package power (watts) this cell's rise was learned at. When both baseline
     // and recent cells carry power, scoring compares thermal resistance (ΔT/P) so a
     // power-limit/undervolt/overclock change doesn't masquerade as paste drift.
-    double? PowerAvg = null);
+    double? PowerAvg = null,
+    // True for a power-tagged SUB-cell: an extra cell for the same (bucket, band) learned
+    // at one power regime, sitting beside the blended cell so scoring can match a reading to
+    // its own regime (boost on vs off) instead of the blended mean. It only participates in
+    // the rise/power like-for-like match; it is excluded from every aggregate that assumes
+    // one cell per (bucket, band) — the fan/gap means and the cross-band nearest-ambient pick —
+    // so it can never double-count. The blended cell (never a sub-cell) remains the fallback.
+    bool IsPowerSubcell = false);
 
 /// <summary>Everything the engine needs. Assembled by ScoreCoordinator from the
 /// database; the engine itself never touches clocks, sensors or storage.</summary>

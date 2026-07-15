@@ -254,6 +254,30 @@ public class DetectionBenchmarkTests
     }
 }
 
+/// <summary>Per-cell power-state tagging is a guardrail too: a load bucket learned across two
+/// power regimes (CPU boost on and off) blends into one cell whose mean misrepresents both, and
+/// the measured effect is a small systematic false-"aging" bias on a healthy machine. Keeping the
+/// regimes in separate power-tagged sub-cells (so scoring's nearest-power match compares a reading
+/// against its own regime) must remove that bias without inventing faults. These lock that in.</summary>
+public class PowerContaminationTests
+{
+    private static readonly DetectionBenchmark.ContaminationResult C = DetectionBenchmark.RunPowerContamination(seed: 999, trials: 400);
+
+    [Fact]
+    public void PowerTagging_RemovesTheBlendBias_WithoutAddingFalseFaults()
+    {
+        // The blended cell carries a real negative (toward-fault) bias; tagging must cut it hard.
+        Assert.True(Math.Abs(C.TaggedSignedErr) <= Math.Abs(C.BlendedSignedErr) * 0.5,
+            $"tagged bias {C.TaggedSignedErr:+0.0;-0.0} should be well under blended {C.BlendedSignedErr:+0.0;-0.0}");
+        // Tagged must be at least as faithful as blended overall...
+        Assert.True(C.TaggedMeanAbsErr <= C.BlendedMeanAbsErr,
+            $"tagged mean err {C.TaggedMeanAbsErr:0.00} vs blended {C.BlendedMeanAbsErr:0.00}");
+        // ...and it must not invent faults a same-regime (reference) baseline wouldn't also see.
+        Assert.True(C.TaggedFalseFaults <= C.ReferenceFalseFaults + 2,
+            $"tagged false faults {C.TaggedFalseFaults} vs reference floor {C.ReferenceFalseFaults}");
+    }
+}
+
 /// <summary>Phase 0 go/no-go for the guided-calibration (workout) idea, measured not
 /// intuited: does a baseline acquired from controlled synthetic loads yield the SAME
 /// fault attribution as one acquired organically? The finding these lock in is that the

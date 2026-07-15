@@ -416,6 +416,133 @@ public static class DetectionBenchmark
         return new FidelityResult(condition, trials, orgSum / trials, synSum / trials, orgMax, synMax, orgFlips, synFlips);
     }
 
+    // ===================== Phase 3: per-cell power-state contamination =====================
+    // A single load bucket is often learned across TWO power regimes — CPU boost/turbo ON and
+    // OFF, or two power-plan limits — because the machine oscillates between them in normal use.
+    // Blended into one cell, the baseline's mean power and mean rise sit BETWEEN the regimes;
+    // and because thermal resistance drifts with operating point (LeakageK), the power-normalizer
+    // cannot perfectly recover a recent reading taken at one extreme. This measures whether that
+    // contamination misleads the score of a HEALTHY machine, and whether keeping the regimes in
+    // SEPARATE power-tagged cells (so scoring compares against the regime the reading is in)
+    // removes it. The tagged path is what per-cell power-state tagging buys.
+
+    /// <summary>Per-condition contamination tally: how far a blended (mixed-regime) baseline and
+    /// a power-tagged baseline move a healthy machine's score from the ideal, and how often each
+    /// invents a fault that isn't there.</summary>
+    public sealed record ContaminationResult(
+        int Trials,
+        double BlendedMeanAbsErr, double TaggedMeanAbsErr,
+        double BlendedMaxAbsErr, double TaggedMaxAbsErr,
+        int BlendedFalseFaults, int TaggedFalseFaults,
+        double BlendedSignedErr, double TaggedSignedErr, int ReferenceFalseFaults);
+
+    // The two regimes a bucket is learned across, as a fraction of the cell's canonical power.
+    // A mobile CPU's boost-off package power is well under half its boosting draw, so a 1.0 / 0.6
+    // split (blended mean 0.8) is a realistic, not extreme, oscillation.
+    public const double BoostOnFactor = 1.0;
+    public const double BoostOffFactor = 0.6;
+    private const int RegimeSamplesPerCell = 20;
+
+    /// <summary>Score a HEALTHY machine currently running with boost ON against three baselines:
+    /// one learned at the same (boost-on) regime, one blended across both regimes, and one that
+    /// keeps only the matching (boost-on) power-tagged cell. Error is measured against the
+    /// same-regime reference, so it isolates exactly the contamination the blend introduces.</summary>
+    public static ContaminationResult RunPowerContamination(int seed = 20260717, int trials = 400)
+    {
+        var rng = new Random(seed);
+        double blendSum = 0, tagSum = 0, blendMax = 0, tagMax = 0, blendSigned = 0, tagSigned = 0;
+        int blendFalse = 0, tagFalse = 0, refFalse = 0;
+        for (int i = 0; i < trials; i++)
+        {
+            List<RecentBucketObs> recent = BuildHealthyRecentAtRegime(BoostOnFactor, rng);
+
+            // Reference: a baseline learned at the SAME regime the reading is in. Rate signals are
+            // disabled (baseline rates 0) so this isolates the rise/power cell contamination — the
+            // only thing per-cell power tagging changes; soak/cooldown are separate event signals.
+            List<BaselineBucket> reference = BuildRegimeBaseline(new[] { BoostOnFactor }, rng);
+            List<BaselineBucket> blended = BuildRegimeBaseline(new[] { BoostOffFactor, BoostOnFactor }, rng);
+            // Tagged = exactly what the real pipeline persists for a multi-modal bucket: the
+            // blended cell PLUS a power-tagged sub-cell per regime. Scoring's nearest-power match
+            // is what has to pick the boost-on sub-cell here, so this exercises the real engine.
+            List<BaselineBucket> tagged = BuildTaggedBaseline(rng);
+
+            double sr = ScoreHealthy(recent, reference, out ThermalCause cr);
+            double sb = ScoreHealthy(recent, blended, out ThermalCause cb);
+            double st = ScoreHealthy(recent, tagged, out ThermalCause ct);
+
+            double eb = Math.Abs(sb - sr), et = Math.Abs(st - sr);
+            blendSum += eb; tagSum += et;
+            blendSigned += sb - sr; tagSigned += st - sr;
+            blendMax = Math.Max(blendMax, eb); tagMax = Math.Max(tagMax, et);
+            if (CauseClass(cb) != 0 || sb < 70) blendFalse++;
+            if (CauseClass(ct) != 0 || st < 70) tagFalse++;
+            if (CauseClass(cr) != 0 || sr < 70) refFalse++;
+        }
+        return new ContaminationResult(trials, blendSum / trials, tagSum / trials, blendMax, tagMax,
+            blendFalse, tagFalse, blendSigned / trials, tagSigned / trials, refFalse);
+    }
+
+    private static double ScoreHealthy(List<RecentBucketObs> recent, List<BaselineBucket> baseline, out ThermalCause primary) =>
+        ScoreAgainst(recent, 0, 0, 0, 0, baseline, out primary).Value;
+
+    /// <summary>A healthy machine's recent telemetry at a given power regime (fraction of each
+    /// cell's canonical power). Fan scales with power the way a real fan curve does, so a boost-on
+    /// reading spins faster — the same coupling the baseline learns.</summary>
+    private static List<RecentBucketObs> BuildHealthyRecentAtRegime(double regime, Random rng)
+    {
+        var recent = new List<RecentBucketObs>();
+        foreach (Cell c in Baseline)
+        {
+            double power = c.PowerW * regime;
+            double delta = TrueDelta(c, power) + Gauss(rng, 0.6);
+            double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+            power = Math.Max(1, power + Gauss(rng, power * 0.03));
+            double temp = AmbientC + delta;
+            recent.Add(new RecentBucketObs(
+                c.Bucket, Warm, 60, delta, temp, temp + 4, fan, 0,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : 10 + Gauss(rng, 0.5), PowerAvg: power));
+        }
+        return recent;
+    }
+
+    /// <summary>What the real pipeline stores for a bucket seen across both regimes: the blended
+    /// cell plus one power-tagged sub-cell per regime (loaded buckets only, as BuildPowerSubcells
+    /// emits). Scoring's nearest-power match must pick the sub-cell matching the reading.</summary>
+    private static List<BaselineBucket> BuildTaggedBaseline(Random rng)
+    {
+        var cells = new List<BaselineBucket>(BuildRegimeBaseline(new[] { BoostOffFactor, BoostOnFactor }, rng));
+        foreach (double regime in new[] { BoostOffFactor, BoostOnFactor })
+            foreach (BaselineBucket sub in BuildRegimeBaseline(new[] { regime }, rng))
+                if (sub.Bucket is LoadBucket.Medium or LoadBucket.Heavy or LoadBucket.Max)
+                    cells.Add(sub with { IsPowerSubcell = true });
+        return cells;
+    }
+
+    /// <summary>A baseline whose loaded cells are learned across the given power regimes, blended
+    /// into one cell each (the mean power, rise and fan of all their minutes). One regime =
+    /// a clean single-regime cell; two regimes = the mixed-power contamination.</summary>
+    private static List<BaselineBucket> BuildRegimeBaseline(double[] regimes, Random rng)
+    {
+        var rows = new List<BaselineBucket>();
+        foreach (Cell c in Baseline)
+        {
+            double dSum = 0, pSum = 0, fSum = 0, gSum = 0; int n = 0;
+            foreach (double regime in regimes)
+                for (int i = 0; i < RegimeSamplesPerCell; i++)
+                {
+                    double power = Math.Max(1, c.PowerW * regime * (1 + Gauss(rng, OrganicPowerSpread)));
+                    double delta = TrueDelta(c, power) + Gauss(rng, 0.6);
+                    double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+                    dSum += delta; pSum += power; fSum += fan; gSum += 10 + Gauss(rng, 0.5); n++;
+                }
+            double dAvg = dSum / n, pAvg = pSum / n, fAvg = fSum / n, gAvg = gSum / n;
+            rows.Add(new BaselineBucket(
+                c.Bucket, Warm, dAvg, dAvg + 3, fAvg, n * 5, AmbientC + dAvg,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : gAvg, PowerAvg: pAvg));
+        }
+        return rows;
+    }
+
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----
 
     private static SensitivityCurve SweepPaste(Random rng) =>

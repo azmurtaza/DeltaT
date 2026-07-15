@@ -145,7 +145,7 @@ public static class BaselineBuilder
         if (cells.Count == 0)
         {
             dataConf = 0;
-            dataConstraint = "no heavy or medium load learned yet. Run a game or a stress test so DeltaT can see the paste working";
+            dataConstraint = "no heavy or medium load learned yet. Run a game or a stress test so DeltaT can learn how this machine handles heat under load";
         }
         else
         {
@@ -327,6 +327,53 @@ public static class BaselineBuilder
                 epoch, kind, name, s.Band, s.Bucket,
                 deltaAvg, p95, soakRateAvg, s.FanAvg, s.Minutes,
                 now.ToUnixTimeSeconds(), se, s.TempAvg, s.GapAvg, s.PowerAvg));
+        }
+        return rows;
+    }
+
+    /// <summary>Width of a power band, in watts, for power-tagged sub-cells. Narrow enough to
+    /// separate a boost-on regime from a boost-off one (a mobile CPU's boost-off package power is
+    /// tens of watts below its boosting draw), wide enough not to shatter one regime's minutes
+    /// across many bands. Scoring picks the nearest-power cell regardless, so this only decides
+    /// how minutes cluster.</summary>
+    public const double PowerBandWidthW = 8;
+
+    /// <summary>Two regimes must differ by at least this fraction of the lower one before a bucket
+    /// is split into sub-cells. Below it the blended cell already compares like-for-like (the
+    /// power-normalizer's own deadband), so a sub-cell would only add noise; above it the blend
+    /// starts to misrepresent both regimes.</summary>
+    public const double MinRegimeSeparation = 0.15;
+
+    /// <summary>Build power-tagged baseline sub-cells for the multi-modal loaded buckets. A bucket
+    /// learned at a single power regime gets nothing (its blended cell is the reference, exactly
+    /// as before); a bucket learned across two or more separated regimes, each with enough
+    /// minutes, gets one sub-cell per regime so scoring can match a reading to its own regime
+    /// instead of the blended mean. Pure and deterministic: stats in, rows out.</summary>
+    public static List<BaselinePowerRow> BuildPowerSubcells(
+        int epoch, ComponentKind kind, string name, IReadOnlyList<PowerBandStat> stats, DateTimeOffset now)
+    {
+        var rows = new List<BaselinePowerRow>();
+        var groups = stats
+            .Where(s => LoadedBuckets.Contains(s.Bucket) && s.Band >= 0
+                        && s.Minutes >= MinBucketMinutes && s.DeltaAvg is not null && s.PowerAvg is not null)
+            .GroupBy(s => (s.Bucket, s.Band));
+
+        foreach (var group in groups)
+        {
+            var qualifying = group.ToList();
+            if (qualifying.Count < 2)
+                continue; // unimodal — the blended cell already compares like-for-like
+
+            double lo = qualifying.Min(s => s.PowerAvg!.Value);
+            double hi = qualifying.Max(s => s.PowerAvg!.Value);
+            if (lo <= 0 || (hi - lo) / lo < MinRegimeSeparation)
+                continue; // regimes too close to matter; blended cell suffices
+
+            foreach (PowerBandStat s in qualifying)
+                rows.Add(new BaselinePowerRow(
+                    epoch, kind, name, s.Band, s.Bucket, s.Pband,
+                    s.DeltaAvg!.Value, s.FanAvg, s.TempAvg, s.GapAvg, s.PowerAvg,
+                    s.Minutes, now.ToUnixTimeSeconds()));
         }
         return rows;
     }

@@ -52,7 +52,7 @@
                 DeltaT holds the machine still, then fully loads the component you pick (every CPU core,
                 or the GPU's compute engine) and watches: how fast the heat soaks in, where it settles,
                 and whether the silicon has to throttle.
-                Same test, same numbers. Run it monthly and the drift <Run FontStyle="Italic">is</Run> your paste aging.
+                Same test, same numbers. Run it monthly and the drift <Run FontStyle="Italic">is</Run> your cooling aging, whatever the cause (paste, dust, a tiring fan).
             </TextBlock>
 
             <!-- the protocol, drawn as an instrument strip: three legs, labeled once.
@@ -140,6 +140,20 @@
                            Text="The fingerprint above teaches DeltaT your full-load reading. A calibration workout fills the medium and heavy loads in between, the ones ordinary use is slow to reach, so the baseline can lock sooner. About 6 minutes; keep the charger in and run it a few times over the day."/>
                 <Button Style="{StaticResource Button.Ghost}" Content="RUN CALIBRATION WORKOUT" Padding="18,10"
                         HorizontalAlignment="Left" Margin="0,12,0,0" Command="{Binding StartWorkoutCommand}"/>
+
+                <!-- Multi-session tracker: one workout (or one game) is one independent bout, and
+                     the baseline locks on several spaced bouts. Shows how many are banked so far. -->
+                <Border Margin="0,14,0,0" Padding="13,11" BorderThickness="1"
+                        BorderBrush="{StaticResource Brush.StrokeSoft}"
+                        Visibility="{Binding ShowBoutProgress, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="CALIBRATION BOUTS"/>
+                        <TextBlock Style="{StaticResource Text.Display}" FontSize="15" Margin="0,6,0,0"
+                                   Foreground="{StaticResource Brush.Accent}" Text="{Binding BoutProgressText}"/>
+                        <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17" Margin="0,4,0,0"
+                                   TextWrapping="Wrap" Text="{Binding BoutProgressHint}"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </StackPanel>
         </ScrollViewer>
@@ -427,8 +441,26 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
-            <Button Grid.Row="2" Style="{StaticResource Button.Primary}" Content="DONE" Padding="22,9"
-                    HorizontalAlignment="Left" Margin="0,14,0,0" Click="OnDone"/>
+            <StackPanel Grid.Row="2">
+                <!-- Workout only: the banked-bout tracker, updated with this bout, so the user sees
+                     the multi-session progress and knows whether to come back for another. Gated
+                     by workout mode (outer) and by having a count to show (inner). -->
+                <ContentControl Visibility="{Binding Mode, Converter={StaticResource StateToVis}, ConverterParameter=workout}">
+                    <Border Margin="0,10,0,0" Padding="13,11" BorderThickness="1"
+                            BorderBrush="{StaticResource Brush.StrokeSoft}"
+                            Visibility="{Binding ShowBoutProgress, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="CALIBRATION BOUTS"/>
+                            <TextBlock Style="{StaticResource Text.Display}" FontSize="15" Margin="0,6,0,0"
+                                       Foreground="{StaticResource Brush.Accent}" Text="{Binding BoutProgressText}"/>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" LineHeight="17" Margin="0,4,0,0"
+                                       TextWrapping="Wrap" Text="{Binding BoutProgressHint}"/>
+                        </StackPanel>
+                    </Border>
+                </ContentControl>
+                <Button Style="{StaticResource Button.Primary}" Content="DONE" Padding="22,9"
+                        HorizontalAlignment="Left" Margin="0,14,0,0" Click="OnDone"/>
+            </StackPanel>
         </Grid>
         </Grid>
     </Grid>

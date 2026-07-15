@@ -64,6 +64,23 @@ public sealed record BaselineRow(
     // thermal-resistance scoring (ΔT ∝ P). Null when the sensor exposes no power.
     double? PowerAvg = null);
 
+/// <summary>One (load bucket, ambient band, power band) aggregate — a bucket/band split further
+/// by power band, so the two regimes a bucket is learned across (CPU boost on/off, two power
+/// limits) can be told apart. Pband is the power-band index (watts quantized). The raw material
+/// for the power-tagged baseline sub-cells.</summary>
+public sealed record PowerBandStat(
+    LoadBucket Bucket, int Band, int Pband, int Minutes,
+    double? DeltaAvg, double? FanAvg, double TempAvg, double? GapAvg, double? PowerAvg);
+
+/// <summary>A power-tagged baseline sub-cell: the same shape as a baseline cell for one
+/// (bucket, band) but learned at a single power regime (pband), stored beside the blended
+/// cell so scoring can compare a reading to its own regime. Only the scoring rise/power match
+/// reads these; every other baseline consumer keeps using the blended <see cref="BaselineRow"/>.</summary>
+public sealed record BaselinePowerRow(
+    int Epoch, ComponentKind Kind, string Name, int Band, LoadBucket Bucket, int Pband,
+    double DeltaAvg, double? FanAvg, double? TempAvg, double? GapAvg, double? PowerAvg,
+    int Minutes, long Updated);
+
 /// <summary>All reads/writes of telemetry. SQL lives here and nowhere else.</summary>
 public sealed class TelemetryRepository
 {
@@ -417,6 +434,49 @@ public sealed class TelemetryRepository
         return list;
     }
 
+    /// <summary>Per (bucket, band, power band) aggregates over agg_minute — the raw material for
+    /// power-tagged baseline sub-cells. Each minute row already carries that minute's mean watts
+    /// (power_sum/power_n); grouping by that quantized into <paramref name="bandWidthW"/>-wide bands
+    /// clusters a bucket's minutes into its power regimes with no schema change to the aggregates.
+    /// AC power and known ambient only, matching the baseline pool.</summary>
+    public IReadOnlyList<PowerBandStat> GetPowerBandStats(ComponentKind kind, string name, long fromTs, long toTs, double bandWidthW)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        // pband = floor(minute-mean-watts / width). Only minutes that carry power feed this.
+        cmd.CommandText = """
+            SELECT bucket, band,
+                   CAST((power_sum/power_n)/$w AS INTEGER) AS pband,
+                   COUNT(DISTINCT minute),
+                   CASE WHEN SUM(delta_n) > 0 THEN SUM(delta_sum)/SUM(delta_n) END,
+                   CASE WHEN SUM(fan_n) > 0 THEN SUM(fan_sum)/SUM(fan_n) END,
+                   SUM(temp_sum)/SUM(n),
+                   CASE WHEN SUM(gap_n) > 0 THEN SUM(gap_sum)/SUM(gap_n) END,
+                   SUM(power_sum)/SUM(power_n)
+            FROM agg_minute
+            WHERE kind=$kind AND name=$name AND on_ac=1 AND band>=0 AND power_n>0
+              AND minute BETWEEN $from AND $to
+            GROUP BY bucket, band, pband;
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$from", fromTs);
+        cmd.Parameters.AddWithValue("$to", toTs);
+        cmd.Parameters.AddWithValue("$w", bandWidthW);
+
+        var list = new List<PowerBandStat>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            list.Add(new PowerBandStat(
+                (LoadBucket)reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3),
+                reader.IsDBNull(4) ? null : reader.GetDouble(4),
+                reader.IsDBNull(5) ? null : reader.GetDouble(5),
+                reader.GetDouble(6),
+                reader.IsDBNull(7) ? null : reader.GetDouble(7),
+                reader.IsDBNull(8) ? null : reader.GetDouble(8)));
+        return list;
+    }
+
     /// <summary>Per-minute delta averages for one bucket — used to compute p95 for baselines.</summary>
     public IReadOnlyList<double> GetMinuteDeltas(ComponentKind kind, string name, LoadBucket bucket, int band, bool onAc, long fromTs, long toTs)
     {
@@ -681,7 +741,10 @@ public sealed class TelemetryRepository
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM baseline WHERE epoch=$e AND kind=$kind AND name=$name;";
+        cmd.CommandText = """
+            DELETE FROM baseline WHERE epoch=$e AND kind=$kind AND name=$name;
+            DELETE FROM baseline_power WHERE epoch=$e AND kind=$kind AND name=$name;
+            """;
         cmd.Parameters.AddWithValue("$e", epoch);
         cmd.Parameters.AddWithValue("$kind", kind.ToString());
         cmd.Parameters.AddWithValue("$name", name);
@@ -712,6 +775,75 @@ public sealed class TelemetryRepository
                 reader.IsDBNull(13) ? null : reader.GetDouble(13),
                 reader.IsDBNull(14) ? null : reader.GetDouble(14)));
         }
+        return list;
+    }
+
+    /// <summary>Replace an epoch's power-tagged sub-cells for the buckets/bands in
+    /// <paramref name="rows"/>. A bucket that is no longer multi-modal (all its rows gone from
+    /// this set) has its stale sub-cells cleared first, so scoring falls back to the blended
+    /// cell rather than an outdated regime split.</summary>
+    public void UpsertBaselinePower(int epoch, ComponentKind kind, string name, IReadOnlyList<BaselinePowerRow> rows)
+    {
+        using var conn = _db.Open();
+        using var tx = conn.BeginTransaction();
+        // Clear this component's sub-cells for the epoch, then write the current set. The set is
+        // small (only multi-modal loaded buckets), so a full replace is simplest and keeps the
+        // table from accumulating regimes the machine has stopped using.
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM baseline_power WHERE epoch=$e AND kind=$kind AND name=$name;";
+            del.Parameters.AddWithValue("$e", epoch);
+            del.Parameters.AddWithValue("$kind", kind.ToString());
+            del.Parameters.AddWithValue("$name", name);
+            del.ExecuteNonQuery();
+        }
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO baseline_power(epoch,kind,name,band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated)
+            VALUES($e,$kind,$name,$band,$bucket,$pband,$davg,$fan,$tavg,$gavg,$pavg,$min,$upd);
+            """;
+        foreach (BaselinePowerRow r in rows)
+        {
+            cmd.Parameters.Clear();
+            cmd.Parameters.AddWithValue("$e", r.Epoch);
+            cmd.Parameters.AddWithValue("$kind", r.Kind.ToString());
+            cmd.Parameters.AddWithValue("$name", r.Name);
+            cmd.Parameters.AddWithValue("$band", r.Band);
+            cmd.Parameters.AddWithValue("$bucket", (int)r.Bucket);
+            cmd.Parameters.AddWithValue("$pband", r.Pband);
+            cmd.Parameters.AddWithValue("$davg", r.DeltaAvg);
+            cmd.Parameters.AddWithValue("$fan", (object?)r.FanAvg ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tavg", (object?)r.TempAvg ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$gavg", (object?)r.GapAvg ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$pavg", (object?)r.PowerAvg ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$min", r.Minutes);
+            cmd.Parameters.AddWithValue("$upd", r.Updated);
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    public IReadOnlyList<BaselinePowerRow> GetBaselinePower(int epoch, ComponentKind kind, string name)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated FROM baseline_power WHERE epoch=$e AND kind=$kind AND name=$name;";
+        cmd.Parameters.AddWithValue("$e", epoch);
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        var list = new List<BaselinePowerRow>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            list.Add(new BaselinePowerRow(
+                epoch, kind, name, reader.GetInt32(0), (LoadBucket)reader.GetInt32(1), reader.GetInt32(2),
+                reader.GetDouble(3),
+                reader.IsDBNull(4) ? null : reader.GetDouble(4),
+                reader.IsDBNull(5) ? null : reader.GetDouble(5),
+                reader.IsDBNull(6) ? null : reader.GetDouble(6),
+                reader.IsDBNull(7) ? null : reader.GetDouble(7),
+                reader.GetInt32(8), reader.GetInt64(9)));
         return list;
     }
 }

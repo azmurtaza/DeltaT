@@ -48,10 +48,15 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
     private static readonly ushort[] FanRegisters = { 0xB0, 0xB1, 0xB2, 0xB3 };
 
     // A spinning laptop fan sits well inside this band; the floor rejects a lone low byte read
-    // as noise, the ceiling rejects a byte-order or wrong-register misread (Omen fans top out
-    // near 6000). Zero is handled separately as "parked", not as an out-of-range value.
+    // as noise, the ceiling rejects a byte-order or wrong-register misread AND the EC's torn
+    // reads. The EC updates its 16-bit fan word non-atomically, so a poll that lands mid-update
+    // catches a stale/zero byte beside a fresh one: a low byte of 0x00 next to a high byte near
+    // 0x2A decodes little-endian to ~10,700, which is the bogus "~11000 rpm" spike users saw.
+    // Omen/Victus blower fans top out near 6000, so an 8000 ceiling clears any real speed with
+    // margin while rejecting that whole family of torn values. Zero is handled separately as
+    // "parked", not as an out-of-range value.
     private const int MinSpinRpm = 200;
-    private const int MaxSpinRpm = 12000;
+    private const int MaxSpinRpm = 8000;
 
     // An OMEN/Victus that never yields a plausible fan after this many non-parked reads has a
     // register map we don't fit — stop polling its EC. Never trips once a real fan has decoded.
@@ -65,6 +70,11 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
     private bool _dead;
     private bool _everDecoded;
     private int _consecutiveMisses;
+    // The EC's byte order for a fan word, latched on the first believable decode. Both fans
+    // share one EC so one latch serves both. Once known we trust ONLY that order: accepting
+    // either order on every tick is a spike vector, because a torn read that is implausible in
+    // the true order can still look plausible in the other and slip through as a bogus RPM.
+    private bool? _bigEndian;
 
     public HpOmenEcFanReader() : this(MachineIdentityProvider.Detect) { }
 
@@ -96,13 +106,15 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
             return default;
         }
 
-        FanDecode cpuKind = DecodeFan(data[0], data[1], out double cpuRpm);
-        FanDecode gpuKind = DecodeFan(data[2], data[3], out double gpuRpm);
+        FanDecode cpuKind = DecodeFan(data[0], data[1], _bigEndian, out double cpuRpm, out bool cpuBig);
+        FanDecode gpuKind = DecodeFan(data[2], data[3], _bigEndian, out double gpuRpm, out bool gpuBig);
 
         if (cpuKind == FanDecode.Rpm || gpuKind == FanDecode.Rpm)
         {
             _everDecoded = true;
             _consecutiveMisses = 0;
+            // Latch the byte order the first real decode used, so every later tick trusts only it.
+            _bigEndian ??= cpuKind == FanDecode.Rpm ? cpuBig : gpuBig;
         }
         else if (cpuKind == FanDecode.Implausible || gpuKind == FanDecode.Implausible)
         {
@@ -111,10 +123,20 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
             RegisterMiss();
         }
 
-        return new LaptopFanSample(
-            cpuKind == FanDecode.Rpm ? cpuRpm : null,
-            gpuKind == FanDecode.Rpm ? gpuRpm : null);
+        return new LaptopFanSample(ResolveFan(cpuKind, cpuRpm), ResolveFan(gpuKind, gpuRpm));
     }
+
+    /// <summary>Turn a decode into the reported RPM. A believable reading is itself; a parked
+    /// (all-zero) fan reads as a real 0 <em>once we've proven these fans exist</em> (any earlier
+    /// spin decoded), because then a genuine 0x0000 is the fan measurably stopped, not an absent
+    /// sensor, so it shows "0 rpm" instead of "--". Before that first spin, and for an implausible
+    /// read, it stays null: we can't yet claim a fan is there to be off.</summary>
+    private double? ResolveFan(FanDecode kind, double rpm) => kind switch
+    {
+        FanDecode.Rpm => rpm,
+        FanDecode.Parked when _everDecoded => 0.0,
+        _ => null,
+    };
 
     private void RegisterMiss()
     {
@@ -165,29 +187,57 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
     }
 
     /// <summary>Pure protocol half, split out for tests. Two consecutive EC bytes are a fan-speed
-    /// word. All-zero is a parked (or not-yet-spun) fan, a valid quiet state. Otherwise the
-    /// little-endian order is tried first (OmenMon's documented layout); big-endian is accepted
-    /// only if it alone reads as a believable RPM, so the reader survives the unconfirmed
-    /// endianness until a real machine settles it. A non-zero pair that is plausible in neither
-    /// order is reported <see cref="FanDecode.Implausible"/> (wrong map / wrong machine).</summary>
+    /// word. All-zero is a parked (or not-yet-spun) fan, a valid quiet state. With the byte order
+    /// still unknown the little-endian order is tried first (OmenMon's documented layout);
+    /// big-endian is accepted only if it alone reads as a believable RPM, so the reader survives
+    /// the unconfirmed endianness until a real machine settles it. A non-zero pair that is
+    /// plausible in neither order is reported <see cref="FanDecode.Implausible"/> (wrong map /
+    /// wrong machine).</summary>
     public static FanDecode DecodeFan(byte b0, byte b1, out double rpm)
+        => DecodeFan(b0, b1, bigEndian: null, out rpm, out _);
+
+    /// <summary>As above, but once the machine's byte order is known (<paramref name="bigEndian"/>
+    /// non-null) only that order is tried, so a torn read that is implausible in the true order
+    /// can no longer be rescued by the other order into a bogus spike. <paramref name="usedBigEndian"/>
+    /// reports which order produced the reading, so the caller can latch it after the first spin.</summary>
+    public static FanDecode DecodeFan(byte b0, byte b1, bool? bigEndian, out double rpm, out bool usedBigEndian)
     {
         rpm = 0;
+        usedBigEndian = bigEndian ?? false;
         if (b0 == 0 && b1 == 0)
             return FanDecode.Parked;
 
         int littleEndian = b0 | (b1 << 8);
-        int bigEndian = b1 | (b0 << 8);
+        int bigEndianVal = b1 | (b0 << 8);
+
+        if (bigEndian == true)
+            return Plausible(bigEndianVal, out rpm);
+        if (bigEndian == false)
+            return Plausible(littleEndian, out rpm);
+
         if (IsPlausible(littleEndian))
         {
             rpm = littleEndian;
+            usedBigEndian = false;
             return FanDecode.Rpm;
         }
-        if (IsPlausible(bigEndian))
+        if (IsPlausible(bigEndianVal))
         {
-            rpm = bigEndian;
+            rpm = bigEndianVal;
+            usedBigEndian = true;
             return FanDecode.Rpm;
         }
+        return FanDecode.Implausible;
+    }
+
+    private static FanDecode Plausible(int candidate, out double rpm)
+    {
+        if (IsPlausible(candidate))
+        {
+            rpm = candidate;
+            return FanDecode.Rpm;
+        }
+        rpm = 0;
         return FanDecode.Implausible;
     }
 

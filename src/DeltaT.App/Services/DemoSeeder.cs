@@ -256,10 +256,10 @@ public static class DemoSeeder
 
         if (!degraded)
         {
-            Ev(19, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
+            Ev(19, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. Cooling is earning its keep.");
             Ev(12, "fingerprint", null, 1, "Fingerprint re-run. Response curves unchanged since the last check.");
             Ev(6, "remark", ComponentKind.GpuDiscrete, 1, "New record: GPU touched 71° under load, the hottest DeltaT has seen it, still well inside spec.");
-            Ev(1.5, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. The paste is earning its keep.");
+            Ev(1.5, "remark", null, 0, "Weekly check-in: deltas on baseline, no throttling, nothing drifting. Cooling is earning its keep.");
             foreach (double d in new[] { 5.0, 3.0, 1.0 })
             {
                 Ev(d, "soak", ComponentKind.Cpu, 0, "Heat-soak measured on load onset.", "{\"rate\":2.0}");
@@ -270,7 +270,7 @@ public static class DemoSeeder
 
         // Repaste story: the slide, week by week.
         Ev(13, "remark", ComponentKind.Cpu, 1, "CPU is running 5.4° hotter than a week ago at similar load and weather. Watching.");
-        Ev(8, "remark", ComponentKind.Cpu, 2, "CPU paste score slid 11 points this week. One bad week isn't a verdict, but the trend has DeltaT's attention.");
+        Ev(8, "remark", ComponentKind.Cpu, 2, "CPU thermal score slid 11 points this week. One bad week isn't a verdict, but the trend has DeltaT's attention.");
 
         // Recent heat-soaks are markedly faster — a paste signature.
         foreach ((double d, double cpu, double gpu) in new[] { (5.5, 2.8, 2.4), (3.0, 3.2, 2.5), (1.2, 3.4, 2.7), (0.3, 3.5, 2.6) })
