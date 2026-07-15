@@ -47,15 +47,28 @@ public sealed class GpuBurner : IDisposable
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Thread _thread;
+    private volatile int _permille;   // duty target, 50..1000, read each dispatch
     private IntPtr _context, _queue, _program, _kernel, _buffer;
 
     public string DeviceName { get; }
 
+    /// <summary>Settable at runtime so a controller can steer the achieved GPU load into a
+    /// bucket. The load-vs-duty curve is nonlinear (NVML's utilization metric inflates toward
+    /// 100 %), so an open-loop duty overshoots badly. 0.05..1.0; 1.0 is full tilt.</summary>
+    public double Utilization
+    {
+        get => _permille / 1000.0;
+        set => _permille = (int)(Math.Clamp(value, 0.05, 1.0) * 1000);
+    }
+
     /// <summary>Starts burning immediately. <paramref name="preferredNameContains"/>
     /// steers device choice toward the sensor-visible GPU (e.g. the discrete card on
-    /// a hybrid laptop); without a match, any non-Intel GPU device is preferred.</summary>
-    public GpuBurner(string? preferredNameContains)
+    /// a hybrid laptop); without a match, any non-Intel GPU device is preferred.
+    /// <paramref name="targetUtilization"/> (0..1, default full) duty-cycles the dispatch
+    /// loop so the calibration workout can hold a partial GPU load, not just 100%.</summary>
+    public GpuBurner(string? preferredNameContains, double targetUtilization = 1.0)
     {
+        Utilization = targetUtilization;
         (IntPtr device, DeviceName) = PickDevice(preferredNameContains);
         try
         {
@@ -100,6 +113,17 @@ public sealed class GpuBurner : IDisposable
                 double ms = sw.Elapsed.TotalMilliseconds;
                 if (ms > 0.5)
                     iters = (int)Math.Clamp(iters * (TargetDispatchMs / ms), 32, 1_000_000);
+
+                // Duty-cycle to a partial load: idle the engine for a proportional slice
+                // after each dispatch. sleep/(dispatch+sleep) = 1 − target. Still one
+                // dispatch per loop, so each stays far under the TDR watchdog.
+                double target = _permille / 1000.0;
+                if (target < 0.999)
+                {
+                    double sleepMs = ms * (1.0 / target - 1.0);
+                    if (sleepMs >= 1)
+                        Thread.Sleep((int)Math.Min(sleepMs, 500));
+                }
             }
         }
         finally

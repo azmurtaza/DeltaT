@@ -222,7 +222,9 @@ public partial class App : Application
 
             var fpTest = new FingerprintTest(_monitor!, _ambient!);
             var fpVm = new FingerprintViewModel(
-                fpTest, new FingerprintSequence(fpTest, _monitor!), _repo!, onBattery: false, hasGpu: true);
+                fpTest, new FingerprintSequence(fpTest, _monitor!), _repo!,
+                cpuLoad: () => _monitor!.Latest?.Find(ComponentKind.Cpu)?.LoadPercent,
+                onBattery: false, hasGpu: true);
             var fp = new FingerprintWindow { DataContext = fpVm };
             fp.Show();
             await Shot(fp, "fingerprint");
@@ -234,11 +236,28 @@ public partial class App : Application
             fpVm.InSequence = true;
             fpVm.StepBadge = "TEST 1 OF 2 · CPU";
             fpVm.Phase = "Full CPU load, let it cook";
+            fpVm.PhaseHint = "96 s remaining in this phase";
             fpVm.PhaseIndex = 1;
-            fpVm.SecondsLeft = 96;
-            fpVm.CurrentTemp = 82.4;
-            fpVm.HasCurrentTemp = true;
+            fpVm.GaugeValue = 82.4;
+            fpVm.HasGaugeValue = true;
             await Shot(fp, "fingerprint_running");
+
+            // The calibration workout, mid-run: same running chrome, its own two-leg strip and
+            // a load-percent gauge.
+            fpVm.Mode = "workout";
+            fpVm.InSequence = false;
+            fpVm.StepBadge = "";
+            fpVm.RunningOverline = "Calibration workout in progress";
+            fpVm.StopLabel = "STOP WORKOUT";
+            fpVm.Phase = "Holding a heavy load";
+            fpVm.PhaseHint = "2:40 left in this workout";
+            fpVm.PhaseIndex = 1;
+            fpVm.GaugeUnit = "%";
+            fpVm.GaugeSub = "TARGET 80%";
+            fpVm.GaugeValue = 79;
+            fpVm.HasGaugeValue = true;
+            await Shot(fp, "workout_running");
+            fpVm.Mode = "fingerprint";
 
             // The workup done screen: one result section per component.
             fpVm.State = "done";
@@ -530,6 +549,7 @@ public partial class App : Application
             test,
             new FingerprintSequence(test, _monitor),
             _repo,
+            cpuLoad: () => _monitor.Latest?.Find(ComponentKind.Cpu)?.LoadPercent,
             onBattery: _monitor.Latest is { OnAcPower: false },
             hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null);
         new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();

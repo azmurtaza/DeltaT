@@ -196,10 +196,25 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <!-- Sensor driver: a state, not a setting. DeltaT reads the CPU's thermal
-                         registers through PawnIO; if it isn't there, say which readings are
-                         missing and offer the fix rather than showing empty temperatures. -->
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Sensor driver" Margin="0,14,0,0">
+                </StackPanel>
+
+                <!-- ================= maintenance band: one uniform row across the
+                     bottom (sensor driver / updates / data / feedback), so the page
+                     ends level instead of trailing off in ragged blocks. The sensor
+                     driver is a state, not a setting (DeltaT reads the CPU's thermal
+                     registers through PawnIO; if it isn't there, say which readings
+                     are missing and offer the fix), so it belongs among these small
+                     status cards rather than dangling off the right column. -->
+                <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <HeaderedContentControl Grid.Column="0" Style="{StaticResource Module.Quiet}" Header="Sensor driver"
+                                            Margin="0,0,7,0">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11.5" TextWrapping="Wrap"
                                        Text="{Binding SensorDriverText}"/>
@@ -210,20 +225,8 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                </StackPanel>
-
-                <!-- ================= maintenance band: one uniform row across the
-                     bottom (updates / data / feedback), so the page ends level
-                     instead of trailing off in ragged blocks -->
-                <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <HeaderedContentControl Grid.Column="0" Style="{StaticResource Module.Quiet}" Header="Updates"
-                                            Margin="0,0,7,0" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
+                    <HeaderedContentControl Grid.Column="1" Style="{StaticResource Module.Quiet}" Header="Updates"
+                                            Margin="7,0,7,0" Visibility="{Binding UpdatesAvailable, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
                             <Grid Style="{StaticResource SettingRow}">
                                 <Grid.ColumnDefinitions>
@@ -248,7 +251,7 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Grid.Column="1" Style="{StaticResource Module.Quiet}" Header="Data"
+                    <HeaderedContentControl Grid.Column="2" Style="{StaticResource Module.Quiet}" Header="Data"
                                             Margin="7,0,7,0">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11"
@@ -260,7 +263,7 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Grid.Column="2" Style="{StaticResource Module.Quiet}" Header="Feedback"
+                    <HeaderedContentControl Grid.Column="3" Style="{StaticResource Module.Quiet}" Header="Feedback"
                                             Margin="7,0,0,0">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,0,0,12" TextWrapping="Wrap"

@@ -26,6 +26,7 @@ public partial class FingerprintViewModel : ObservableObject
     private readonly FingerprintTest _test;
     private readonly FingerprintSequence _sequence;
     private readonly TelemetryRepository _repo;
+    private readonly Func<double?> _cpuLoad;
     private readonly Dispatcher _dispatcher;
     private CancellationTokenSource? _cts;
 
@@ -35,24 +36,42 @@ public partial class FingerprintViewModel : ObservableObject
     public bool HasGpu { get; }
 
     [ObservableProperty] private string _state = "intro"; // intro | running | done
+    // Which operation the running/done screens are showing: the fingerprint measurement, or
+    // the calibration workout. They share the running chrome (a held load + a ring gauge),
+    // so this switches the few parts that differ (the protocol strip, the labels).
+    [ObservableProperty] private string _mode = "fingerprint"; // fingerprint | workout
     [ObservableProperty] private string _phase = "";
     [ObservableProperty] private string _targetLabel = "CPU";
     [ObservableProperty] private double _secondsLeft;
-    [ObservableProperty] private double _currentTemp;
-    [ObservableProperty] private bool _hasCurrentTemp;
     [ObservableProperty] private bool _onBattery;
     // The multi-test badge ("TEST 1 OF 2 · CPU"), shown only while a workup runs.
     [ObservableProperty] private string _stepBadge = "";
     [ObservableProperty] private bool _inSequence;
-    // Which leg of the protocol strip to light: 0 settle, 1 load, 2 cooldown.
+    // Which leg of the protocol strip to light: fingerprint 0 settle/1 load/2 cooldown;
+    // workout 0 medium/1 heavy.
     [ObservableProperty] private int _phaseIndex;
 
+    // Running-screen labels, so the shared chrome reads correctly for each operation.
+    [ObservableProperty] private string _runningOverline = "Fingerprint in progress";
+    [ObservableProperty] private string _phaseHint = "";
+    [ObservableProperty] private string _stopLabel = "STOP THE TEST";
+
+    // The ring gauge is generalized: the fingerprint drives it with temperature (°C), the
+    // workout with CPU load (%). Value/HasValue below; unit/max/sub let the same control read
+    // either without the view knowing which operation is running.
+    [ObservableProperty] private double _gaugeValue;
+    [ObservableProperty] private bool _hasGaugeValue;
+    [ObservableProperty] private string _gaugeUnit = "°C";
+    [ObservableProperty] private double _gaugeMax = 100;
+    [ObservableProperty] private string _gaugeSub = "CPU";
+
     public FingerprintViewModel(FingerprintTest test, FingerprintSequence sequence,
-        TelemetryRepository repo, bool onBattery, bool hasGpu)
+        TelemetryRepository repo, Func<double?> cpuLoad, bool onBattery, bool hasGpu)
     {
         _test = test;
         _sequence = sequence;
         _repo = repo;
+        _cpuLoad = cpuLoad;
         _onBattery = onBattery;
         HasGpu = hasGpu;
         _dispatcher = System.Windows.Application.Current.Dispatcher;
@@ -68,13 +87,82 @@ public partial class FingerprintViewModel : ObservableObject
     [RelayCommand]
     private Task StartWorkupAsync() => RunSequenceAsync(new[] { FingerprintTarget.Cpu, FingerprintTarget.Gpu });
 
+    /// <summary>The calibration workout: hold Medium then Heavy CPU load so those buckets fill
+    /// without waiting for them to happen by chance (Heavy especially is slow to reach in normal
+    /// use). Unlike the fingerprint it records no result of its own; it just manufactures real
+    /// loaded minutes through the normal monitoring pipeline, so the unchanged confidence gate
+    /// locks sooner. It never touches the score or fakes a lock. Max is left to the fingerprint
+    /// (a full-load reading needs the machine's real boost state), which is exactly why the two
+    /// sit together here: the fingerprint fills the full-load bucket, the workout the ones below.</summary>
+    [RelayCommand]
+    private async Task StartWorkoutAsync()
+    {
+        Mode = "workout";
+        State = "running";
+        InSequence = false;
+        StepBadge = "";
+        RunningOverline = "Calibration workout in progress";
+        StopLabel = "STOP WORKOUT";
+        Phase = "Warming up";
+        PhaseHint = "";
+        GaugeUnit = "%";
+        GaugeMax = 100;
+        GaugeSub = "TARGET";
+        HasGaugeValue = false;
+        PhaseIndex = 0;
+        _cts = new CancellationTokenSource();
+
+        var workout = new CalibrationWorkout();
+        var progress = new Progress<WorkoutProgress>(p =>
+        {
+            if (p.Phase == WorkoutPhase.Done) return;
+            PhaseIndex = p.Phase == WorkoutPhase.Heavy ? 1 : 0;
+            Phase = p.Phase == WorkoutPhase.Heavy ? "Holding a heavy load" : "Holding a medium load";
+            GaugeSub = $"TARGET {p.TargetLoadPct}%";
+            PhaseHint = $"{p.Remaining.Minutes}:{p.Remaining.Seconds:00} left in this workout";
+            if (p.CurrentLoadPct is { } l)
+            {
+                GaugeValue = l;
+                HasGaugeValue = true;
+            }
+        });
+
+        try
+        {
+            await Task.Run(() => workout.RunAsync(u => new CpuBurner(u), _cpuLoad, progress, _cts.Token));
+            Sections.Clear();
+            Sections.Add(new FingerprintSection("CALIBRATION WORKOUT", Array.Empty<StatCell>(),
+                "Done. Those medium and heavy minutes are recorded. Run it again in a little while (spaced out, "
+                + "so it counts as a fresh reading), and pair it with a fingerprint for the full-load number: "
+                + "together they let the baseline lock without waiting for the loads to happen on their own."));
+            State = "done";
+        }
+        catch (OperationCanceledException)
+        {
+            State = "intro";
+        }
+        catch (Exception ex)
+        {
+            Sections.Clear();
+            Sections.Add(new FingerprintSection("CALIBRATION WORKOUT", Array.Empty<StatCell>(),
+                $"The workout couldn't run: {ex.Message}"));
+            State = "done";
+        }
+    }
+
     private async Task RunSequenceAsync(IReadOnlyList<FingerprintTarget> steps)
     {
+        Mode = "fingerprint";
         State = "running";
         InSequence = steps.Count > 1;
         StepBadge = "";
+        RunningOverline = "Fingerprint in progress";
+        StopLabel = "STOP THE TEST";
+        GaugeUnit = "°C";
+        GaugeMax = 100;
         TargetLabel = steps[0] == FingerprintTarget.Gpu ? "GPU" : "CPU";
-        HasCurrentTemp = false;
+        GaugeSub = TargetLabel;
+        HasGaugeValue = false;
         PhaseIndex = 0;
         _cts = new CancellationTokenSource();
 
@@ -83,12 +171,14 @@ public partial class FingerprintViewModel : ObservableObject
             Phase = p.Phase;
             PhaseIndex = (int)p.Stage;
             SecondsLeft = p.SecondsLeft;
+            PhaseHint = $"{p.SecondsLeft:0} s remaining in this phase";
             TargetLabel = p.Target == FingerprintTarget.Gpu ? "GPU" : "CPU";
+            GaugeSub = TargetLabel;
             StepBadge = p.StepCount > 1 ? $"TEST {p.StepIndex + 1} OF {p.StepCount} · {TargetLabel}" : "";
             if (p.TempC is { } t)
             {
-                CurrentTemp = t;
-                HasCurrentTemp = true;
+                GaugeValue = t;
+                HasGaugeValue = true;
             }
         });
 

@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:DeltaT.App.Controls"
         xmlns:ui="clr-namespace:DeltaT.App.Ui"
-        Title="DeltaT - thermal fingerprint" Width="520" Height="600"
+        Title="DeltaT - thermal fingerprint" Width="520" Height="660"
         Icon="pack://application:,,,/Assets/deltat.ico"
         Background="{StaticResource Brush.BgGlow}" Foreground="{StaticResource Brush.Text}"
         FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
@@ -44,7 +44,9 @@
         <Grid Grid.Row="1" Margin="30,20,30,24">
 
         <!-- ============ intro ============ -->
-        <StackPanel Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=intro}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=intro}">
+        <StackPanel>
             <TextBlock Style="{StaticResource Text.H1}" Text="A repeatable thermal reading" Margin="0,4,0,10"/>
             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" LineHeight="19" TextWrapping="Wrap">
                 DeltaT holds the machine still, then fully loads the component you pick (every CPU core,
@@ -127,7 +129,20 @@
             <Button Style="{StaticResource Button.Primary}" Content="TEST THE CPU" Padding="20,10" Margin="0,22,0,0"
                     HorizontalAlignment="Left" Command="{Binding StartCpuCommand}"
                     Visibility="{Binding HasGpu, Converter={StaticResource InvBoolToVis}}"/>
+
+            <!-- Calibration workout: it belongs here because users already reach for the
+                 fingerprint expecting it to speed calibration. The copy draws the honest line:
+                 the fingerprint fills the full-load reading, the workout fills the loads below. -->
+            <Rectangle Height="1" Fill="{StaticResource Brush.StrokeSoft}" Margin="0,22,0,0"/>
+            <StackPanel Margin="0,18,0,0">
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" ui:Tracking.Text="STILL CALIBRATING?"/>
+                <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="19" Margin="0,7,0,0" TextWrapping="Wrap"
+                           Text="The fingerprint above teaches DeltaT your full-load reading. A calibration workout fills the medium and heavy loads in between, the ones ordinary use is slow to reach, so the baseline can lock sooner. About 6 minutes; keep the charger in and run it a few times over the day."/>
+                <Button Style="{StaticResource Button.Ghost}" Content="RUN CALIBRATION WORKOUT" Padding="18,10"
+                        HorizontalAlignment="Left" Margin="0,12,0,0" Command="{Binding StartWorkoutCommand}"/>
+            </StackPanel>
         </StackPanel>
+        </ScrollViewer>
 
         <!-- ============ running ============ -->
         <Grid Visibility="{Binding State, Converter={StaticResource StateToVis}, ConverterParameter=running}">
@@ -141,14 +156,17 @@
                 <TextBlock Style="{StaticResource Text.Overline}" Foreground="{StaticResource Brush.Accent}"
                            ui:Tracking.Text="{Binding StepBadge}" Margin="0,0,0,6"
                            Visibility="{Binding InSequence, Converter={StaticResource BoolToVis}}"/>
-                <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Fingerprint in progress"/>
+                <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="{Binding RunningOverline}"/>
                 <TextBlock Style="{StaticResource Text.H1}" FontSize="18" Text="{Binding Phase}" Margin="0,9,0,0"/>
                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,4,0,0"
-                           Text="{Binding SecondsLeft, StringFormat='{}{0:0} s remaining in this phase'}"/>
+                           Text="{Binding PhaseHint}"/>
             </StackPanel>
 
-            <!-- the protocol strip, live: the leg under way carries the ember tick -->
-            <Grid Grid.Row="1" Margin="0,16,0,0">
+            <!-- protocol strip, live: the leg under way carries the ember tick. The fingerprint
+                 has three legs (settle / load / cooldown); the workout has two (medium / heavy).
+                 Same visual language, switched by Mode so only one shows. -->
+            <Grid Grid.Row="1" Margin="0,16,0,0"
+                  Visibility="{Binding Mode, Converter={StaticResource StateToVis}, ConverterParameter=fingerprint}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
@@ -231,10 +249,69 @@
                 </StackPanel>
             </Grid>
 
+            <!-- workout strip: two legs (medium / heavy), same language as the fingerprint's -->
+            <Grid Grid.Row="1" Margin="0,16,0,0"
+                  Visibility="{Binding Mode, Converter={StaticResource StateToVis}, ConverterParameter=workout}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,5,0">
+                    <Rectangle Height="3">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource Brush.Stroke}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="0">
+                                        <Setter Property="Fill" Value="{StaticResource Brush.Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                    <TextBlock Margin="0,6,0,0" ui:Tracking.Text="MEDIUM LOAD">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="0">
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <Rectangle Height="3">
+                        <Rectangle.Style>
+                            <Style TargetType="Rectangle">
+                                <Setter Property="Fill" Value="{StaticResource Brush.Stroke}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="1">
+                                        <Setter Property="Fill" Value="{StaticResource Brush.Accent}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Rectangle.Style>
+                    </Rectangle>
+                    <TextBlock Margin="0,6,0,0" ui:Tracking.Text="HEAVY LOAD">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding PhaseIndex}" Value="1">
+                                        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+
             <controls:RingGauge Grid.Row="2" Width="230" Height="230"
-                                Value="{Binding CurrentTemp}" Maximum="100"
-                                HasValue="{Binding HasCurrentTemp}" Unit="°C" SubText="{Binding TargetLabel}"/>
-            <Button Grid.Row="3" Style="{StaticResource Button.Ghost}" Content="STOP THE TEST"
+                                Value="{Binding GaugeValue}" Maximum="{Binding GaugeMax}"
+                                HasValue="{Binding HasGaugeValue}" Unit="{Binding GaugeUnit}" SubText="{Binding GaugeSub}"/>
+            <Button Grid.Row="3" Style="{StaticResource Button.Ghost}" Content="{Binding StopLabel}"
                     HorizontalAlignment="Center" Foreground="{StaticResource Brush.Hot}"
                     Command="{Binding StopCommand}"/>
         </Grid>

@@ -41,6 +41,37 @@ public sealed record SensitivityCurve(
     double? FlagsActionAtC,    // score first drops below 70 (Good→plan-a-fix)
     double? NamesCauseAtC);    // diagnosis first names the correct cause
 
+/// <summary>Per-condition acquisition-fidelity tally: how far an organically-acquired and a
+/// workout-acquired baseline move the final score away from the ideal (true) baseline, and
+/// how often they flip the leading cause. The workout is only worth building if its numbers
+/// track the organic ones.</summary>
+public sealed record FidelityResult(
+    Condition Condition,
+    int Trials,
+    double OrganicMeanAbsErr,     // mean |score(organic) − score(true)|, in score points
+    double SyntheticMeanAbsErr,   // mean |score(workout) − score(true)|
+    double OrganicMaxAbsErr,
+    double SyntheticMaxAbsErr,
+    int OrganicFlips,             // leading cause differed from the true-baseline diagnosis
+    int SyntheticFlips);
+
+public sealed record FidelityReport(IReadOnlyList<FidelityResult> Conditions)
+{
+    private int Total => Conditions.Sum(c => c.Trials);
+    public double OrganicMeanAbsErr => Total == 0 ? 0 : Conditions.Sum(c => c.OrganicMeanAbsErr * c.Trials) / Total;
+    public double SyntheticMeanAbsErr => Total == 0 ? 0 : Conditions.Sum(c => c.SyntheticMeanAbsErr * c.Trials) / Total;
+    public double SyntheticMaxAbsErr => Conditions.Count == 0 ? 0 : Conditions.Max(c => c.SyntheticMaxAbsErr);
+    public int OrganicFlips => Conditions.Sum(c => c.OrganicFlips);
+    public int SyntheticFlips => Conditions.Sum(c => c.SyntheticFlips);
+
+    /// <summary>The go/no-go: a workout-acquired baseline must be no less faithful than an
+    /// organically-acquired one (within a small score tolerance) and must not add any
+    /// cause-attribution flips. If this holds, the feature keeps accuracy; if not, it doesn't.</summary>
+    public bool SyntheticNoWorseThanOrganic(double scoreTolerance = 1.0) =>
+        SyntheticMeanAbsErr <= OrganicMeanAbsErr + scoreTolerance
+        && SyntheticFlips <= OrganicFlips;
+}
+
 public sealed record BenchmarkReport(
     IReadOnlyList<ConditionResult> Conditions,
     IReadOnlyList<SensitivityCurve> Sensitivity)
@@ -112,16 +143,7 @@ public static class DetectionBenchmark
         {
             // Fault conditions get a clearly-degraded but realistic severity; confounders get
             // a realistic magnitude of their (non-fault) effect.
-            double severity = condition switch
-            {
-                Condition.PasteDegraded => 6 + rng.NextDouble() * 6,   // +6..12 °C load-rise
-                Condition.DustAirflow => 4 + rng.NextDouble() * 5,     // +4..9 °C broad
-                Condition.FanFault => 3 + rng.NextDouble() * 4,
-                Condition.MountPumpout => 10 + rng.NextDouble() * 10,  // +10..20 ° gap
-                Condition.Overclock => 0.25 + rng.NextDouble() * 0.15, // +25..40 % power
-                Condition.Undervolt => 0.20 + rng.NextDouble() * 0.15, // −20..35 % power
-                _ => 0,
-            };
+            double severity = Severity(condition, rng);
 
             ComponentScore score = ScoreTrial(condition, severity, rng, out ThermalCause primary);
             scoreSum += score.Value;
@@ -148,14 +170,36 @@ public static class DetectionBenchmark
         _ => primary is ThermalCause.Healthy or ThermalCause.PowerConfig or ThermalCause.HighAmbient,
     };
 
+    /// <summary>Realistic magnitude of a condition's effect, shared by every path so the
+    /// fault benchmark and the acquisition-fidelity benchmark stress the engine identically.</summary>
+    private static double Severity(Condition condition, Random rng) => condition switch
+    {
+        Condition.PasteDegraded => 6 + rng.NextDouble() * 6,   // +6..12 °C load-rise
+        Condition.DustAirflow => 4 + rng.NextDouble() * 5,     // +4..9 °C broad
+        Condition.FanFault => 3 + rng.NextDouble() * 4,
+        Condition.MountPumpout => 10 + rng.NextDouble() * 10,  // +10..20 ° gap
+        Condition.Overclock => 0.25 + rng.NextDouble() * 0.15, // +25..40 % power
+        Condition.Undervolt => 0.20 + rng.NextDouble() * 0.15, // −20..35 % power
+        _ => 0,
+    };
+
     private static ComponentScore ScoreTrial(Condition condition, double severity, Random rng, out ThermalCause primary)
     {
-        var baseRows = Baseline.Select(c => new BaselineBucket(
-            c.Bucket, Warm, c.Delta, c.Delta + 3, c.FanRpm, 300, AmbientC + c.Delta,
-            GapAvg: c.Bucket == LoadBucket.Idle ? null : 10, PowerAvg: c.PowerW)).ToList();
+        List<RecentBucketObs> recent = BuildRecent(condition, severity, rng,
+            out double soakRecent, out double coolRecent, out double soakBase, out double coolBase);
+        List<BaselineBucket> baseRows = BuildBaselineRows(Acquisition.Perfect, 0, rng);
+        return ScoreAgainst(recent, soakRecent, coolRecent, soakBase, coolBase, baseRows, out primary);
+    }
 
-        double soakBase = 20, coolBase = 22;
-        double soakRecent = soakBase, coolRecent = coolBase;
+    /// <summary>Generate this trial's recent telemetry (the machine's true behaviour under the
+    /// condition, plus measurement noise on every channel). Split out from scoring so the same
+    /// recent load can be scored against several differently-acquired baselines.</summary>
+    private static List<RecentBucketObs> BuildRecent(
+        Condition condition, double severity, Random rng,
+        out double soakRecent, out double coolRecent, out double soakBase, out double coolBase)
+    {
+        soakBase = 20; coolBase = 22;
+        double sRec = soakBase, cRec = coolBase;
         var recent = new List<RecentBucketObs>();
         int band = condition == Condition.ColdSeason ? Cold : Warm;
         double ambient = condition == Condition.ColdSeason ? 4 : AmbientC;
@@ -176,8 +220,8 @@ public static class DetectionBenchmark
             {
                 case Condition.PasteDegraded:
                     delta += severity * loadFrac;              // load-dependent extra rise
-                    soakRecent = soakBase * (1 + 0.06 * severity);
-                    coolRecent = coolBase * (1 - 0.05 * severity);
+                    sRec = soakBase * (1 + 0.06 * severity);
+                    cRec = coolBase * (1 - 0.05 * severity);
                     break;
                 case Condition.DustAirflow:
                     delta += severity * (0.5 + 0.5 * loadFrac); // broad, present even near idle
@@ -198,14 +242,14 @@ public static class DetectionBenchmark
                 case Condition.Overclock:
                     power *= 1 + severity;                       // more watts → proportionally hotter
                     delta *= 1 + severity;
-                    soakRecent = soakBase * (1 + severity);
-                    coolRecent = coolBase * (1 + severity);
+                    sRec = soakBase * (1 + severity);
+                    cRec = coolBase * (1 + severity);
                     break;
                 case Condition.Undervolt:
                     power *= 1 - severity;
                     delta *= 1 - severity;
-                    soakRecent = soakBase * (1 - severity);
-                    coolRecent = coolBase * (1 - severity);
+                    sRec = soakBase * (1 - severity);
+                    cRec = coolBase * (1 - severity);
                     break;
             }
 
@@ -221,16 +265,155 @@ public static class DetectionBenchmark
                 PowerAvg: power));
         }
 
+        soakRecent = sRec + Gauss(rng, 0.5);
+        coolRecent = cRec + Gauss(rng, 0.5);
+        return recent;
+    }
+
+    private static ComponentScore ScoreAgainst(
+        List<RecentBucketObs> recent, double soakRecent, double coolRecent,
+        double soakBase, double coolBase, List<BaselineBucket> baseRows, out ThermalCause primary)
+    {
         var input = new ScoreInput(
             ComponentKind.GpuDiscrete, "Bench GPU", recent, baseRows,
             RecentWindowHours: 7 * 24, ThrottleEvents: 0,
-            SoakRateRecent: soakRecent + Gauss(rng, 0.5), SoakRateBaseline: soakBase,
-            CooldownRateRecent: coolRecent + Gauss(rng, 0.5), CooldownRateBaseline: coolBase,
+            SoakRateRecent: soakRecent, SoakRateBaseline: soakBase,
+            CooldownRateRecent: coolRecent, CooldownRateBaseline: coolBase,
             LimitC: LimitC, Profile: Profile, BaselineReady: true, CalibrationProgress: 1.0);
 
         ComponentScore score = ScoringEngine.Score(input, t => $"{t:0} °C");
         primary = score.Diagnosis?.Primary.Cause ?? ThermalCause.Healthy;
         return score;
+    }
+
+    // ===================== Phase 0: baseline-acquisition fidelity =====================
+    // The guided-calibration idea is: instead of waiting for organic loads to fill the
+    // baseline, run controlled graded loads to fill it fast. That only earns its place if a
+    // synthetically-acquired baseline produces the SAME verdicts as an organically-acquired
+    // one. This measures exactly that, in numbers, so the "does it hold accuracy?" question
+    // is answered by the benchmark and not by intuition.
+
+    /// <summary>How a baseline was gathered before scoring runs against it.</summary>
+    public enum Acquisition
+    {
+        Perfect,    // the machine's true cell means, noise-free: the ideal reference
+        Organic,    // many samples spread across each bucket's real operating range (normal use)
+        Synthetic,  // fewer, tighter samples at the workout's fixed operating point (a burner
+                    // tends to sit a little higher in the bucket than typical use)
+    }
+
+    // Organic use scatters a cell across many minutes and operating points; a workout is a
+    // handful of tight, repeatable holds. Neither count matters for the cell MEAN much once
+    // it converges, so the discriminator is the operating-point offset below, not sample size.
+    private const int OrganicSamplesPerCell = 30;
+    private const int SyntheticSamplesPerCell = 15;
+    private const double OrganicPowerSpread = 0.12;   // ±12 % power scatter within a bucket
+    private const double SyntheticPowerSpread = 0.02;  // a controlled hold is tight
+    // How far the workout's fixed operating point sits from the user's average use in the
+    // same bucket, as a fraction of bucket power. This is the real design lever: a workout
+    // that targets each bucket's representative point has a small offset; a naive burner that
+    // just pins the bucket ceiling has a large one. Swept, because it's the whole question.
+    public const double WellTargetedWorkoutBias = 0.03;
+    public const double NaiveBurnerBias = 0.15;
+    // Thermal resistance drifts slightly with operating point (leakage rises with power/temp),
+    // so a fixed workout point is NOT trivially identical to organic usage: any residual the
+    // power-normalizer can't absorb shows up as fidelity error. Without this the test is a gimme.
+    private const double LeakageK = 0.06;
+
+    /// <summary>True die-to-ambient rise for a bucket at a given package power, with a mild
+    /// leakage nonlinearity so °C/W is not perfectly constant across the operating range.</summary>
+    private static double TrueDelta(Cell c, double powerW)
+    {
+        double r0 = c.Delta / c.PowerW;                                  // canonical resistance °C/W
+        double r = r0 * (1 + LeakageK * (powerW - c.PowerW) / c.PowerW); // drifts with operating point
+        return r * powerW;
+    }
+
+    /// <summary>Simulate acquiring a baseline the given way and return the cells scoring will
+    /// compare against. Perfect returns the exact truth; Organic/Synthetic average simulated
+    /// calibration samples, so any acquisition bias (operating-point offset the normalizer
+    /// can't fully absorb) is baked into the returned cell means.</summary>
+    private static List<BaselineBucket> BuildBaselineRows(Acquisition mode, double synBias, Random rng)
+    {
+        if (mode == Acquisition.Perfect)
+            return Baseline.Select(c => new BaselineBucket(
+                c.Bucket, Warm, c.Delta, c.Delta + 3, c.FanRpm, 300, AmbientC + c.Delta,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : 10, PowerAvg: c.PowerW)).ToList();
+
+        bool syn = mode == Acquisition.Synthetic;
+        int samples = syn ? SyntheticSamplesPerCell : OrganicSamplesPerCell;
+        double bias = syn ? synBias : 0.0;
+        double spread = syn ? SyntheticPowerSpread : OrganicPowerSpread;
+
+        var rows = new List<BaselineBucket>();
+        foreach (Cell c in Baseline)
+        {
+            double dSum = 0, pSum = 0, fSum = 0, gSum = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                double power = Math.Max(1, c.PowerW * (1 + bias + Gauss(rng, spread)));
+                double delta = TrueDelta(c, power) + Gauss(rng, 0.6);
+                double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+                dSum += delta; pSum += power; fSum += fan; gSum += 10 + Gauss(rng, 0.5);
+            }
+            double dAvg = dSum / samples, pAvg = pSum / samples, fAvg = fSum / samples, gAvg = gSum / samples;
+            rows.Add(new BaselineBucket(
+                c.Bucket, Warm, dAvg, dAvg + 3, fAvg, samples * 5, AmbientC + dAvg,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : gAvg, PowerAvg: pAvg));
+        }
+        return rows;
+    }
+
+    public static FidelityReport RunAcquisitionFidelity(
+        int seed = 20260716, int trialsPerCondition = 300, double synBias = WellTargetedWorkoutBias)
+    {
+        var rng = new Random(seed);
+        var results = new List<FidelityResult>();
+        foreach (Condition condition in Enum.GetValues<Condition>())
+            results.Add(RunFidelityCondition(condition, trialsPerCondition, synBias, rng));
+        return new FidelityReport(results);
+    }
+
+    /// <summary>The fault classification a cause belongs to. Health, a benign power difference,
+    /// and high ambient are all "no fault" and interchangeable: reclassifying between them is
+    /// cosmetic, not an accuracy failure (the main benchmark's Matches treats them the same).
+    /// A flip only matters when it changes WHICH fault (or fault-vs-none) is named.</summary>
+    private static int CauseClass(ThermalCause cause) => cause switch
+    {
+        ThermalCause.Paste => 1,
+        ThermalCause.Airflow => 2,
+        ThermalCause.FanFault => 3,
+        ThermalCause.Mount => 4,
+        _ => 0,   // Healthy / PowerConfig / HighAmbient / CoolingHeadroom: no hardware fault
+    };
+
+    private static FidelityResult RunFidelityCondition(Condition condition, int trials, double synBias, Random rng)
+    {
+        double orgSum = 0, synSum = 0, orgMax = 0, synMax = 0;
+        int orgFlips = 0, synFlips = 0;
+        for (int i = 0; i < trials; i++)
+        {
+            double severity = Severity(condition, rng);
+            List<RecentBucketObs> recent = BuildRecent(condition, severity, rng,
+                out double soakRecent, out double coolRecent, out double soakBase, out double coolBase);
+
+            // Score the SAME recent load against three baselines: the true one, an organically
+            // acquired one, and a workout-acquired one. Error is measured against the true one,
+            // so the question is whether the workout stays as faithful as organic calibration.
+            double perfect = ScoreAgainst(recent, soakRecent, coolRecent, soakBase, coolBase,
+                BuildBaselineRows(Acquisition.Perfect, synBias, rng), out ThermalCause cp).Value;
+            double organic = ScoreAgainst(recent, soakRecent, coolRecent, soakBase, coolBase,
+                BuildBaselineRows(Acquisition.Organic, synBias, rng), out ThermalCause co).Value;
+            double synthetic = ScoreAgainst(recent, soakRecent, coolRecent, soakBase, coolBase,
+                BuildBaselineRows(Acquisition.Synthetic, synBias, rng), out ThermalCause cs).Value;
+
+            double eo = Math.Abs(organic - perfect), es = Math.Abs(synthetic - perfect);
+            orgSum += eo; synSum += es;
+            orgMax = Math.Max(orgMax, eo); synMax = Math.Max(synMax, es);
+            if (CauseClass(co) != CauseClass(cp)) orgFlips++;
+            if (CauseClass(cs) != CauseClass(cp)) synFlips++;
+        }
+        return new FidelityResult(condition, trials, orgSum / trials, synSum / trials, orgMax, synMax, orgFlips, synFlips);
     }
 
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----

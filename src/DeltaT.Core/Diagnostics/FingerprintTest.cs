@@ -351,45 +351,4 @@ public sealed class FingerprintTest
         string? gpuName = _monitor.Latest?.Find(ComponentKind.GpuDiscrete)?.Name;
         return new GpuBurner(gpuName);
     }
-
-    /// <summary>Spins every core with float math at BelowNormal priority — full
-    /// thermal load, but the UI stays responsive. Dispose to stop instantly.</summary>
-    private sealed class CpuBurner : IDisposable
-    {
-        private readonly CancellationTokenSource _cts = new();
-        private readonly List<Thread> _threads = new();
-
-        public CpuBurner()
-        {
-            for (int i = 0; i < Environment.ProcessorCount; i++)
-            {
-                var thread = new Thread(Burn) { IsBackground = true, Priority = ThreadPriority.BelowNormal };
-                thread.Start();
-                _threads.Add(thread);
-            }
-        }
-
-        private void Burn()
-        {
-            double x = 1.000173;
-            long iterations = 0;
-            while (!_cts.IsCancellationRequested)
-            {
-                x = Math.Sqrt(x * 1.7305 + 0.31) * 1.0001;
-                if (x > 1e9) x = 1.000173;
-                if (++iterations % 5_000_000 == 0)
-                    Volatile.Write(ref _sink, x); // keep the JIT honest
-            }
-        }
-
-        private static double _sink;
-
-        public void Dispose()
-        {
-            _cts.Cancel();
-            foreach (Thread t in _threads)
-                t.Join(500);
-            _cts.Dispose();
-        }
-    }
 }
