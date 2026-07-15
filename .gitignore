@@ -23,6 +23,8 @@ TestResults/
 *.db-shm
 *.db-wal
 sensor-dump.txt
+*-dump.txt
+*-probe.txt
 
 # Local agent instructions — not part of the shipped project
 CLAUDE.md

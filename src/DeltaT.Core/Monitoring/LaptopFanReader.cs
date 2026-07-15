@@ -42,10 +42,10 @@ public interface ILaptopFanProbe : IDisposable
 /// reader simply stays dark and every FanRpm remains null.
 ///
 /// Adding a vendor is one new <see cref="ILaptopFanProbe"/> in the constructor list.
-/// Still uncovered: HP's consumer gaming line (Omen/Victus) and MSI, whose fan RPM is only
-/// reachable by raw Embedded-Controller port I/O (model-specific register maps, EC-lockup
-/// risk), not a clean WMI getter — a riskier mechanism left for a future pass rather than
-/// shipped unverified here.</summary>
+/// HP's consumer gaming line (Omen/Victus) has no WMI RPM getter, so its fans are read from
+/// the Embedded Controller through <see cref="HpOmenEcFanReader"/> — but via LHM 0.9.6's
+/// signed-PawnIO, mutex-arbitrated EC path, not a bare port poke, and gated hard to HP
+/// OMEN/Victus hardware. Still uncovered: MSI, whose fans need a different EC access again.</summary>
 public sealed class LaptopFanReader : IDisposable
 {
     private readonly List<ILaptopFanProbe> _probes;
@@ -60,6 +60,9 @@ public sealed class LaptopFanReader : IDisposable
             new LenovoWmiFanReader(),
             new AsusWmiFanReader(),
             new HpWmiFanReader(),
+            // Last: the only EC-based probe. It auditions after HP's business WMI (so a business
+            // HP never reaches the EC path) and self-gates dark on anything but an OMEN/Victus.
+            new HpOmenEcFanReader(),
         })
     {
     }
