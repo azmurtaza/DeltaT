@@ -170,6 +170,36 @@ public class AspectHealthTests
     }
 
     [Fact]
+    public void WeakPasteSignal_BelowSurfaceFloor_ReadsClear_NotWatch()
+    {
+        // The field report: a power-state change (POWER −21%) left a small residual excess
+        // that was too weak to name as a cause (no chip) and below the overall score's
+        // deadband (verdict stayed Excellent), yet the paste cell showed 81 "Watch". A
+        // signal the diagnosis won't surface must not visibly ding the matrix either.
+        var e = Base(excess: 0.5, heavy: 3.7, idle: 0.4);  // load-dependent but faint
+        ThermalDiagnosis dx = ThermalDiagnostician.Diagnose(e);
+        Assert.DoesNotContain(dx.Findings, f => f.Cause == ThermalCause.Paste); // not named
+        AspectHealth paste = Get(e, HealthAspect.Paste);
+        Assert.True(paste.Score >= 85, $"weak sub-floor paste should read Clear, got {paste.Score}");
+        Assert.Equal("Clear", paste.Status);
+    }
+
+    [Fact]
+    public void Matrix_EntersProblemZone_ExactlyWhenACauseIsSurfaced()
+    {
+        // The consistency guarantee: an aspect meter drops below Clear (85) if and only if
+        // its confidence is high enough for the ranked diagnosis to name that cause. Sweep
+        // paste severity across the surface floor and check the two agree at every step.
+        for (double heavy = 2.0; heavy <= 12.0; heavy += 0.5)
+        {
+            var e = Base(excess: heavy * 0.5, heavy: heavy, idle: 0.3, soak: 1.3, cool: 0.8);
+            bool named = ThermalDiagnostician.Diagnose(e).Findings.Any(f => f.Cause == ThermalCause.Paste);
+            bool dinged = Get(e, HealthAspect.Paste).Score < 85;
+            Assert.True(named == dinged, $"heavy={heavy}: named={named} but meter dinged={dinged}");
+        }
+    }
+
+    [Fact]
     public void AspectScores_AgreeWithRankedDiagnosis()
     {
         // Whatever the diagnosis names as primary must also be the worst aspect meter.
@@ -221,5 +251,67 @@ public class DetectionBenchmarkTests
         Assert.NotNull(paste.FlagsActionAtC);
         Assert.True(paste.FlagsActionAtC <= 8, $"paste action threshold {paste.FlagsActionAtC}°");
         Assert.NotNull(paste.NamesCauseAtC);
+    }
+}
+
+/// <summary>Phase 0 go/no-go for the guided-calibration (workout) idea, measured not
+/// intuited: does a baseline acquired from controlled synthetic loads yield the SAME
+/// fault attribution as one acquired organically? The finding these lock in is that the
+/// answer hinges entirely on how closely the workout matches each bucket's real operating
+/// point. A naive burner that just pins the bucket ceiling is catastrophic; a workout that
+/// targets the representative operating point stays close to organic. If either of those
+/// facts ever stops being true, the go/no-go has lost its meaning and these fail.</summary>
+public class AcquisitionFidelityTests
+{
+    // Targets each bucket's representative operating point (small power offset from real use).
+    private static readonly FidelityReport WellTargeted = DetectionBenchmark.RunAcquisitionFidelity(
+        seed: 4242, trialsPerCondition: 200, synBias: DetectionBenchmark.WellTargetedWorkoutBias);
+
+    // Just pins the bucket ceiling, learning every cell at materially higher watts than the
+    // user's real loads ever reproduce.
+    private static readonly FidelityReport NaiveBurner = DetectionBenchmark.RunAcquisitionFidelity(
+        seed: 4242, trialsPerCondition: 200, synBias: DetectionBenchmark.NaiveBurnerBias);
+
+    [Fact]
+    public void Benchmark_CatchesTheNaiveBurnerAsUnfaithful()
+    {
+        // The whole point of Phase 0: if built carelessly the feature destroys accuracy, and
+        // the benchmark must SEE that. A naive burner should be flagged unfaithful and should
+        // add many multiples of organic's fault-class flips. If this ever passes clean, the
+        // fidelity model has gone blind and every "GO" it prints is worthless.
+        Assert.False(NaiveBurner.SyntheticNoWorseThanOrganic(),
+            "naive burner must be rejected by the go/no-go");
+        Assert.True(NaiveBurner.SyntheticFlips > 5 * Math.Max(1, NaiveBurner.OrganicFlips),
+            $"naive burner fault-flips {NaiveBurner.SyntheticFlips} should dwarf organic {NaiveBurner.OrganicFlips}");
+    }
+
+    [Fact]
+    public void WellTargetedWorkout_PreservesFaultAttribution()
+    {
+        // The achievable target: IF the real workout targets each bucket's operating point,
+        // the fault-class attribution it produces stays within the app's own noise of organic.
+        // Score-point drift is allowed to be a touch worse (a synthetic baseline is tighter and
+        // sits in the steep part of the penalty curve on the paste/dust conditions), but the
+        // fault-flip RATE must stay tiny in absolute terms.
+        int totalTrials = WellTargeted.Conditions.Sum(c => c.Trials);
+        Assert.True(WellTargeted.SyntheticFlips <= 0.015 * totalTrials,
+            $"well-targeted fault-flip rate {(double)WellTargeted.SyntheticFlips / totalTrials:P2} (flips {WellTargeted.SyntheticFlips}/{totalTrials})");
+        Assert.True(WellTargeted.SyntheticMeanAbsErr <= WellTargeted.OrganicMeanAbsErr + 1.5,
+            $"well-targeted score drift {WellTargeted.SyntheticMeanAbsErr:0.00} vs organic {WellTargeted.OrganicMeanAbsErr:0.00} pts");
+    }
+
+    [Fact]
+    public void WellTargetedWorkout_IsPerfectOnNonPasteFaults()
+    {
+        // The residual risk is entirely in the subtlest call (paste vs dust). Fan, mount, and
+        // every confounder must be untouched by synthetic acquisition, or the feature is unsafe
+        // even for the buckets it should trivially handle.
+        foreach (Condition c in new[] { Condition.FanFault, Condition.MountPumpout,
+                                        Condition.Overclock, Condition.Undervolt, Condition.ColdSeason })
+        {
+            FidelityResult f = WellTargeted.Conditions.Single(x => x.Condition == c);
+            Assert.True(f.SyntheticFlips <= f.OrganicFlips,
+                $"{c}: synthetic flips {f.SyntheticFlips} vs organic {f.OrganicFlips}");
+        }
     }
 }

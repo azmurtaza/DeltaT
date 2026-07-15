@@ -162,6 +162,35 @@ public class ScoreCoordinatorTests : IDisposable
         Assert.Equal(locked, _settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
     }
 
+    [Fact]
+    public void FreshLock_KeepsScoring_InsteadOfCollapsingToAwaitingData()
+    {
+        // The field bug: a CPU showing a provisional score with a real "peaks within 2 °C
+        // of the silicon limit" finding (headroom penalty) dropped to WAITING — with a
+        // falsely-reassuring 100 headroom — the instant its baseline locked, because the
+        // post-lock recent window was floored at the lock instant and so started empty.
+        DateTimeOffset now = T0.AddDays(2);
+        StartEpoch(0, T0);
+        // Four lockworthy loaded bouts whose peaks (TempMax = delta + 26) land at the
+        // 100 °C limit set in UseSnapshot, so the near-limit headroom evidence is present.
+        double[] deltas = { 74.0, 74.1, 73.9, 74.05 };
+        for (int s = 0; s < deltas.Length; s++)
+            WriteSession(ComponentKind.Cpu, CpuName, T0.AddHours(2 + s * 5), minutes: 15, delta: deltas[s]);
+
+        UseSnapshot(now);
+        var coordinator = NewCoordinator();
+        var scores = coordinator.Compute(now);
+
+        // The baseline locked on this very pass...
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+        ComponentScore cpu = scores[ComponentKind.Cpu];
+        // ...and the score is a real reading, not the WAITING placeholder that hid the fault.
+        Assert.False(cpu.AwaitingData);
+        Assert.True(cpu.Scored);
+        // The near-limit evidence that drove the low headroom survives the lock transition.
+        Assert.Contains(cpu.Reasons, r => r.Code == "headroom" && r.PointsLost > 0);
+    }
+
     // ------------------------------------------------------- verdict lifecycle
 
     [Fact]

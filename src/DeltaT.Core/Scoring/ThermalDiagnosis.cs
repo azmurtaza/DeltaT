@@ -89,7 +89,7 @@ public enum HealthAspect
 /// machine exposes no sensor for it, or for <see cref="HealthAspect.Power"/> which is a
 /// state, not a health). <see cref="Status"/> is the short instrument word; for unknown
 /// aspects it is "--" so the UI never fakes a zero.</summary>
-public sealed record AspectHealth(HealthAspect Aspect, int? Score, string Status, string Detail)
+public sealed record AspectHealth(HealthAspect Aspect, int? Score, string Status, string Detail, bool Unmeasurable = false)
 {
     public bool Known => Status != "--";
 }
@@ -235,7 +235,7 @@ public static class ThermalDiagnostician
         }
         else
         {
-            list.Add(Unknown(HealthAspect.Fans, "No fan speed sensor exposed on this machine."));
+            list.Add(NoSensor(HealthAspect.Fans, "No fan speed sensor exposed on this machine."));
         }
 
         // Mount: needs a hotspot sensor (GPUs, typically).
@@ -250,7 +250,7 @@ public static class ThermalDiagnostician
         }
         else
         {
-            list.Add(Unknown(HealthAspect.Mount, "No hotspot sensor exposed, so mount evenness can't be read."));
+            list.Add(NoSensor(HealthAspect.Mount, "No hotspot sensor exposed, so mount evenness can't be read. CPUs report a single die temperature, so this reads only on GPUs."));
         }
 
         // Headroom: always judgeable (throttle events are counted from day one).
@@ -280,7 +280,7 @@ public static class ThermalDiagnostician
         }
         else
         {
-            list.Add(Unknown(HealthAspect.Power, "No package power sensor exposed, so comparisons use the raw rise."));
+            list.Add(NoSensor(HealthAspect.Power, "No package power sensor exposed, so comparisons use the raw rise."));
         }
 
         return list;
@@ -288,13 +288,34 @@ public static class ThermalDiagnostician
 
     private static AspectHealth Meter(HealthAspect aspect, double conf, string detail)
     {
-        int score = (int)Math.Round(100 * (1 - Clamp01(conf)));
+        // Align the meter's healthy zone with the diagnosis's surface floor. A confidence
+        // too weak to name as a cause (< SurfaceFloor) must read Clear, not a "Watch" that
+        // contradicts an Excellent overall verdict and a healthy tooltip on the same cell.
+        // Below the floor the meter eases 100 → 85; at and above it, it spans the graded
+        // 85 → 0 problem range. Continuous at the floor (both branches give 85 there), so
+        // there is no jump. This is what makes the matrix and the ranked diagnosis agree
+        // cell-for-cell: a sub-85 cell exists exactly when a cause would be surfaced. The
+        // old unfloored 100·(1−conf) let a below-floor signal (e.g. the small residual a
+        // power-state change leaves after normalization) render as a spurious "Watch"
+        // while the score stayed 100 and no cause was named.
+        conf = Clamp01(conf);
+        double raw = conf <= SurfaceFloor
+            ? 100 - 15 * (conf / SurfaceFloor)
+            : 85 * (1 - conf) / (1 - SurfaceFloor);
+        int score = (int)Math.Round(Math.Clamp(raw, 0, 100));
         string status = score >= 85 ? "Clear" : score >= 60 ? "Watch" : score >= 35 ? "Suspect" : "Failing";
         return new AspectHealth(aspect, score, status, detail);
     }
 
     private static AspectHealth Unknown(HealthAspect aspect, string detail) =>
         new(aspect, null, "--", detail);
+
+    /// <summary>Like <see cref="Unknown"/>, but the reading is missing because this hardware
+    /// exposes no sensor for it (a CPU has no hotspot, a chassis no fan tach) — a permanent
+    /// fact of the machine, not a transient "still learning". Flagged so a consumer can tell
+    /// the two apart, rather than treating every "--" as work-in-progress.</summary>
+    private static AspectHealth NoSensor(HealthAspect aspect, string detail) =>
+        new(aspect, null, "--", detail, Unmeasurable: true);
 
     // ------------------------------------------------------------------ evidence math
     // One set of tells and confidence formulas feeds BOTH the ranked diagnosis and the

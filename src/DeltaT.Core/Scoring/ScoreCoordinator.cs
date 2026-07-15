@@ -399,13 +399,20 @@ public sealed class ScoreCoordinator
         double progress = RatchetMeter(c.Kind, cal.DisplayProgress);
         double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs);
 
-        // Recent pool. Once the baseline is locked, "recent" is data AFTER the frozen
-        // learning window. Before lock there is no post-window data yet, so a provisional
-        // read compares the last 7 days against the provisional baseline: the two windows
-        // overlap, which only biases the estimate toward "on baseline" (conservative,
-        // never alarmist) and lets DeltaT show a number instead of nothing.
+        // Recent pool: a rolling 7 days, floored at epoch start so it never reaches back
+        // across a repaste/recalibrate into the previous paste's minutes. It deliberately
+        // is NOT floored at the lock instant: doing that emptied the window at the very
+        // moment a baseline locked (learningEndTs == now on that pass), so a component that
+        // had been showing a real provisional score — including a genuine "peaks at the
+        // silicon wall" finding — collapsed to WAITING with a falsely-reassuring headroom
+        // the instant it locked, and stayed there for as long as no fresh load arrived.
+        // Flooring at epoch start instead gives a smooth crossfade: right after a lock the
+        // window overlaps the frozen learning window (the same conservative, biased-toward-
+        // on-baseline overlap the provisional path already uses, so the score carries over
+        // continuously), and once 7 days of post-lock data exist the weekAgo floor takes
+        // over and "recent" is post-lock only, as drift detection needs.
         long weekAgo = nowTs - (long)TimeSpan.FromDays(7).TotalSeconds;
-        long recentFromTs = locked is not null ? Math.Max(learningEndTs, weekAgo) : weekAgo;
+        long recentFromTs = locked is not null ? Math.Max(epochStartTs, weekAgo) : weekAgo;
         var recentStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, recentFromTs, nowTs));
         double recentHours = Math.Max(1, (nowTs - recentFromTs) / 3600.0);
 
