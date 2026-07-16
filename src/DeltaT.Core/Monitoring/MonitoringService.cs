@@ -12,7 +12,11 @@ public sealed record SoakMeasurement(
     double StartTempC,
     double PeakTempC,
     double SecondsToPeak,
-    double RatePerMinute);
+    double RatePerMinute,
+    // True only when every sample of the measured load edge was taken on AC power.
+    // Battery power limits throttle the watts, and the soak rate rides the watts
+    // (dT/dt ≈ P/C), so a battery-limited edge is not comparable to an AC baseline.
+    bool OnAcPower = true);
 
 /// <summary>How fast a component sheds heat when a sustained load drops away. The
 /// paste conducts heat OUT of the die just as it conducts it in, so degraded paste
@@ -27,7 +31,12 @@ public sealed record CooldownMeasurement(
     double StartTempC,
     double SettledTempC,
     double SecondsToSettle,
-    double RatePerMinute);
+    double RatePerMinute,
+    // True only when every sample from the heat-soaked load phase through the fall
+    // was taken on AC power. A battery-limited load starts its cooldown from a
+    // cooler die, which sheds fewer degrees per minute for reasons that are the
+    // power limit, not the paste.
+    bool OnAcPower = true);
 
 /// <summary>Owns the sampling loop: reads the sensor source on a fixed interval,
 /// keeps a recent in-memory window, and detects throttle/heat-soak events.
@@ -130,8 +139,8 @@ public sealed class MonitoringService : IAsyncDisposable
         foreach (ComponentReading c in snap.Components)
         {
             DetectThrottle(snap.TimestampUtc, c);
-            DetectSoak(snap.TimestampUtc, c);
-            DetectCooldown(snap.TimestampUtc, c);
+            DetectSoak(snap.TimestampUtc, c, snap.OnAcPower);
+            DetectCooldown(snap.TimestampUtc, c, snap.OnAcPower);
         }
 
         SnapshotCaptured?.Invoke(snap);
@@ -147,7 +156,7 @@ public sealed class MonitoringService : IAsyncDisposable
         ThrottleDetected?.Invoke(new ThrottleEvent(ts, c.Kind, c.Name, t, limit));
     }
 
-    private void DetectSoak(DateTimeOffset ts, ComponentReading c)
+    private void DetectSoak(DateTimeOffset ts, ComponentReading c, bool onAc)
     {
         if (!c.Kind.HasPaste() || c.TemperatureC is not { } temp || c.Bucket is not { } bucket)
             return;
@@ -155,12 +164,12 @@ public sealed class MonitoringService : IAsyncDisposable
         if (!_soakTrackers.TryGetValue(c.Id, out SoakTracker? tracker))
             _soakTrackers[c.Id] = tracker = new SoakTracker();
 
-        SoakMeasurement? done = tracker.Advance(ts, c.Kind, c.Name, temp, bucket);
+        SoakMeasurement? done = tracker.Advance(ts, c.Kind, c.Name, temp, bucket, onAc);
         if (done is not null)
             SoakMeasured?.Invoke(done);
     }
 
-    private void DetectCooldown(DateTimeOffset ts, ComponentReading c)
+    private void DetectCooldown(DateTimeOffset ts, ComponentReading c, bool onAc)
     {
         if (!c.Kind.HasPaste() || c.TemperatureC is not { } temp || c.Bucket is not { } bucket)
             return;
@@ -168,7 +177,7 @@ public sealed class MonitoringService : IAsyncDisposable
         if (!_cooldownTrackers.TryGetValue(c.Id, out CooldownTracker? tracker))
             _cooldownTrackers[c.Id] = tracker = new CooldownTracker();
 
-        CooldownMeasurement? done = tracker.Advance(ts, c.Kind, c.Name, temp, bucket);
+        CooldownMeasurement? done = tracker.Advance(ts, c.Kind, c.Name, temp, bucket, onAc);
         if (done is not null)
             CooldownMeasured?.Invoke(done);
     }
@@ -205,8 +214,9 @@ public sealed class MonitoringService : IAsyncDisposable
         private DateTimeOffset _measureStart;
         private double _startTemp, _peakTemp;
         private DateTimeOffset _peakAt;
+        private bool _acClean;
 
-        public SoakMeasurement? Advance(DateTimeOffset ts, ComponentKind kind, string name, double temp, LoadBucket bucket)
+        public SoakMeasurement? Advance(DateTimeOffset ts, ComponentKind kind, string name, double temp, LoadBucket bucket, bool onAc = true)
         {
             switch (_phase)
             {
@@ -239,12 +249,16 @@ public sealed class MonitoringService : IAsyncDisposable
                         _startTemp = temp;
                         _peakTemp = temp;
                         _peakAt = ts;
+                        // AC state matters from here: the measured edge IS the load, and
+                        // battery power limits throttle the watts the edge rides on.
+                        _acClean = onAc;
                         return null;
                     }
                     _phase = Phase.Watching; // medium load, or heavy/full without enough calm — not a clean edge
                     return null;
 
                 case Phase.Measuring:
+                    _acClean &= onAc;
                     if (temp > _peakTemp)
                     {
                         _peakTemp = temp;
@@ -260,7 +274,7 @@ public sealed class MonitoringService : IAsyncDisposable
                     double rise = _peakTemp - _startTemp;
                     if (rise < 5 || loadDropped && ts - _measureStart < TimeSpan.FromSeconds(20))
                         return null; // too small or too brief to mean anything
-                    return new SoakMeasurement(ts, kind, name, _startTemp, _peakTemp, seconds, rise / seconds * 60.0);
+                    return new SoakMeasurement(ts, kind, name, _startTemp, _peakTemp, seconds, rise / seconds * 60.0, _acClean);
 
                 default:
                     return null;
@@ -286,8 +300,9 @@ public sealed class MonitoringService : IAsyncDisposable
         private DateTimeOffset _measureStart;
         private double _startTemp, _troughTemp;
         private DateTimeOffset _troughAt;
+        private bool _acClean;
 
-        public CooldownMeasurement? Advance(DateTimeOffset ts, ComponentKind kind, string name, double temp, LoadBucket bucket)
+        public CooldownMeasurement? Advance(DateTimeOffset ts, ComponentKind kind, string name, double temp, LoadBucket bucket, bool onAc = true)
         {
             switch (_phase)
             {
@@ -297,10 +312,15 @@ public sealed class MonitoringService : IAsyncDisposable
                         _phase = Phase.Hot;
                         _hotSince = ts;
                         _hotMaxTemp = temp;
+                        // AC state matters from the LOAD phase on, not just the fall: a
+                        // battery-limited load heats the die less, and a cooler die sheds
+                        // fewer degrees per minute for reasons that are the power limit.
+                        _acClean = onAc;
                     }
                     return null;
 
                 case Phase.Hot:
+                    _acClean &= onAc;
                     if (bucket >= LoadBucket.Medium)
                     {
                         // Still loaded — keep soaking. Track the hottest the die reached.
@@ -322,6 +342,7 @@ public sealed class MonitoringService : IAsyncDisposable
                     return null;
 
                 case Phase.Measuring:
+                    _acClean &= onAc;
                     if (temp < _troughTemp)
                     {
                         _troughTemp = temp;
@@ -337,7 +358,7 @@ public sealed class MonitoringService : IAsyncDisposable
                     double fall = _startTemp - _troughTemp;
                     if (fall < 5 || loadReturned && ts - _measureStart < TimeSpan.FromSeconds(20))
                         return null; // too small or too brief to mean anything
-                    return new CooldownMeasurement(ts, kind, name, _startTemp, _troughTemp, seconds, fall / seconds * 60.0);
+                    return new CooldownMeasurement(ts, kind, name, _startTemp, _troughTemp, seconds, fall / seconds * 60.0, _acClean);
 
                 default:
                     return null;

@@ -207,7 +207,7 @@ public sealed class TelemetryPipeline : IDisposable
                 m.TimestampUtc.ToUnixTimeSeconds(), "soak", m.Kind.ToString(), m.Name,
                 severity: 0,
                 message: $"{m.Kind.Label()} heat-soak: {m.StartTempC:0}→{m.PeakTempC:0}°C in {m.SecondsToPeak:0}s ({m.RatePerMinute:0.0}°C/min).",
-                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, peak = m.PeakTempC, seconds = m.SecondsToPeak, rate = m.RatePerMinute }));
+                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, peak = m.PeakTempC, seconds = m.SecondsToPeak, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }));
         }
         catch (Exception ex) { Error?.Invoke("soak event write failed", ex); }
     }
@@ -220,7 +220,7 @@ public sealed class TelemetryPipeline : IDisposable
                 m.TimestampUtc.ToUnixTimeSeconds(), "cooldown", m.Kind.ToString(), m.Name,
                 severity: 0,
                 message: $"{m.Kind.Label()} cooldown: {m.StartTempC:0}→{m.SettledTempC:0}°C in {m.SecondsToSettle:0}s ({m.RatePerMinute:0.0}°C/min).",
-                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, settled = m.SettledTempC, seconds = m.SecondsToSettle, rate = m.RatePerMinute }));
+                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, settled = m.SettledTempC, seconds = m.SecondsToSettle, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }));
         }
         catch (Exception ex) { Error?.Invoke("cooldown event write failed", ex); }
     }

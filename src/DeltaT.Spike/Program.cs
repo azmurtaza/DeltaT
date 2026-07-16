@@ -82,6 +82,32 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     foreach (var t in tog.Configs)
         Console.WriteLine($"  {t.Config,-26} {t.MeanAbsErr,8:0.00} {Signed(t.SignedErr),7} {t.MaxAbsErr,8:0.0} {t.FalseFaults,10}/{tog.Trials} {t.ScoreSpread,7:0.0}");
     Console.WriteLine();
+
+    // Deep power caps (a hard frequency cap / deep power limit) held to the STRICT bar:
+    // no fault finding at ANY rank, no false points, every fault aspect cell Clear. Plus
+    // detection retained: a genuinely failing fan on a capped machine and genuine pump-out
+    // on an undervolted card must still be named.
+    var cap = DeltaT.Core.Scoring.DetectionBenchmark.RunPowerCapSuite();
+    Console.WriteLine("Deep power cap / power-coupled faults (strict: any-rank findings + aspect cells)");
+    Console.WriteLine($"  healthy capped (power -60..75%):  mean score {cap.HealthyMeanScore,5:0.0}");
+    Console.WriteLine($"    false fault findings (any rank): {cap.HealthyFaultFindings,4}/{cap.Trials}");
+    Console.WriteLine($"    verdict left Excellent (<85):    {cap.HealthyBelow85,4}/{cap.Trials}");
+    Console.WriteLine($"    fault aspect cell below Clear:   {cap.HealthyAspectNotClear,4}/{cap.Trials}");
+    Console.WriteLine($"  fan fault under deep cap named:    {cap.FanFaultUnderCapNamed,4}/{cap.Trials}");
+    Console.WriteLine($"  pump-out under undervolt named:    {cap.PumpoutUnderUndervoltNamed,4}/{cap.Trials}");
+    Console.WriteLine();
+
+    // Battery-contaminated rate events: the rise comparison is AC-only end to end, but the
+    // soak/cooldown rates come from the events table. A week of battery load edges against a
+    // plugged-in baseline drags the cooldown mean down and reads "sheds heat slower" (a paste
+    // tell) unless the rate reads are AC-only too, which the repository now guarantees.
+    var bat = DeltaT.Core.Scoring.DetectionBenchmark.RunBatteryRates();
+    Console.WriteLine("Battery-contaminated rates (healthy machine, some load edges on battery)");
+    Console.WriteLine($"  {"rate pipeline",-26} {"mean err",9} {"max err",9} {"false faults",13}");
+    Console.WriteLine($"  {"reference (no battery)",-26} {"-",8} {"-",8} {bat.ReferenceFalseFaults,10}/{bat.Trials}");
+    Console.WriteLine($"  {"blended (pre-fix)",-26} {bat.ContaminatedMeanErr,8:0.00} {bat.ContaminatedMaxErr,8:0.0} {bat.ContaminatedFalseFaults,10}/{bat.Trials}");
+    Console.WriteLine($"  {"AC-only (shipped)",-26} {bat.FilteredMeanErr,8:0.00} {bat.FilteredMaxErr,8:0.0} {bat.FilteredFalseFaults,10}/{bat.Trials}");
+    Console.WriteLine();
     return;
 
     static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";

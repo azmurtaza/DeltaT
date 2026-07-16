@@ -237,7 +237,7 @@ public class DetectionBenchmarkTests
     [Fact]
     public void OverclockAndUndervolt_DoNotFalseAlarm()
     {
-        foreach (Condition c in new[] { Condition.Overclock, Condition.Undervolt, Condition.ColdSeason })
+        foreach (Condition c in new[] { Condition.Overclock, Condition.Undervolt, Condition.ColdSeason, Condition.PowerCapDeep })
         {
             ConditionResult r = Report.Conditions.Single(x => x.Condition == c);
             Assert.True(r.Accuracy >= 0.90, $"{c} cleared {r.Accuracy:P0}");
@@ -310,6 +310,80 @@ public class BoostToggleTests
     {
         Assert.True(Shipped.FalseFaults <= T.ReferenceFalseFaults + 10,
             $"false faults {Shipped.FalseFaults}/{T.Trials} vs like-for-like reference {T.ReferenceFalseFaults}/{T.Trials}");
+    }
+}
+
+/// <summary>A hard frequency cap or deep power limit (a CPU locked to 1.5 GHz, a GPU
+/// clock-lock) cuts loaded package power 60-75%, far beyond what the power normalizer's
+/// clamp band can correct. Measured before the fixes these lock in, EVERY healthy trial
+/// surfaced a false fault finding (the slower fan read as FanFault, the saturated rate
+/// correction fired "sheds heat slower") and every trial dropped a fault aspect cell out
+/// of Clear; genuine pump-out under an undervolt was masked 94% of the time by the
+/// power-narrowed gap. The strict bar here is what the headline benchmark can't see:
+/// findings at ANY rank, false points that don't cross a verdict line, and aspect cells.
+/// Detection must be RETAINED, not bought off: a genuinely failing fan on a capped
+/// machine and genuine pump-out on an undervolted card must still be named.</summary>
+public class PowerCapSuiteTests
+{
+    private static readonly DetectionBenchmark.PowerCapResult R = DetectionBenchmark.RunPowerCapSuite(seed: 555, trials: 400);
+
+    [Fact]
+    public void DeepPowerCap_NeverReadsAsAFault_OnAnyAspect()
+    {
+        Assert.True(R.HealthyFaultFindings <= 4,
+            $"false fault findings on a healthy capped machine: {R.HealthyFaultFindings}/{R.Trials} (was 400/400 before the power-aware fan/rate/exclusion fixes)");
+        Assert.True(R.HealthyBelow85 <= 4,
+            $"healthy capped machines pushed out of Excellent: {R.HealthyBelow85}/{R.Trials}");
+        Assert.True(R.HealthyAspectNotClear <= 4,
+            $"fault aspect cells dropped below Clear: {R.HealthyAspectNotClear}/{R.Trials}");
+        Assert.True(R.HealthyMeanScore >= 97,
+            $"healthy capped mean score {R.HealthyMeanScore:0.0} (was 88.7 before the fixes)");
+    }
+
+    [Fact]
+    public void PowerAwareness_DoesNotBlindTheDetectors()
+    {
+        Assert.True(R.FanFaultUnderCapNamed >= 0.95 * R.Trials,
+            $"failing fan under a deep cap named {R.FanFaultUnderCapNamed}/{R.Trials}");
+        Assert.True(R.PumpoutUnderUndervoltNamed >= 0.90 * R.Trials,
+            $"pump-out under an undervolt named {R.PumpoutUnderUndervoltNamed}/{R.Trials} (was 25/400 before the gap was power-normalized)");
+    }
+}
+
+/// <summary>The rise/baseline comparison is AC-only end to end, but the soak/cooldown rates
+/// come from the events table, which had no AC awareness: a week with load edges on battery
+/// (a trip, a couch session) against a plugged-in baseline dragged the cooldown mean down and
+/// read "sheds heat slower", one of the paste tells — and the power normalizer cannot rescue
+/// it, because its power means come from the AC-filtered cells and never see the battery watt
+/// drop. The repository now feeds AC-only rate means (battery-tainted events are tagged at the
+/// tracker and filtered at read). These lock both halves: the benchmark must SEE the failure
+/// in the pre-fix shape, and the shipped AC-only shape must stay clean.</summary>
+public class BatteryRateTests
+{
+    private static readonly DetectionBenchmark.BatteryRateResult R = DetectionBenchmark.RunBatteryRates(seed: 321, trials: 400);
+
+    [Fact]
+    public void BenchmarkSeesTheContamination()
+    {
+        // If blending battery events back into the mean ever stops visibly hurting, this
+        // measurement has gone blind and the AC-only guarantee is no longer being tested.
+        // The damage shows up as score error (the cooldown penalty is capped at 12, so it
+        // rarely crosses a verdict line): measured ~8 points mean, 12 at the cap.
+        Assert.True(R.ContaminatedMeanErr >= 2.0,
+            $"contaminated rate pipeline should visibly hurt, mean err {R.ContaminatedMeanErr:0.00} pts");
+        Assert.True(R.ContaminatedMaxErr >= 8.0,
+            $"contaminated rate pipeline worst case {R.ContaminatedMaxErr:0.0} pts");
+    }
+
+    [Fact]
+    public void AcOnlyRates_StayClean()
+    {
+        Assert.True(R.FilteredMeanErr <= 0.5,
+            $"AC-only rate pipeline mean err {R.FilteredMeanErr:0.00} pts");
+        // The strict any-rank bar catches a few noise-level findings on ANY healthy
+        // machine; AC-only must not add to that reference floor.
+        Assert.True(R.FilteredFalseFaults <= R.ReferenceFalseFaults + 2,
+            $"AC-only false faults {R.FilteredFalseFaults}/{R.Trials} vs reference {R.ReferenceFalseFaults}/{R.Trials}");
     }
 }
 

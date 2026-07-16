@@ -113,7 +113,15 @@ public sealed record DiagnosisInputs(
     double RecentWindowHours,
     bool NearLimit,              // peaks within a couple °C of the silicon limit
     bool BeyondChassisNorm,      // heavy-load average past what the chassis sustains
-    double? PowerRatio = null);  // recent W / baseline W when both sides carry power
+    double? PowerRatio = null,   // recent W / baseline W when both sides carry power
+    // At least one LOADED (non-idle) cell was genuinely compared against baseline. The
+    // paste can only be judged when heat actually crossed it, so an idle-only window
+    // (or one whose loads were all power-excluded) must read "--", not "paste is fine".
+    bool LoadedCompared = true,
+    // Loaded readings were dropped because their watts sat too far from the baseline's
+    // to correct fairly (frequency cap, deep power limit). Explains WHY an aspect
+    // reads "--" so the tooltip can say the honest thing.
+    bool PowerLimitedComparisons = false);
 
 /// <summary>Turns the gathered evidence into a ranked list of causes. Pure and
 /// deterministic: same inputs, same diagnosis, no clocks or I/O.</summary>
@@ -199,8 +207,10 @@ public static class ThermalDiagnostician
         bool comparable = e.WeightedExcessC is not null || e.HeavyExcessC is not null;
         var list = new List<AspectHealth>(6);
 
-        // Paste: judgeable once any like-for-like comparison exists.
-        if (comparable)
+        // Paste: judgeable once a LOADED like-for-like comparison exists. Heat has to
+        // actually cross the joint to say anything about it, so an idle-only window
+        // (or one whose loads all ran too far from the baseline's power) reads "--".
+        if (comparable && e.LoadedCompared)
         {
             double conf = PasteConfidence(e, t);
             list.Add(Meter(HealthAspect.Paste, conf, conf >= SurfaceFloor
@@ -209,7 +219,9 @@ public static class ThermalDiagnostician
         }
         else
         {
-            list.Add(Unknown(HealthAspect.Paste, "Not enough comparable load yet to judge the paste."));
+            list.Add(Unknown(HealthAspect.Paste, e.PowerLimitedComparisons
+                ? "Recent loads ran at a power too far from the baseline's to judge the paste fairly (a frequency cap or a deep power limit). A load at comparable power will read again."
+                : "Not enough comparable load yet to judge the paste."));
         }
 
         // Airflow: same comparability requirement.
