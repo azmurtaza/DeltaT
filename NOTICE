@@ -1,0 +1,56 @@
+DeltaT
+Copyright (C) 2026 Azaan Murtaza
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License version 3, as published by the Free
+Software Foundation. See the LICENSE file for the full terms.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY, without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+
+THIRD-PARTY COMPONENTS
+======================
+
+The DeltaT installer ships a self-contained build, so the following components
+are redistributed inside it. Their licenses are reproduced or linked below, and
+each remains the property of its respective authors.
+
+LibreHardwareMonitorLib (0.9.6)
+  https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+  Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/)
+
+  DeltaT uses this library unmodified, exactly as published on NuGet. The
+  library's source, including the version DeltaT builds against, is available
+  from the project page above. MPL-2.0 covered files remain under MPL-2.0; this
+  program as a whole is distributed under the GPL, as MPL-2.0 section 3.3
+  permits.
+
+  DeltaT reads sensors through this library. It does not bundle a kernel driver:
+  the PawnIO driver is a separate product, installed by its own signed installer
+  from its own author. See the security section of the README.
+
+Hardcodet.NotifyIcon.Wpf (2.x)
+  https://github.com/hardcodet/wpf-notifyicon
+  MIT License
+
+CommunityToolkit.Mvvm (8.x)
+  https://github.com/CommunityToolkit/dotnet
+  MIT License
+
+Microsoft.Data.Sqlite (8.x), System.Management (10.x), and the .NET runtime
+  https://github.com/dotnet
+  MIT License
+
+SQLite itself is in the public domain (https://sqlite.org/copyright.html).
+
+
+SERVICES
+========
+
+DeltaT queries the following services at runtime. They are not redistributed and
+are subject to their own terms.
+
+Open-Meteo (https://open-meteo.com) for outside temperature.
+BigDataCloud (https://www.bigdatacloud.com) for reverse geocoding a place name.
