@@ -3,8 +3,14 @@ using System.Text.Json;
 
 namespace DeltaT.Core.Updates;
 
-/// <summary>A published release found on GitHub that is newer than what's running.</summary>
-public sealed record ReleaseInfo(Version Version, string Tag, string DownloadUrl, string HtmlUrl, string Notes);
+/// <summary>A published release found on GitHub that is newer than what's running.
+/// <paramref name="Sha256"/> is the digest GitHub computed for the setup asset, lower-case
+/// hex, or null on a release predating the API field. The updater refuses to run a download
+/// that doesn't match it.</summary>
+public sealed record ReleaseInfo(Version Version, string Tag, string DownloadUrl, string HtmlUrl, string Notes, string? Sha256 = null);
+
+/// <summary>The setup asset on a release: where to get it, and what it must hash to.</summary>
+internal sealed record InstallerAsset(string Url, string? Sha256);
 
 /// <summary>Asks GitHub whether a newer DeltaT has shipped. The comparison logic is a
 /// pure function (<see cref="ParseLatest"/>) so it's unit-testable without the network;
@@ -49,13 +55,13 @@ public sealed class UpdateChecker
         if (ParseVersion(tag) is not { } version || version <= current)
             return null;
 
-        string? assetUrl = FindInstallerAsset(root);
-        if (assetUrl is null)
+        InstallerAsset? asset = FindInstallerAsset(root);
+        if (asset is null)
             return null; // a release with no setup .exe is nothing DeltaT can apply
 
         string html = root.TryGetProperty("html_url", out JsonElement h) ? h.GetString() ?? "" : "";
         string notes = root.TryGetProperty("body", out JsonElement b) ? b.GetString() ?? "" : "";
-        return new ReleaseInfo(version, tag, assetUrl, html, notes);
+        return new ReleaseInfo(version, tag, asset.Url, html, notes, asset.Sha256);
     }
 
     /// <summary>"v1.2.3" or "1.2.3" → Version. A trailing label (e.g. "-beta") is dropped.</summary>
@@ -68,7 +74,7 @@ public sealed class UpdateChecker
         return Version.TryParse(s, out Version? v) ? v : null;
     }
 
-    private static string? FindInstallerAsset(JsonElement root)
+    private static InstallerAsset? FindInstallerAsset(JsonElement root)
     {
         if (!root.TryGetProperty("assets", out JsonElement assets) || assets.ValueKind != JsonValueKind.Array)
             return null;
@@ -79,10 +85,26 @@ public sealed class UpdateChecker
                 continue;
             if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                 && name.Contains("Setup", StringComparison.OrdinalIgnoreCase)
-                && a.TryGetProperty("browser_download_url", out JsonElement u))
-                return u.GetString();
+                && a.TryGetProperty("browser_download_url", out JsonElement u)
+                && u.GetString() is { } url)
+                return new InstallerAsset(url, ParseDigest(a));
         }
         return null;
+    }
+
+    /// <summary>GitHub reports an asset digest as "sha256:&lt;hex&gt;". Returns the bare
+    /// lower-case hex, or null if the field is absent (older releases) or not SHA-256.</summary>
+    public static string? ParseDigest(JsonElement asset)
+    {
+        if (!asset.TryGetProperty("digest", out JsonElement d) || d.GetString() is not { } s)
+            return null;
+        const string prefix = "sha256:";
+        if (!s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        string hex = s[prefix.Length..].Trim().ToLowerInvariant();
+        if (hex.Length != 64 || !hex.All(Uri.IsHexDigit))
+            return null;
+        return hex;
     }
 
     private static bool IsTrue(JsonElement root, string prop) =>

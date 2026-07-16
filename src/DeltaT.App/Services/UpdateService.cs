@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using DeltaT.Core.Storage;
 using DeltaT.Core.Updates;
@@ -45,25 +47,74 @@ public sealed class UpdateService
     public Task<ReleaseInfo?> CheckAsync(CancellationToken ct = default) =>
         _checker.CheckAsync(CurrentVersion, ct);
 
-    /// <summary>Download the setup to a temp file. Returns the path, or null on failure
-    /// (network error, or a file too small to be a real installer).</summary>
+    /// <summary>The certificate subject DeltaT's own setup is signed with. When this is set,
+    /// the updater refuses to run any download not signed by it, which is the only check that
+    /// proves a setup came from the maintainer rather than merely arriving over HTTPS.
+    ///
+    /// EMPTY UNTIL A CODE-SIGNING CERTIFICATE EXISTS. It is deliberately not a "verify if
+    /// signed" flag: an attacker would simply ship an unsigned file, so a lenient check is
+    /// theatre. Until it is set, authenticity rests on TLS plus the pinned repo owner, and
+    /// integrity rests on the digest check below. Set it to e.g. "CN=Azaan Murtaza" the day
+    /// the setup is signed, and sign before releasing so no client is left unable to update.</summary>
+    public const string ExpectedSigner = "";
+
+    /// <summary>Download the setup to a temp file and prove it is what the release says it is.
+    /// Returns the path, or null if anything about it fails to check out.
+    ///
+    /// This file is about to be executed silently with administrator rights, so "it downloaded
+    /// without an exception" is not a standard worth trusting. Three gates: it must be a
+    /// plausible size, it must hash to the digest GitHub published for that asset (so a
+    /// truncated, corrupted or substituted download dies here), and, once a signing cert
+    /// exists, it must carry a valid Authenticode signature from the expected signer.</summary>
     public async Task<string?> DownloadAsync(ReleaseInfo release, CancellationToken ct = default)
     {
+        string? path = null;
         try
         {
             string dir = Path.Combine(Path.GetTempPath(), "DeltaT-update");
             Directory.CreateDirectory(dir);
-            string path = Path.Combine(dir, $"DeltaT-Setup-{release.Version}.exe");
+            path = Path.Combine(dir, $"DeltaT-Setup-{release.Version}.exe");
             byte[] bytes = await _http.GetByteArrayAsync(release.DownloadUrl, ct);
             if (bytes.Length < 100_000)
                 return null;
+
+            // Integrity: the digest GitHub computed for the asset it served us. This catches a
+            // mangled or swapped download; it cannot catch a release published by someone who
+            // has taken over the account, since the digest would travel with the forgery.
+            // Only the signature check can speak to that.
+            if (release.Sha256 is { } expected && !HashMatches(bytes, expected))
+                return null;
+
             await File.WriteAllBytesAsync(path, bytes, ct);
+
+            // Authenticity: who signed it. Skipped only while no cert is pinned.
+            if (!string.IsNullOrEmpty(ExpectedSigner) && !Authenticode.IsSignedBy(path, ExpectedSigner))
+            {
+                TryDelete(path);
+                return null;
+            }
+
             return path;
         }
         catch
         {
+            if (path is not null)
+                TryDelete(path);
             return null;
         }
+    }
+
+    /// <summary>Constant-time-ish compare of the download against the published digest.</summary>
+    private static bool HashMatches(byte[] bytes, string expectedHex)
+    {
+        string actual = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(expectedHex.ToLowerInvariant()));
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* temp file, best effort */ }
     }
 
     /// <summary>Run the setup silently through a detached helper, then relaunch DeltaT and

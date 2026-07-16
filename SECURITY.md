@@ -65,8 +65,31 @@ behind.
 
 **The installer never runs a downloaded driver setup on trust.** The PawnIO setup
 is fetched from a pinned official release, and its Authenticode signature is
-verified before it is executed. If you have found a way around that check, that is
-exactly the kind of report I want.
+verified against its author's certificate before it is executed. If you have found
+a way around that check, that is exactly the kind of report I want.
+
+## Known gap: DeltaT's own setup is not code signed yet
+
+I would rather tell you this than have you find it.
+
+DeltaT's installer does not currently carry an Authenticode signature, so Windows
+SmartScreen shows an unknown publisher warning, and you cannot cryptographically
+prove that a `DeltaT-Setup.exe` you found somewhere came from me. A code signing
+certificate costs real money for a free tool, and I have not bought one yet.
+
+What stands in for it today, and what does not:
+
+- The app only ever fetches updates from this repository's releases. The owner is
+  compiled in, not configured, so nothing can point an existing install elsewhere.
+- Downloads go over HTTPS, and the app verifies the file against the SHA-256
+  digest GitHub publishes for that exact asset before running it. A corrupted,
+  truncated, or substituted download is refused.
+- That digest arrives from the same API response as the download, so it proves
+  integrity, not authorship. It would not save you from a release published by
+  someone who had taken over my GitHub account. Only a signature would, and that
+  is why the check is written and waiting on a certificate rather than absent.
+
+Until then: get DeltaT from this repository's releases page and nowhere else.
 
 ## What DeltaT sends off your machine
 
