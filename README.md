@@ -109,3 +109,15 @@ powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 ```
 
 Publishes a self-contained `win-x64` build and compiles `installer\DeltaT.iss` into `installer\out\DeltaT-Setup-<version>.exe`. Needs Inno Setup 6 (`winget install --id JRSoftware.InnoSetup`). The version is pulled from `<Version>` in `src/DeltaT.App/DeltaT.App.csproj`, so bump it there when cutting a new release.
+
+## Contributing
+
+Bug reports, especially from laptops I do not own, are the most useful thing you can send. Fan RPM support for Lenovo, ASUS and HP is written from public documentation but not yet confirmed on real hardware. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Found a security problem? Please report it privately: [SECURITY.md](SECURITY.md).
+
+## License
+
+DeltaT is free software under the [GNU General Public License v3](LICENSE). You can read it, build it, and fork it. If you distribute a fork, it stays open under the same terms.
+
+Third-party components and the services DeltaT talks to are listed in [NOTICE](NOTICE).
