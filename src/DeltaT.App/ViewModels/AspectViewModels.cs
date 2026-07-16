@@ -6,14 +6,14 @@ using DeltaT.Core.Scoring;
 namespace DeltaT.App.ViewModels;
 
 /// <summary>One cell of the dashboard's health matrix: a component × aspect readout.
-/// Shows the 0–100 health in the verdict color with a fill bar, a state word for the
-/// power column (STOCK / OC / UV), or a faint "--" when the sensor doesn't exist or
+/// Shows the 0–100 health in the verdict color with a fill bar, a measured state for the
+/// power column (MATCHED / +38% / -22%), or a faint "--" when the sensor doesn't exist or
 /// DeltaT is still learning. The evidence sentence rides along as the tooltip.</summary>
 public sealed partial class AspectCellViewModel : ObservableObject
 {
     private static readonly Brush FaintBrush = Frozen(ThermalPalette.TextFaint);
     private static readonly Brush DimBrush = Frozen(ThermalPalette.TextDim);
-    private static readonly Brush CoolBrush = Frozen(ThermalPalette.Cool);
+    private static readonly Brush AccentBrush = Frozen(ThermalPalette.Accent);
 
     [ObservableProperty] private string _value = "--";
     [ObservableProperty] private Brush _valueBrush = FaintBrush;
@@ -45,12 +45,14 @@ public sealed partial class AspectCellViewModel : ObservableObject
         else
         {
             // Power state: a fact, not a health, so it carries no bar and no verdict color.
-            // A measured difference (+38%, -22%) reads in steel, the one cool hue in the
-            // app, reserved for "this moved, and it isn't a fault"; a machine drawing its
-            // baseline watts just says MATCHED, dim, like the fan readout.
+            // A measured difference (+38%, -22%) reads in ember, the app's signal colour for
+            // live subject data: it is the one cell on the row that moved, and it should draw
+            // the eye there. Steel would put it inside the thermal ramp, where a hue means a
+            // distance from the limit, which a wattage difference is not. A machine drawing
+            // its baseline watts just says MATCHED, dim, like the fan readout.
             Value = aspect.Status;
             HasBar = false;
-            ValueBrush = aspect.Status == "MATCHED" ? DimBrush : CoolBrush;
+            ValueBrush = aspect.Status == "MATCHED" ? DimBrush : AccentBrush;
         }
     }
 
