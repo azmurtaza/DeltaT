@@ -10,6 +10,54 @@ WARRANTY, without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 
+ADDITIONAL TERMS UNDER GPL-3.0 SECTION 7
+========================================
+
+The following additional terms apply to DeltaT. They are permitted by section 7
+of the GNU General Public License version 3, and they do not restrict your
+freedom to use, study, modify, or share this software. They exist because DeltaT
+is a diagnostic tool that runs with administrator rights, and a modified copy
+passing itself off as the original could mislead a user into trusting readings,
+or an installer, that the original author never produced.
+
+If you modify DeltaT and distribute your modified version, then in addition to
+the obligations already imposed by the GPL:
+
+1. Marking modified versions (GPL-3.0 section 7(c))
+
+   You must mark your version in reasonable ways as different from the original,
+   and you must not misrepresent its origin. Section 5(a) of the GPL already
+   requires you to carry prominent notices stating that you changed the files and
+   the date of any change; this term additionally requires that a user can tell,
+   from the application itself, that they are not running the original DeltaT.
+
+2. Name and branding (GPL-3.0 sections 7(d) and 7(e))
+
+   Permission is NOT granted to use the name "DeltaT", the DeltaT logo and brand
+   marks in assets/brand, or the name of the author, for your modified version,
+   nor for publicity or endorsement purposes relating to it. Rename your version.
+   You may of course state factually, without implying endorsement, that your work
+   is derived from DeltaT, and you must retain the attribution and copyright
+   notices already present (GPL-3.0 section 7(b)).
+
+3. Indemnification (GPL-3.0 section 7(f))
+
+   If you convey DeltaT or a modified version and you offer recipients any
+   contractual assumption of liability, warranty, support, or indemnity, you must
+   do so on your own behalf alone. You must indemnify the author of DeltaT for any
+   liability that those assumptions of yours directly impose on him.
+
+In plain terms, and this is a summary rather than the operative text above: what
+you do to your own copy is your business, and the GPL protects that. But ship it
+under your own name, make it obvious it is yours and not the original, and if you
+make promises to your users, those promises are yours to keep, not the original
+author's.
+
+The disclaimer of warranty and limitation of liability in sections 15 and 16 of
+the GNU General Public License apply in full to the author of DeltaT, and apply
+regardless of who modified or conveyed the copy you are running.
+
+
 THIRD-PARTY COMPONENTS
 ======================
 
