@@ -49,7 +49,13 @@ public static class DemoSeeder
     /// <param name="provisional">When true, start the epoch just two days ago and leave
     /// the baseline unlocked, so the score is still calibrating but far enough along to
     /// show a provisional estimate — for screenshotting the pre-lock UI.</param>
-    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc, bool provisional = false, bool overclock = false)
+    /// <param name="lightCpu">A GPU-bound machine: the CPU never leaves idle/light all
+    /// epoch, so it banks no loaded (medium/heavy/full) bouts and the confidence gate
+    /// cannot pass it, while the GPU's gaming load locks normally. Reproduces the mixed
+    /// state (one component scored, one still calibrating) that the dashboard has to
+    /// report honestly. Only the GPU gets a lock key: the shared legacy key would be
+    /// inherited by the CPU too (see ScoreCoordinator.LockFor) and lock it by proxy.</param>
+    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc, bool provisional = false, bool overclock = false, bool lightCpu = false)
     {
         ClearAll(db);
 
@@ -61,6 +67,15 @@ public static class DemoSeeder
             settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-2.2));
             settings.Set(SettingsKeys.BaselineLockedUtc, "");
         }
+        else if (lightCpu)
+        {
+            // Only the GPU locks. The shared legacy key is left empty on purpose: every
+            // component falls back to it, so setting it would lock the CPU by proxy and
+            // the mixed state could never appear.
+            settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-HistoryDays));
+            settings.Set(SettingsKeys.BaselineLockedUtc, "");
+            settings.SetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.GpuDiscrete}", nowUtc.AddDays(-HistoryDays + 7));
+        }
         else
         {
             settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc.AddDays(-HistoryDays));
@@ -71,7 +86,7 @@ public static class DemoSeeder
         }
         SeedWeather(settings, nowUtc);
 
-        List<MinuteAccum> minutes = GenerateTimeline(degraded, overclock, nowUtc);
+        List<MinuteAccum> minutes = GenerateTimeline(degraded, overclock, lightCpu, nowUtc);
         repo.UpsertMinutes(minutes);
         RollupHours(db);
 
@@ -84,9 +99,9 @@ public static class DemoSeeder
     /// Load follows a daily rhythm (idle nights, working days, gaming evenings, the
     /// odd render/compile burst); temperature is ambient + a load-driven rise + a
     /// scenario-dependent excess that grows toward the present in the repaste case.</summary>
-    private static List<MinuteAccum> GenerateTimeline(bool degraded, bool overclock, DateTimeOffset nowUtc)
+    private static List<MinuteAccum> GenerateTimeline(bool degraded, bool overclock, bool lightCpu, DateTimeOffset nowUtc)
     {
-        var rng = new Random(degraded ? 4242 : overclock ? 9091 : 1717);
+        var rng = new Random(degraded ? 4242 : overclock ? 9091 : lightCpu ? 5150 : 1717);
         DateTimeOffset start = FloorMinute(nowUtc.AddDays(-HistoryDays));
         int totalMinutes = (int)(nowUtc - start).TotalMinutes;
 
@@ -113,6 +128,10 @@ public static class DemoSeeder
 
             // Target loads from the current activity for this hour.
             (double cpuTarget, double gpuTarget) = ActivityTarget(hour, ref gamingLeft, ref renderLeft, ref workLeft, rng);
+            // A GPU-bound machine whose CPU never leaves idle/light: the CPU banks no
+            // loaded bouts, so its baseline cannot earn confidence while the GPU's does.
+            if (lightCpu)
+                cpuTarget *= 0.35;
 
             // Ease toward the target so ramps read like a real machine, not a step.
             cpuLoad += (cpuTarget - cpuLoad) * 0.35 + (rng.NextDouble() - 0.5) * 2.5;
