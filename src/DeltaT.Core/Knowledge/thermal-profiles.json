@@ -7,7 +7,7 @@
       "class": "gaming-laptop",
       "priority": 100,
       "match": { "manufacturerContains": ["acer"], "modelContains": ["anv15"], "isLaptop": true },
-      "notes": "Nitro V 15s run warm by design — reviewers measured mid-90s °C CPU under stress tests and high-70s to low-80s GPU while gaming. Sustained 90s under heavy load is normal for this chassis; pushing past 97–98 °C at merely medium load is not.",
+      "notes": "Nitro V 15s run warm by design. Reviewers measured mid-90s °C CPU under stress tests and high-70s to low-80s GPU while gaming. Sustained 90s under heavy load is normal for this chassis; pushing past 97–98 °C at merely medium load is not.",
       "cpu": { "typicalIdleDeltaC": 20, "typicalHeavyDeltaC": 66, "sustainedNormC": 93, "concernC": 98 },
       "gpu": { "typicalIdleDeltaC": 11, "typicalHeavyDeltaC": 50, "sustainedNormC": 80, "concernC": 86 }
     },
@@ -17,7 +17,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["acer"], "modelContains": ["nitro", "an515", "an517", "anv"], "isLaptop": true },
-      "notes": "Acer's Nitro line prioritizes price over cooling headroom — sustained low-90s CPU under heavy load is expected behaviour when healthy.",
+      "notes": "Acer's Nitro line prioritizes price over cooling headroom. Sustained low-90s CPU under heavy load is expected behaviour when healthy.",
       "cpu": { "typicalIdleDeltaC": 20, "typicalHeavyDeltaC": 66, "sustainedNormC": 93, "concernC": 98 },
       "gpu": { "typicalIdleDeltaC": 11, "typicalHeavyDeltaC": 50, "sustainedNormC": 80, "concernC": 86 }
     },
@@ -27,7 +27,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["acer"], "modelContains": ["predator", "helios", "triton", "ph16", "ph18"], "isLaptop": true },
-      "notes": "Predators carry beefier cooling than Nitros — expect high-80s CPU sustained, not mid-90s.",
+      "notes": "Predators carry beefier cooling than Nitros, so expect high-80s CPU sustained, not mid-90s.",
       "cpu": { "typicalIdleDeltaC": 18, "typicalHeavyDeltaC": 62, "sustainedNormC": 90, "concernC": 96 },
       "gpu": { "typicalIdleDeltaC": 10, "typicalHeavyDeltaC": 48, "sustainedNormC": 78, "concernC": 85 }
     },
@@ -57,7 +57,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["lenovo"], "modelContains": ["legion"], "isLaptop": true },
-      "notes": "Legions are the thermal benchmark of the class — healthy units hold high-80s CPU under sustained load with room to spare.",
+      "notes": "Legions are the thermal benchmark of the class. Healthy units hold high-80s CPU under sustained load with room to spare.",
       "cpu": { "typicalIdleDeltaC": 17, "typicalHeavyDeltaC": 58, "sustainedNormC": 88, "concernC": 96 },
       "gpu": { "typicalIdleDeltaC": 10, "typicalHeavyDeltaC": 46, "sustainedNormC": 76, "concernC": 84 }
     },
@@ -67,7 +67,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["lenovo"], "modelContains": ["loq"], "isLaptop": true },
-      "notes": "LOQ is Legion's budget sibling — cooling closer to a Nitro than a Legion.",
+      "notes": "LOQ is Legion's budget sibling, with cooling closer to a Nitro than a Legion.",
       "cpu": { "typicalIdleDeltaC": 20, "typicalHeavyDeltaC": 64, "sustainedNormC": 92, "concernC": 98 },
       "gpu": { "typicalIdleDeltaC": 11, "typicalHeavyDeltaC": 50, "sustainedNormC": 80, "concernC": 86 }
     },
@@ -77,7 +77,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["hp", "hewlett"], "modelContains": ["victus"], "isLaptop": true },
-      "notes": "Victus units run among the warmest in class — mid-90s CPU under stress is common even when healthy.",
+      "notes": "Victus units run among the warmest in class. Mid-90s CPU under stress is common even when healthy.",
       "cpu": { "typicalIdleDeltaC": 21, "typicalHeavyDeltaC": 68, "sustainedNormC": 94, "concernC": 98 },
       "gpu": { "typicalIdleDeltaC": 12, "typicalHeavyDeltaC": 52, "sustainedNormC": 81, "concernC": 87 }
     },
@@ -87,7 +87,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["hp", "hewlett"], "modelContains": ["omen"], "isLaptop": true },
-      "notes": "Omens cool noticeably better than Victus — expect around 90 °C CPU sustained when healthy.",
+      "notes": "Omens cool noticeably better than Victus, so expect around 90 °C CPU sustained when healthy.",
       "cpu": { "typicalIdleDeltaC": 19, "typicalHeavyDeltaC": 62, "sustainedNormC": 90, "concernC": 97 },
       "gpu": { "typicalIdleDeltaC": 11, "typicalHeavyDeltaC": 49, "sustainedNormC": 79, "concernC": 86 }
     },
@@ -97,7 +97,7 @@
       "class": "gaming-laptop",
       "priority": 90,
       "match": { "manufacturerContains": ["dell"], "modelContains": ["g15", "g16", "g3", "g5", "g7"], "isLaptop": true },
-      "notes": "Dell G laptops bias quiet fans over low temps — warm sustained numbers are the factory tune.",
+      "notes": "Dell G laptops bias quiet fans over low temps, so warm sustained numbers are the factory tune.",
       "cpu": { "typicalIdleDeltaC": 21, "typicalHeavyDeltaC": 67, "sustainedNormC": 94, "concernC": 98 },
       "gpu": { "typicalIdleDeltaC": 12, "typicalHeavyDeltaC": 52, "sustainedNormC": 81, "concernC": 87 }
     },
@@ -125,7 +125,7 @@
       "class": "gaming-laptop",
       "priority": 10,
       "match": { "isLaptop": true },
-      "notes": "No brand-specific data — using typical gaming-laptop thermals. Sustained low-90s CPU under heavy load is normal for the breed.",
+      "notes": "No brand-specific data, so these are typical gaming-laptop thermals. Sustained low-90s CPU under heavy load is normal for the breed.",
       "cpu": { "typicalIdleDeltaC": 20, "typicalHeavyDeltaC": 65, "sustainedNormC": 92, "concernC": 97 },
       "gpu": { "typicalIdleDeltaC": 11, "typicalHeavyDeltaC": 50, "sustainedNormC": 80, "concernC": 87 }
     },
@@ -145,7 +145,7 @@
       "class": "desktop",
       "priority": 5,
       "match": { "isLaptop": false },
-      "notes": "Desktops have real airflow — they should never live near their limits. Sustained heavy-load temps in the 90s are a red flag, not a personality trait.",
+      "notes": "Desktops have real airflow, so they should never live near their limits. Sustained heavy-load temps in the 90s are a red flag, not a personality trait.",
       "cpu": { "typicalIdleDeltaC": 12, "typicalHeavyDeltaC": 46, "sustainedNormC": 78, "concernC": 90 },
       "gpu": { "typicalIdleDeltaC": 8, "typicalHeavyDeltaC": 42, "sustainedNormC": 72, "concernC": 83 }
     }

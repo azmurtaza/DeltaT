@@ -295,13 +295,14 @@ public partial class App : Application
         if (_uishotDir is not null)
             _settings.SetBool(SettingsKeys.FirstRunDone, true); // uishot wants the real screens, not onboarding
         _repo = new TelemetryRepository(_db);
-        // Dev/demo screenshots (`--seed=healthy|repaste|provisional`): lay down a
-        // realistic multi-week history before anything else reads the store.
+        // Dev/demo screenshots (`--seed=healthy|repaste|provisional|overclock`): lay down
+        // a realistic multi-week history before anything else reads the store.
         if (ParseSeed(args) is { } seed)
             DemoSeeder.Seed(_db, _repo, _settings,
                 degraded: seed is "repaste" or "degraded" or "aging",
                 DateTimeOffset.UtcNow,
-                provisional: seed == "provisional");
+                provisional: seed == "provisional",
+                overclock: seed is "overclock" or "boost");
         _ambient = new AmbientService(_settings);
 
         MachineIdentity machine = MachineIdentityProvider.Detect();
@@ -459,8 +460,8 @@ public partial class App : Application
         };
     }
 
-    /// <summary>`--seed=healthy|repaste|provisional` fills the sim db with demo history
-    /// for screenshots. Returns null when absent, else the normalized mode string.</summary>
+    /// <summary>`--seed=healthy|repaste|provisional|overclock` fills the sim db with demo
+    /// history for screenshots. Returns null when absent, else the normalized mode string.</summary>
     private static string? ParseSeed(string[] args)
     {
         string? arg = args.FirstOrDefault(a => a.StartsWith("--seed", StringComparison.OrdinalIgnoreCase));
