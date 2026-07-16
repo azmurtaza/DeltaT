@@ -61,6 +61,49 @@ public class SoakTrackerTests
     }
 
     [Fact]
+    public void BatteryDuringTheLoadEdge_TaintsTheMeasurement()
+    {
+        // Same clean calm-then-slam as above, but the slam happens unplugged: battery
+        // power limits throttle the watts the edge rides on, so the measurement must
+        // carry OnAcPower=false and be kept out of the AC-only rate means.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        SoakMeasurement? measured = null;
+        monitor.SoakMeasured += m => measured = m;
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 35; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 50 + (i % 3) * 0.3, load: 5));
+        for (int i = 0; i < 55; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, Math.Min(90, 50 + i * (40 / 30.0)), load: 95, onAc: false));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.NotNull(measured);
+        Assert.False(measured!.OnAcPower);
+    }
+
+    [Fact]
+    public void PluggedInThroughout_MeasurementIsAcClean()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        SoakMeasurement? measured = null;
+        monitor.SoakMeasured += m => measured = m;
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 35; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 50 + (i % 3) * 0.3, load: 5));
+        for (int i = 0; i < 55; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, Math.Min(90, 50 + i * (40 / 30.0)), load: 95));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.NotNull(measured);
+        Assert.True(measured!.OnAcPower);
+    }
+
+    [Fact]
     public void NoCalmBeforeLoad_NoMeasurement()
     {
         var source = new ScriptedSource();
@@ -106,6 +149,30 @@ public class CooldownTrackerTests
         Assert.Equal(90, measured!.StartTempC, 1.0);
         Assert.Equal(55, measured.SettledTempC, 1.5);
         Assert.InRange(measured.RatePerMinute, 25, 50); // 35 °C shed in ~60–90 s
+    }
+
+    [Fact]
+    public void BatteryDuringTheHotPhase_TaintsTheMeasurement()
+    {
+        // The fall itself happens plugged in, but the LOAD that heated the die ran on
+        // battery: the die starts its cooldown cooler than an AC load would leave it,
+        // and a cooler die sheds fewer degrees per minute for reasons that are the
+        // power limit, not the paste. The whole episode must read battery-tainted.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        CooldownMeasurement? measured = null;
+        monitor.CooldownMeasured += m => measured = m;
+
+        DateTimeOffset t = Snap.T0;
+        for (int i = 0; i < 35; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 90, load: 95, onAc: false));
+        for (int i = 0; i < 55; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, Math.Max(55, 90 - i * (35 / 30.0)), load: 3));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.NotNull(measured);
+        Assert.False(measured!.OnAcPower);
     }
 
     [Fact]
@@ -195,6 +262,25 @@ public class TelemetryPipelineTests : IDisposable
         Assert.Equal(60, heavy.DeltaAvg!.Value, 1.0);
         Assert.Equal(90, heavy.TempAvg, 1.0);
         Assert.True(heavy.Minutes >= 3);
+    }
+
+    [Fact]
+    public void EventRateMeans_AreAcOnly_AndLegacyRowsCountAsAc()
+    {
+        // The rise comparison is AC-only end to end; the event-derived soak/cooldown
+        // rates must be too, or a battery week reads "sheds heat slower" (a paste
+        // tell). Events written before the tag existed count as AC, the same default
+        // the samples table has always used.
+        long ts = Snap.T0.ToUnixTimeSeconds();
+        _repo.InsertEvent(ts + 1, "cooldown", "Cpu", "CPU", 0, "ac", """{"rate":30,"on_ac":1}""");
+        _repo.InsertEvent(ts + 2, "cooldown", "Cpu", "CPU", 0, "battery", """{"rate":12,"on_ac":0}""");
+        _repo.InsertEvent(ts + 3, "cooldown", "Cpu", "CPU", 0, "legacy", """{"rate":24}""");
+        _repo.InsertEvent(ts + 4, "soak", "Cpu", "CPU", 0, "battery", """{"rate":8,"on_ac":0}""");
+
+        // Mean of the AC row and the legacy row only: (30 + 24) / 2.
+        Assert.Equal(27, _repo.GetAverageCooldownRate(ComponentKind.Cpu, ts, ts + 10)!.Value, 0.01);
+        // The lone soak event is battery-tainted, so there is no usable soak mean at all.
+        Assert.Null(_repo.GetAverageSoakRate(ComponentKind.Cpu, ts, ts + 10));
     }
 
     [Fact]

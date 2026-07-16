@@ -626,4 +626,148 @@ public class ScoringEngineTests
         Assert.DoesNotContain(off.Reasons, r => r.Code == "headroom");
         Assert.True(off.Value >= on.Value);
     }
+
+    [Fact]
+    public void HeadroomWarningsOff_AlsoSilencesTheFindingAndTheAspectCell()
+    {
+        // The switch is a promise: a rig deliberately pinned near TjMax must not keep
+        // seeing a Headroom finding or a Watch cell through the diagnosis side door.
+        var recent = new[] { Heavy(delta: 60, tempAvg: 90, tempMax: 99) };
+        var baseline = new[] { HeavyBase(delta: 60) };
+
+        ComponentScore off = ScoringEngine.Score(Input(recent: recent, baseline: baseline, headroomWarnings: false), Fmt);
+        Assert.DoesNotContain(off.Diagnosis!.Findings, f => f.Cause == ThermalCause.CoolingHeadroom);
+        AspectHealth headroom = off.Aspects.Single(a => a.Aspect == HealthAspect.Headroom);
+        Assert.True(headroom.Score >= 85, $"headroom cell should stay Clear, read {headroom.Score}");
+
+        // Throttle EVENTS are always counted, switch or no switch.
+        ComponentScore throttled = ScoringEngine.Score(Input(
+            recent: recent, baseline: baseline, throttleEvents: 3, headroomWarnings: false), Fmt);
+        Assert.Contains(throttled.Diagnosis!.Findings, f => f.Cause == ThermalCause.CoolingHeadroom);
+    }
+
+    // --------------------------------------------- power changes beyond the clamp band
+
+    // Absolute temps stay well under the chassis norms (ambient 25 + modest deltas) so
+    // these tests read ONLY the power-comparison behaviour, never the absolute warnings.
+    private static RecentBucketObs HeavyPower(double delta, double power, double? fan = null, double? gap = null) =>
+        new(LoadBucket.Heavy, Warm, 60, delta, 25 + delta, 29 + delta, fan, 0, GapAvg: gap, PowerAvg: power);
+
+    private static BaselineBucket HeavyBasePower(double delta, double power, double? fan = null, double? gap = null) =>
+        new(LoadBucket.Heavy, Warm, delta, delta + 3, fan, 200, null, GapAvg: gap, PowerAvg: power);
+
+    [Fact]
+    public void DeepPowerCap_SitsOutTheComparison_InsteadOfFabricatingOne()
+    {
+        // A CPU locked to a low clock: 20 W under full load where the baseline learned
+        // 70 W. Beyond the 0.5-2.0 clamp no correction is honest, so the cell must not
+        // judge at all (and must say why), rather than half-correct into a fake number.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 18, power: 20) },
+            baseline: new[] { HeavyBasePower(delta: 60, power: 70) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "power-mismatch");
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.AwaitingData, "nothing comparable ran, so the honest state is waiting, not a verdict");
+        AspectHealth paste = score.Aspects.Single(a => a.Aspect == HealthAspect.Paste);
+        Assert.Equal("--", paste.Status);
+    }
+
+    [Fact]
+    public void DeepPowerCap_DoesNotAccuseTheSlowerFan()
+    {
+        // At 20 W the fan curve legitimately eases far off its 70 W speed. 75% of
+        // baseline rpm used to trip the undershoot hint; with the watts explaining it,
+        // the fan must stay Clear.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 18, power: 20, fan: 3000) },
+            baseline: new[] { HeavyBasePower(delta: 60, power: 70, fan: 4000) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "fan-undershoot");
+        AspectHealth fans = score.Aspects.Single(a => a.Aspect == HealthAspect.Fans);
+        Assert.True(fans.Score >= 85, $"fans cell should stay Clear, read {fans.Score}");
+
+        // A fan below even what the missing watts explain is still a real hint: same
+        // cap, but the fan is at 40% of baseline. That is undershoot.
+        ComponentScore faulty = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 18, power: 20, fan: 1600) },
+            baseline: new[] { HeavyBasePower(delta: 60, power: 70, fan: 4000) }), Fmt);
+        Assert.Contains(faulty.Diagnosis!.Findings, f => f.Cause == ThermalCause.FanFault);
+    }
+
+    [Fact]
+    public void DeepPowerCap_GatesTheRateComparison()
+    {
+        // The soak/cooldown correction saturates at the clamp, and a saturated
+        // half-correction charges the remainder to the paste: a capped machine really
+        // does shed heat at a fraction of its baseline rate. Across a gap this wide the
+        // rates must sit the comparison out, not fire "sheds heat slower".
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[]
+            {
+                HeavyPower(delta: 18, power: 20),
+                new RecentBucketObs(LoadBucket.Idle, Warm, 60, 12, 40, 44, null, 0, PowerAvg: 8),
+            },
+            baseline: new[]
+            {
+                HeavyBasePower(delta: 60, power: 70),
+                new BaselineBucket(LoadBucket.Idle, Warm, 12, 15, null, 200, null, PowerAvg: 8),
+            },
+            cooldownRecent: 8, cooldownBaseline: 22,
+            soakRecent: 7, soakBaseline: 20), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "cooldown");
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "soak");
+        Assert.True(score.Value >= 95, $"healthy capped machine read {score.Value}");
+    }
+
+    [Fact]
+    public void OverclockWidenedGap_IsThePowerKnob_NotTheMount()
+    {
+        // Hotspot-edge gap is heat flux x internal resistance: +35% watts widen a
+        // healthy card's gap from 10 to 13.5. Judged raw that reads as mount drift;
+        // judged at equal power it is nothing.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 54, power: 94.5, gap: 13.5) },
+            baseline: new[] { HeavyBasePower(delta: 40, power: 70, gap: 10) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "hotspot-gap");
+        Assert.DoesNotContain(score.Diagnosis!.Findings, f => f.Cause == ThermalCause.Mount);
+    }
+
+    [Fact]
+    public void UndervoltNarrowedGap_CannotHideRealPumpout()
+    {
+        // At -30% watts a healthy gap narrows to 7. This card reads 14: twice what the
+        // watts predict, the pump-out signature. The smaller absolute number must not
+        // pass as healthy just because it sits below the learned 10.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 28, power: 49, gap: 14) },
+            baseline: new[] { HeavyBasePower(delta: 40, power: 70, gap: 10) }), Fmt);
+
+        Assert.Contains(score.Reasons, r => r.Code == "hotspot-gap" && r.PointsLost > 0);
+        Assert.Contains(score.Diagnosis!.Findings, f => f.Cause == ThermalCause.Mount);
+    }
+
+    [Fact]
+    public void FanAnsweringTheWatts_IsNotFlattery()
+    {
+        // +35% watts, fan up 14% because the curve answers the heat. The power
+        // correction already judges at equal wattage; charging the fan response as
+        // "extra airflow flattering the reading" double-counted the power change into
+        // 3-4 degrees of fake excess.
+        ComponentScore score = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 54, power: 94.5, fan: 4560) },
+            baseline: new[] { HeavyBasePower(delta: 40, power: 70, fan: 4000) }), Fmt);
+
+        Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
+        Assert.True(score.Value >= 95, $"healthy overclocked machine read {score.Value}");
+
+        // Same rpm rise at UNCHANGED watts is a different story: that is a fan profile
+        // or a straining curve, and normalization must still correct for it.
+        ComponentScore profile = ScoringEngine.Score(Input(
+            recent: new[] { HeavyPower(delta: 38, power: 70, fan: 4560) },
+            baseline: new[] { HeavyBasePower(delta: 40, power: 70, fan: 4000) }), Fmt);
+        Assert.NotNull(profile.Fan);
+    }
 }

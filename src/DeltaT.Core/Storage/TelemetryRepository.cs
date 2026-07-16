@@ -370,9 +370,16 @@ public sealed class TelemetryRepository
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
+        // AC-only, like every other baseline/recent comparison: battery power limits
+        // throttle the watts, and both rates ride the watts, so a battery-limited soak
+        // or cooldown would read as a paste change the power normalizer can't see (its
+        // power means come from the AC-filtered cells, so the battery watts are
+        // invisible to it). Events written before the tag existed count as AC — the
+        // same default the samples table has always used.
         cmd.CommandText = """
             SELECT AVG(CAST(json_extract(data,'$.rate') AS REAL))
-            FROM events WHERE type=$type AND kind=$kind AND ts BETWEEN $from AND $to;
+            FROM events WHERE type=$type AND kind=$kind AND ts BETWEEN $from AND $to
+              AND COALESCE(json_extract(data,'$.on_ac'), 1) = 1;
             """;
         cmd.Parameters.AddWithValue("$type", type);
         cmd.Parameters.AddWithValue("$kind", kind.ToString());

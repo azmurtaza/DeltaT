@@ -15,6 +15,11 @@ public enum Condition
     Overclock,   // a confounder: hotter, but by design — must NOT read as a fault
     Undervolt,   // a confounder: cooler, but by config — must NOT read as improvement/fault
     ColdSeason,  // a confounder: cooler because the room is cold — must NOT false-alarm
+    PowerCapDeep,// a confounder: a hard frequency cap / deep power limit (e.g. a CPU locked
+                 // to 1.5 GHz) cuts loaded package power 60–75% — far beyond the power
+                 // normalizer's clamp band. Everything downstream (rise, soak, cooldown,
+                 // fan speed, hotspot gap) legitimately shrinks with it; none of it may
+                 // read as a fault, on ANY aspect.
 }
 
 /// <summary>Per-condition tally: how often DeltaT reached the right conclusion.</summary>
@@ -180,8 +185,16 @@ public static class DetectionBenchmark
         Condition.MountPumpout => 10 + rng.NextDouble() * 10,  // +10..20 ° gap
         Condition.Overclock => 0.25 + rng.NextDouble() * 0.15, // +25..40 % power
         Condition.Undervolt => 0.20 + rng.NextDouble() * 0.15, // −20..35 % power
+        Condition.PowerCapDeep => 0.60 + rng.NextDouble() * 0.15, // −60..75 % power under load
         _ => 0,
     };
+
+    /// <summary>How strongly a temperature-targeting fan curve answers a power change:
+    /// the fraction of a fractional power change that shows up in rpm. The same coupling
+    /// the contamination/toggle benchmarks model, now applied to every power confounder,
+    /// because a real fan slows when the die cools — a benchmark whose fans ignore the
+    /// watts cannot see the engine mistaking that slowdown for a failing fan.</summary>
+    private const double FanCurveCoupling = 0.4;
 
     private static ComponentScore ScoreTrial(Condition condition, double severity, Random rng, out ThermalCause primary)
     {
@@ -239,17 +252,38 @@ public static class DetectionBenchmark
                 // die soaks up heat proportionally faster on more watts, and it starts its
                 // cooldown from a proportionally hotter point. Both must be modelled, or the
                 // benchmark can't see the engine mistaking a boost-mode change for paste.
+                // The gap scales with power too: hotspot−edge is heat flux × internal
+                // resistance, so more watts widen a HEALTHY card's gap and fewer narrow it.
+                // And the fan curve answers the die temperature, so it rides the same watts.
+                // Both couplings must be modelled, or the benchmark can't see the engine
+                // blaming a power knob on the mount or on a failing fan.
                 case Condition.Overclock:
                     power *= 1 + severity;                       // more watts → proportionally hotter
                     delta *= 1 + severity;
+                    fan *= 1 + FanCurveCoupling * severity;
+                    gap *= 1 + severity;
                     sRec = soakBase * (1 + severity);
                     cRec = coolBase * (1 + severity);
                     break;
                 case Condition.Undervolt:
                     power *= 1 - severity;
                     delta *= 1 - severity;
+                    fan *= 1 - FanCurveCoupling * severity;
+                    gap *= 1 - severity;
                     sRec = soakBase * (1 - severity);
                     cRec = coolBase * (1 - severity);
+                    break;
+                case Condition.PowerCapDeep:
+                    // The cap binds under load; an idle die already ran at low clocks.
+                    if (c.Bucket != LoadBucket.Idle)
+                    {
+                        power *= 1 - severity;
+                        delta *= 1 - severity;
+                        fan *= 1 - FanCurveCoupling * severity;
+                        gap *= 1 - severity;
+                        sRec = soakBase * (1 - severity);
+                        cRec = coolBase * (1 - severity);
+                    }
                     break;
             }
 
@@ -748,6 +782,145 @@ public static class DetectionBenchmark
                 GapAvg: c.Bucket == LoadBucket.Idle ? null : gSum / n, PowerAvg: pSum / n));
         }
         return rows;
+    }
+
+    // ===================== Phase 6: battery-contaminated rate events =====================
+    // The rise/baseline comparison is AC-only end to end (on_ac is a primary-key dimension of
+    // the aggregates and ScoreCoordinator filters both windows), but the soak/cooldown RATES
+    // come from the events table, which historically had no AC awareness. Battery power limits
+    // throttle the watts, both rates ride the watts (dT/dt ≈ P/C), and the power normalizer
+    // CANNOT rescue this one: its power means come from the AC-filtered cells, so the battery
+    // watt drop is structurally invisible to it. The failure mode is a habit change (a travel
+    // week on battery against a plugged-in baseline): the recent cooldown mean drags down and
+    // reads "sheds heat slower", one of the paste tells. This measures what that costs through
+    // the real engine, for the pipeline that blends battery events into the mean (pre-fix) and
+    // the pipeline that feeds AC-only rates (what the repository now guarantees).
+
+    public sealed record BatteryRateResult(
+        int Trials,
+        double ContaminatedMeanErr, double ContaminatedMaxErr, int ContaminatedFalseFaults,
+        double FilteredMeanErr, double FilteredMaxErr, int FilteredFalseFaults,
+        int ReferenceFalseFaults);
+
+    /// <summary>Package power on battery as a fraction of AC power: mobile firmware limits
+    /// commonly halve to third the sustained wattage the moment the charger comes out.</summary>
+    public const double BatteryPowerFactor = 0.35;
+
+    public static BatteryRateResult RunBatteryRates(int seed = 20260716, int trials = 400)
+    {
+        var rng = new Random(seed);
+        double contSum = 0, contMax = 0, filtSum = 0, filtMax = 0;
+        int contFalse = 0, filtFalse = 0, refFalse = 0;
+
+        for (int i = 0; i < trials; i++)
+        {
+            // A healthy, plugged-in-learned machine whose recent week ran some fraction of
+            // its load edges on battery. The rise cells stay AC-clean (the aggregate pipeline
+            // guarantees that); only the event-derived rates carry the battery sessions.
+            double phi = rng.NextDouble(); // fraction of the week's soak/cooldown edges on battery
+            List<RecentBucketObs> recent = BuildRecent(Condition.Healthy, 0, rng,
+                out _, out _, out double soakBase, out double coolBase);
+
+            double batteryMix = 1 - phi + phi * BatteryPowerFactor;
+            double soakContaminated = soakBase * batteryMix + Gauss(rng, 0.5);
+            double coolContaminated = coolBase * batteryMix + Gauss(rng, 0.5);
+            double soakClean = soakBase + Gauss(rng, 0.5);
+            double coolClean = coolBase + Gauss(rng, 0.5);
+
+            List<BaselineBucket> baseline = BuildBaselineRows(Acquisition.Perfect, 0, rng);
+            ComponentScore reference = ScoreAgainst(recent, soakBase, coolBase, soakBase, coolBase,
+                baseline, out _);
+
+            ComponentScore contaminated = ScoreAgainst(recent, soakContaminated, coolContaminated,
+                soakBase, coolBase, baseline, out _);
+            ComponentScore filtered = ScoreAgainst(recent, soakClean, coolClean,
+                soakBase, coolBase, baseline, out _);
+
+            double ec = Math.Abs(contaminated.Value - reference.Value), ef = Math.Abs(filtered.Value - reference.Value);
+            contSum += ec; filtSum += ef;
+            contMax = Math.Max(contMax, ec); filtMax = Math.Max(filtMax, ef);
+            if (AnyFaultFinding(contaminated) || contaminated.Value < 85) contFalse++;
+            if (AnyFaultFinding(filtered) || filtered.Value < 85) filtFalse++;
+            if (AnyFaultFinding(reference) || reference.Value < 85) refFalse++;
+        }
+
+        return new BatteryRateResult(trials, contSum / trials, contMax, contFalse,
+            filtSum / trials, filtMax, filtFalse, refFalse);
+    }
+
+    // ===================== Phase 5: deep power caps & power-coupled faults =====================
+    // The headline benchmark judges the PRIMARY cause and a score<70 line. That is too coarse for
+    // the promise "a power knob never reads as a fault on ANY aspect": a false FanFault can sit at
+    // rank 2 behind a PowerConfig reassurance, a false cooldown penalty can cost 12 points without
+    // crossing 70, and an aspect cell can read Watch while the verdict stays Good. This suite holds
+    // the strict bar for the harshest realistic power moves (a hard frequency cap, a deep power
+    // limit), and proves the power-awareness does not BLIND the engine: a genuinely failing fan on
+    // a capped machine and genuine pump-out on an undervolted card must still be named.
+
+    public sealed record PowerCapResult(
+        int Trials,
+        // Healthy machine under a deep cap (power −60..75% under load): the strict bar.
+        int HealthyFaultFindings,   // ANY Paste/Airflow/FanFault/Mount finding surfaced, any rank
+        int HealthyBelow85,         // verdict left Excellent (false points crept in)
+        int HealthyAspectNotClear,  // any measurable fault aspect cell below Clear (<85)
+        double HealthyMeanScore,
+        // Detection retained under power confounders.
+        int FanFaultUnderCapNamed,  // failing fan on a deeply capped machine: FanFault surfaced
+        int PumpoutUnderUndervoltNamed); // pump-out on an undervolted card: Mount surfaced
+
+    private static bool AnyFaultFinding(ComponentScore s) =>
+        s.Diagnosis is { } d && d.Findings.Any(f => f.Cause is ThermalCause.Paste
+            or ThermalCause.Airflow or ThermalCause.FanFault or ThermalCause.Mount);
+
+    private static bool AnyFaultAspectBelowClear(ComponentScore s) =>
+        s.Aspects.Any(a => a.Aspect is HealthAspect.Paste or HealthAspect.Airflow
+            or HealthAspect.Fans or HealthAspect.Mount && a.Score is { } v && v < 85);
+
+    public static PowerCapResult RunPowerCapSuite(int seed = 20260716, int trials = 400)
+    {
+        var rng = new Random(seed);
+        int healthyFault = 0, healthyBelow85 = 0, healthyAspect = 0, fanNamed = 0, pumpNamed = 0;
+        double healthyScoreSum = 0;
+
+        for (int i = 0; i < trials; i++)
+        {
+            // 1) Healthy machine, deep cap. Nothing may read as a fault anywhere.
+            double capSev = Severity(Condition.PowerCapDeep, rng);
+            List<RecentBucketObs> capped = BuildRecent(Condition.PowerCapDeep, capSev, rng,
+                out double soakR, out double coolR, out double soakB, out double coolB);
+            ComponentScore healthy = ScoreAgainst(capped, soakR, coolR, soakB, coolB,
+                BuildBaselineRows(Acquisition.Perfect, 0, rng), out _);
+            healthyScoreSum += healthy.Value;
+            if (AnyFaultFinding(healthy)) healthyFault++;
+            if (healthy.Scored && healthy.Value < 85) healthyBelow85++;
+            if (AnyFaultAspectBelowClear(healthy)) healthyAspect++;
+
+            // 2) The same deep cap, but the fan is GENUINELY failing on top of it (well below
+            // even what the reduced watts explain). The hint must still surface.
+            capSev = Severity(Condition.PowerCapDeep, rng);
+            List<RecentBucketObs> cappedFanFault = BuildRecent(Condition.PowerCapDeep, capSev, rng,
+                out soakR, out coolR, out soakB, out coolB)
+                .Select(r => r with { FanAvg = r.FanAvg * 0.55 }).ToList();
+            ComponentScore fanScore = ScoreAgainst(cappedFanFault, soakR, coolR, soakB, coolB,
+                BuildBaselineRows(Acquisition.Perfect, 0, rng), out _);
+            if (fanScore.Diagnosis is { } fd && fd.Findings.Any(f => f.Cause == ThermalCause.FanFault))
+                fanNamed++;
+
+            // 3) An undervolted card (power within the normalizer's range) whose paste has
+            // genuinely pumped out: the gap is double what the reduced watts predict. The
+            // narrower absolute gap must not hide it.
+            double uvSev = Severity(Condition.Undervolt, rng);
+            List<RecentBucketObs> uvPumpout = BuildRecent(Condition.Undervolt, uvSev, rng,
+                out soakR, out coolR, out soakB, out coolB)
+                .Select(r => r with { GapAvg = r.GapAvg * 2.0 }).ToList();
+            ComponentScore uvScore = ScoreAgainst(uvPumpout, soakR, coolR, soakB, coolB,
+                BuildBaselineRows(Acquisition.Perfect, 0, rng), out _);
+            if (uvScore.Diagnosis is { } ud && ud.Findings.Any(f => f.Cause == ThermalCause.Mount))
+                pumpNamed++;
+        }
+
+        return new PowerCapResult(trials, healthyFault, healthyBelow85, healthyAspect,
+            healthyScoreSum / trials, fanNamed, pumpNamed);
     }
 
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----
