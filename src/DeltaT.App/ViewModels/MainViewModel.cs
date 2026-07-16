@@ -349,9 +349,33 @@ public partial class MainViewModel : ObservableObject
         BuildHeroStats(worst, calibrating: false);
         VerdictTitle = $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
         // The verdict's numbers now live in the stat readouts (tooltips carry the
-        // sentences), so a locked verdict needs no paragraph under it.
-        VerdictDetail = "";
+        // sentences), so a locked verdict needs no paragraph under it. A sibling that is
+        // STILL learning does need one: components lock independently, the calibration
+        // branch above stops running the moment ANY component scores, and that component's
+        // dial then reads CALIBRATING with nothing anywhere saying what it is waiting for.
+        // So a GPU that locked first silently took the CPU's "what's next" off the
+        // dashboard until the CPU locked too.
+        VerdictDetail = CalibrationHint(all);
         UpdateDiagnosis(worst);
+    }
+
+    /// <summary>"What's next" for the least confident component still learning, to sit
+    /// under a sibling's already-locked verdict. Empty once everything has locked, which
+    /// collapses the line. Mirrors the wording of the all-calibrating headline, since it
+    /// answers the same question for whichever component is still behind.</summary>
+    private static string CalibrationHint(List<ComponentScore> all)
+    {
+        ComponentScore? lead = all
+            .Where(s => s.Calibrating)
+            .OrderBy(s => s.CalibrationProgress)
+            .FirstOrDefault();
+        if (lead is null)
+            return "";
+        // Caps at 99 like the dials: "100% confident" while still calibrating reads broken.
+        string pct = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
+        return string.IsNullOrWhiteSpace(lead.CalibrationConstraint)
+            ? $"{lead.Kind.Label()} is still calibrating ({pct}). Use the machine normally; games and heavy work teach DeltaT fastest."
+            : $"{lead.Kind.Label()} is still calibrating ({pct}). What's next: {lead.CalibrationConstraint}.";
     }
 
     /// <summary>The instrument readouts under the verdict title, built from the same

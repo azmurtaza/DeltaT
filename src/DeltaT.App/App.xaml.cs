@@ -302,7 +302,8 @@ public partial class App : Application
                 degraded: seed is "repaste" or "degraded" or "aging",
                 DateTimeOffset.UtcNow,
                 provisional: seed == "provisional",
-                overclock: seed is "overclock" or "boost");
+                overclock: seed is "overclock" or "boost",
+                lightCpu: seed == "mixed");
         _ambient = new AmbientService(_settings);
 
         MachineIdentity machine = MachineIdentityProvider.Detect();
