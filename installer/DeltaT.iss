@@ -60,7 +60,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional shortcuts:"
-Name: "startup"; Description: "Start {#AppName} automatically when I sign in (recommended — it runs quietly in the tray)"; GroupDescription: "Startup:"
+Name: "startup"; Description: "Start {#AppName} automatically when I sign in (recommended, it runs quietly in the tray)"; GroupDescription: "Startup:"
 ; Only offered when PawnIO isn't already present (FanControl, OpenRGB and LibreHardwareMonitor
 ; users often have it). Unchecking it is allowed: DeltaT still runs, with CPU temperature from
 ; the slower motherboard/ACPI reading and no package power, throttle events or headroom.
@@ -82,8 +82,10 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$a = New-ScheduledTaskAction -Execute '{app}\{#AppExe}' -Argument '--minimized'; $t = New-ScheduledTaskTrigger -AtLogOn; $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest; $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable; Register-ScheduledTask -TaskName '{#AppTaskName}' -Action $a -Trigger $t -Principal $p -Settings $s -Force"""; \
   Flags: runhidden waituntilterminated; Tasks: startup; \
   StatusMsg: "Registering startup task..."
-; Offer to launch straight away (into the tray).
-Filename: "{app}\{#AppExe}"; Parameters: "--minimized"; \
+; Offer to launch straight away. No --minimized: someone who just ticked "launch now"
+; wants to SEE the app, not hunt for a tray icon. The logon task above keeps --minimized,
+; where starting quietly is the point.
+Filename: "{app}\{#AppExe}"; \
   Description: "Launch {#AppName} now"; \
   Flags: postinstall nowait skipifsilent
 
