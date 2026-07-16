@@ -87,12 +87,18 @@ public sealed class AspectColumnViewModel
 {
     public HealthAspect Aspect { get; }
     public string Label { get; }
+
+    /// <summary>Whether this column draws the hairline on its left edge. Every column
+    /// but the first: the separators sit BETWEEN blocks, never before the row.</summary>
+    public bool ShowSeparator { get; }
+
     public AspectCellViewModel Cpu { get; } = new();
     public AspectCellViewModel Gpu { get; } = new();
 
-    public AspectColumnViewModel(HealthAspect aspect, string label)
+    public AspectColumnViewModel(HealthAspect aspect, string label, bool showSeparator = true)
     {
         Aspect = aspect;
         Label = label;
+        ShowSeparator = showSeparator;
     }
 }

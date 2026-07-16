@@ -40,7 +40,18 @@ public static class ScoringEngine
     // Scaling the recent rise by (baseline W / recent W) recovers the resistance — the
     // paste-only quantity — so an undervolt, a raised power limit, or a heavier real
     // workload at the same load% stops masquerading as paste drift.
-    /// <summary>Power within ±8% of baseline is normal run-to-run variance — no correction.</summary>
+    /// <summary>Power within ±4% of baseline is metering noise — no correction. Correction
+    /// ramps in linearly from here and is FULL at <see cref="PowerRatioDeadband"/>. The ramp
+    /// (rather than a hard on/off at one threshold) matters for a machine that toggles its
+    /// boost mode constantly: the recent window's mean watts wander anywhere between the two
+    /// regimes, and a hard deadband made the correction snap on and off as the mix drifted
+    /// across the edge — up to deadband×rise (≈4 °C on a big laptop rise) of score moving on
+    /// nothing but toggle habits. The ramp keeps the correction continuous in the mix.</summary>
+    public const double PowerRatioDeadbandStart = 0.04;
+
+    /// <summary>Power deviation at which the correction reaches full strength. A systematic
+    /// difference this large is a real operating-point change (boost, power plan, undervolt),
+    /// not metering noise, and is corrected in full.</summary>
     public const double PowerRatioDeadband = 0.08;
 
     /// <summary>A power ratio outside this band implies &gt;2× or &lt;0.5× dissipation — real
@@ -349,8 +360,16 @@ public static class ScoringEngine
             || baseW < MinMeaningfulPowerW || recentW < MinMeaningfulPowerW)
             return 1.0;
         double ratio = Math.Clamp(baseW / recentW, PowerRatioClampLo, PowerRatioClampHi);
-        return Math.Abs(ratio - 1) >= PowerRatioDeadband ? ratio : 1.0;
+        return 1 + (ratio - 1) * PowerCorrectionStrength(ratio);
     }
+
+    /// <summary>How much of the power correction applies at this ratio: 0 inside the metering
+    /// deadband, 1 at and beyond the full-correction threshold, linear between. Continuous, so
+    /// a recent window whose mean watts drift across the deadband edge (a boost mode toggled at
+    /// a varying duty cycle) can never make the score jump.</summary>
+    private static double PowerCorrectionStrength(double ratio) =>
+        Math.Clamp((Math.Abs(ratio - 1) - PowerRatioDeadbandStart)
+                   / (PowerRatioDeadband - PowerRatioDeadbandStart), 0, 1);
 
     /// <summary>Weighted rpm context behind a fan-normalized comparison, for the reason line.</summary>
     public sealed record FanNormalization(double RecentRpm, double BaselineRpm, double CorrectionC);
@@ -408,10 +427,21 @@ public static class ScoringEngine
                     && recentPower >= MinMeaningfulPowerW && basePower >= MinMeaningfulPowerW)
                 {
                     double pratio = Math.Clamp(basePower / recentPower, PowerRatioClampLo, PowerRatioClampHi);
-                    if (Math.Abs(pratio - 1) >= PowerRatioDeadband)
-                        powerCorrection = Math.Clamp(delta * pratio - delta, -MaxPowerCorrectionC, MaxPowerCorrectionC);
+                    double strength = PowerCorrectionStrength(pratio);
+                    if (strength > 0)
+                        powerCorrection = Math.Clamp((delta * pratio - delta) * strength, -MaxPowerCorrectionC, MaxPowerCorrectionC);
+                    // The aggregate power means feed the RATE correction and the power-state
+                    // readout, and both need the power the EPOCH learned, not the matched cell's.
+                    // The soak/cooldown baselines are epoch-wide averages across every regime the
+                    // machine toggled through, so a sub-cell match here (regime watts ≈ recent
+                    // watts) would silently disable the rate correction: a boost-on week would
+                    // read "heat-soaks faster than baseline" (a paste tell) purely because the
+                    // rate baseline blends in boost-off minutes. Anchor on the blended cell.
+                    double anchorPower = baseline.IsPowerSubcell
+                        ? BlendedCellPower(input.Baseline, bucket, baseline.Band) ?? basePower
+                        : basePower;
                     powerRecentWeighted += recentPower * w;
-                    powerBaseWeighted += basePower * w;
+                    powerBaseWeighted += anchorPower * w;
                     powerWeights += w;
                 }
 
@@ -507,6 +537,16 @@ public static class ScoringEngine
     /// boost on is judged against the boost-on regime it was learned at, not a blended average.
     /// When no power is known on either side, or there are no sub-cells, this returns the first
     /// (blended) match, i.e. exactly the previous behavior.</summary>
+    /// <summary>The blended (non-sub-cell) cell's learned watts for a (bucket, band) — the
+    /// epoch-wide power the rate baselines and the power-state readout are anchored to.</summary>
+    private static double? BlendedCellPower(IReadOnlyList<BaselineBucket> baseline, LoadBucket bucket, int band)
+    {
+        foreach (BaselineBucket b in baseline)
+            if (b.Bucket == bucket && b.Band == band && !b.IsPowerSubcell)
+                return b.PowerAvg;
+        return null;
+    }
+
     private static BaselineBucket? NearestBaselinePower(IReadOnlyList<BaselineBucket> baseline, LoadBucket bucket, int band, double? recentPower)
     {
         BaselineBucket? best = null;

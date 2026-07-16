@@ -278,6 +278,41 @@ public class PowerContaminationTests
     }
 }
 
+/// <summary>Constant boost-mode toggling is the harshest realistic power confounder: the recent
+/// window itself mixes the two regimes at a fraction that wanders week to week, and the
+/// soak/cooldown rates ride the same watts. Measured before the fixes these lock in, the shipping
+/// pipeline moved up to 13 score points and invented faults on 5.5% of healthy toggling weeks
+/// (the soak/cooldown power correction was anchored to the matched sub-cell's watts instead of
+/// the epoch blend the rate baselines were learned at, and the hard power deadband snapped the
+/// rise correction on and off as the mix drifted). These floors keep the verdict steady however
+/// the toggle lands.</summary>
+public class BoostToggleTests
+{
+    private static readonly DetectionBenchmark.ToggleResult T = DetectionBenchmark.RunBoostToggle(seed: 777, trials: 400);
+
+    // The configuration that actually ships: power-tagged baseline, blended recent rows.
+    private static DetectionBenchmark.ToggleConfigResult Shipped =>
+        T.Configs.Single(c => c.Config == "tagged + blended recent");
+
+    [Fact]
+    public void TogglingBoost_BarelyMovesTheVerdict()
+    {
+        Assert.True(Shipped.ScoreSpread <= 4.0,
+            $"score spread across boost mixes {Shipped.ScoreSpread:0.0} pts (was 13 before the rate-anchor + deadband-ramp fixes)");
+        Assert.True(Shipped.MeanAbsErr <= 1.5,
+            $"mean err vs like-for-like reference {Shipped.MeanAbsErr:0.00} pts");
+        Assert.True(Math.Abs(Shipped.SignedErr) <= 1.5,
+            $"signed bias {Shipped.SignedErr:+0.0;-0.0} pts should stay near zero");
+    }
+
+    [Fact]
+    public void TogglingBoost_DoesNotInventFaults()
+    {
+        Assert.True(Shipped.FalseFaults <= T.ReferenceFalseFaults + 10,
+            $"false faults {Shipped.FalseFaults}/{T.Trials} vs like-for-like reference {T.ReferenceFalseFaults}/{T.Trials}");
+    }
+}
+
 /// <summary>Phase 0 go/no-go for the guided-calibration (workout) idea, measured not
 /// intuited: does a baseline acquired from controlled synthetic loads yield the SAME
 /// fault attribution as one acquired organically? The finding these lock in is that the

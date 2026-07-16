@@ -543,6 +543,213 @@ public static class DetectionBenchmark
         return rows;
     }
 
+    // ===================== Phase 4: constant boost-mode toggling =====================
+    // Phase 3 proves a PURE boost-on window is judged fairly. A user who flips boost on and
+    // off constantly produces something harsher: the recent window itself is a MIX of the two
+    // regimes whose blend fraction wanders week to week (the aggregates blend every minute in
+    // the window into one row per bucket), and the soak/cooldown rates ride the same watts.
+    // Bulletproof means the verdict barely moves however the toggle lands: no false fault at
+    // any mix, and the score spread across every possible mix stays within noise.
+
+    /// <summary>One pipeline configuration's tally under boost toggling: score error against a
+    /// like-for-like reference, false faults, and the score SPREAD (max−min of the mean score
+    /// as the boost mix sweeps 0→100%) — the "fluctuating verdict" a toggling user experiences.</summary>
+    public sealed record ToggleConfigResult(
+        string Config, double MeanAbsErr, double MaxAbsErr, double SignedErr, int FalseFaults, double ScoreSpread);
+
+    public sealed record ToggleResult(int Trials, int ReferenceFalseFaults, double ReferenceSpread,
+        IReadOnlyList<ToggleConfigResult> Configs);
+
+    /// <summary>Fraction of the learning epoch's minutes spent at boost-on. 50/50 is the honest
+    /// worst case for a habitual toggler: the blended cell sits exactly between the regimes.</summary>
+    public const double BaselineBoostMix = 0.5;
+
+    // Canonical soak/cooldown rates at full (boost-on) power; both scale linearly with watts
+    // (dT/dt ≈ P/C, and a cooldown starts from a die temperature that itself scales with P).
+    // 20/22 °C/min at the canonical power matches the main benchmark's healthy machine.
+    private const double SoakRate0 = 20;
+    private const double CoolRate0 = 22;
+
+    /// <summary>Package-power factor of a window that spent fraction <paramref name="phi"/> of
+    /// its minutes at boost-on and the rest at boost-off.</summary>
+    private static double MixFactor(double phi) => BoostOffFactor + (BoostOnFactor - BoostOffFactor) * phi;
+
+    /// <summary>Score a HEALTHY machine whose recent window toggles between boost regimes, per
+    /// trial at a random mix, through the three real pipeline shapes: the blended baseline
+    /// (pre-tagging), the power-tagged baseline with today's blended recent rows, and the
+    /// power-tagged baseline with regime-split recent rows. Error is measured against a
+    /// like-for-like reference (a baseline learned at the very same mix), so it isolates
+    /// exactly what the toggle contamination costs each configuration.</summary>
+    public static ToggleResult RunBoostToggle(int seed = 20260716, int trials = 400)
+    {
+        var rng = new Random(seed);
+        const int configs = 3;
+        double[] sum = new double[configs], max = new double[configs], signed = new double[configs];
+        int[] falseFaults = new int[configs];
+        int refFalse = 0;
+        Span<double> s = stackalloc double[configs];
+
+        for (int i = 0; i < trials; i++)
+        {
+            double phi = rng.NextDouble(); // this week's boost-on fraction, anywhere from 0 to 1
+            List<RecentBucketObs> mixedRecent = BuildHealthyRecentMixed(phi, rng);
+            List<RecentBucketObs> splitRecent = BuildHealthyRecentSplit(phi, rng);
+            double soakRecent = SoakRate0 * MixFactor(phi) + Gauss(rng, 0.5);
+            double coolRecent = CoolRate0 * MixFactor(phi) + Gauss(rng, 0.5);
+            // The epoch learned its rate baselines across the same 50/50 toggling it learned
+            // its cells at; the reference is judged with rate baselines at the trial's own mix.
+            double soakBase = SoakRate0 * MixFactor(BaselineBoostMix);
+            double coolBase = CoolRate0 * MixFactor(BaselineBoostMix);
+
+            List<BaselineBucket> blended = BuildRegimeBaseline(new[] { BoostOffFactor, BoostOnFactor }, rng);
+            List<BaselineBucket> tagged = BuildTaggedBaseline(rng);
+            List<BaselineBucket> reference = BuildMixBaseline(phi, rng);
+
+            double sr = ScoreAgainst(mixedRecent, soakRecent, coolRecent,
+                SoakRate0 * MixFactor(phi), CoolRate0 * MixFactor(phi), reference, out ThermalCause cr).Value;
+            ThermalCause[] causes = new ThermalCause[configs];
+            s[0] = ScoreAgainst(mixedRecent, soakRecent, coolRecent, soakBase, coolBase, blended, out causes[0]).Value;
+            s[1] = ScoreAgainst(mixedRecent, soakRecent, coolRecent, soakBase, coolBase, tagged, out causes[1]).Value;
+            s[2] = ScoreAgainst(splitRecent, soakRecent, coolRecent, soakBase, coolBase, tagged, out causes[2]).Value;
+
+            if (CauseClass(cr) != 0 || sr < 70) refFalse++;
+            for (int c = 0; c < configs; c++)
+            {
+                double e = Math.Abs(s[c] - sr);
+                sum[c] += e; signed[c] += s[c] - sr; max[c] = Math.Max(max[c], e);
+                if (CauseClass(causes[c]) != 0 || s[c] < 70) falseFaults[c]++;
+            }
+        }
+
+        (double[] spreads, double refSpread) = SweepToggleSpread(seed + 1);
+        string[] names = { "blended (pre-tag)", "tagged + blended recent", "tagged + split recent" };
+        var results = new List<ToggleConfigResult>(configs);
+        for (int c = 0; c < configs; c++)
+            results.Add(new ToggleConfigResult(names[c], sum[c] / trials, max[c], signed[c] / trials, falseFaults[c], spreads[c]));
+        return new ToggleResult(trials, refFalse, refSpread, results);
+    }
+
+    /// <summary>Sweep the boost mix 0→100% against FIXED baselines (one machine, many weeks of
+    /// different toggle habits) and measure how far the mean score moves — the fluctuation a
+    /// toggling user actually watches on the dial. The reference sweep (a like-for-like baseline
+    /// at every mix) is the noise floor of the measurement itself.</summary>
+    private static (double[] Spreads, double ReferenceSpread) SweepToggleSpread(int seed)
+    {
+        var baseRng = new Random(seed);
+        List<BaselineBucket> blended = BuildRegimeBaseline(new[] { BoostOffFactor, BoostOnFactor }, baseRng);
+        List<BaselineBucket> tagged = BuildTaggedBaseline(baseRng);
+        double soakBase = SoakRate0 * MixFactor(BaselineBoostMix);
+        double coolBase = CoolRate0 * MixFactor(BaselineBoostMix);
+        const int perPoint = 40;
+
+        double[] min = { double.MaxValue, double.MaxValue, double.MaxValue }, max = { 0, 0, 0 };
+        double refMin = double.MaxValue, refMax = 0;
+        var rng = new Random(seed + 7);
+        Span<double> mean = stackalloc double[3];
+        for (double phi = 0; phi <= 1.0001; phi += 0.1)
+        {
+            mean.Clear();
+            double refMean = 0;
+            for (int i = 0; i < perPoint; i++)
+            {
+                List<RecentBucketObs> mixed = BuildHealthyRecentMixed(phi, rng);
+                List<RecentBucketObs> split = BuildHealthyRecentSplit(phi, rng);
+                double soakRecent = SoakRate0 * MixFactor(phi) + Gauss(rng, 0.5);
+                double coolRecent = CoolRate0 * MixFactor(phi) + Gauss(rng, 0.5);
+                mean[0] += ScoreAgainst(mixed, soakRecent, coolRecent, soakBase, coolBase, blended, out _).Value;
+                mean[1] += ScoreAgainst(mixed, soakRecent, coolRecent, soakBase, coolBase, tagged, out _).Value;
+                mean[2] += ScoreAgainst(split, soakRecent, coolRecent, soakBase, coolBase, tagged, out _).Value;
+                refMean += ScoreAgainst(mixed, soakRecent, coolRecent,
+                    SoakRate0 * MixFactor(phi), CoolRate0 * MixFactor(phi), BuildMixBaseline(phi, rng), out _).Value;
+            }
+            for (int c = 0; c < 3; c++)
+            {
+                double m = mean[c] / perPoint;
+                min[c] = Math.Min(min[c], m); max[c] = Math.Max(max[c], m);
+            }
+            refMean /= perPoint;
+            refMin = Math.Min(refMin, refMean); refMax = Math.Max(refMax, refMean);
+        }
+        return (new[] { max[0] - min[0], max[1] - min[1], max[2] - min[2] }, refMax - refMin);
+    }
+
+    /// <summary>Recent telemetry of a healthy machine whose window toggled between regimes, as
+    /// TODAY'S aggregate pipeline reports it: one row per bucket blending every minute (SUM/SUM),
+    /// so the row's rise, fan and watts are the minutes-weighted mixture means.</summary>
+    private static List<RecentBucketObs> BuildHealthyRecentMixed(double phi, Random rng)
+    {
+        var recent = new List<RecentBucketObs>();
+        foreach (Cell c in Baseline)
+        {
+            double pOn = c.PowerW * BoostOnFactor, pOff = c.PowerW * BoostOffFactor;
+            double delta = phi * TrueDelta(c, pOn) + (1 - phi) * TrueDelta(c, pOff) + Gauss(rng, 0.6);
+            double power = phi * pOn + (1 - phi) * pOff;
+            double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+            power = Math.Max(1, power + Gauss(rng, power * 0.03));
+            double temp = AmbientC + delta;
+            recent.Add(new RecentBucketObs(
+                c.Bucket, Warm, 60, delta, temp, temp + 4, fan, 0,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : 10 + Gauss(rng, 0.5), PowerAvg: power));
+        }
+        return recent;
+    }
+
+    /// <summary>The same toggled window as regime-SPLIT recent rows: one regime-pure row per
+    /// power band (what splitting the recent aggregates by power band produces), falling back to
+    /// the blended row when either side is too thin to judge — the same gate the engine's
+    /// per-bucket minimum imposes, so a split never throws away a comparable bucket.</summary>
+    private static List<RecentBucketObs> BuildHealthyRecentSplit(double phi, Random rng)
+    {
+        var recent = new List<RecentBucketObs>();
+        foreach (Cell c in Baseline)
+        {
+            int onMinutes = (int)Math.Round(60 * phi), offMinutes = 60 - onMinutes;
+            bool loaded = c.Bucket is LoadBucket.Medium or LoadBucket.Heavy or LoadBucket.Max;
+            if (!loaded || onMinutes < ScoringEngine.MinMinutes(c.Bucket) || offMinutes < ScoringEngine.MinMinutes(c.Bucket))
+            {
+                // Too lopsided to split (or idle): the pipeline keeps the blended row.
+                recent.AddRange(BuildHealthyRecentMixed(phi, rng).Where(r => r.Bucket == c.Bucket));
+                continue;
+            }
+            foreach ((double regime, int minutes) in new[] { (BoostOnFactor, onMinutes), (BoostOffFactor, offMinutes) })
+            {
+                double power = c.PowerW * regime;
+                double delta = TrueDelta(c, power) + Gauss(rng, 0.6);
+                double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+                power = Math.Max(1, power + Gauss(rng, power * 0.03));
+                double temp = AmbientC + delta;
+                recent.Add(new RecentBucketObs(
+                    c.Bucket, Warm, minutes, delta, temp, temp + 4, fan, 0,
+                    GapAvg: 10 + Gauss(rng, 0.5), PowerAvg: power));
+            }
+        }
+        return recent;
+    }
+
+    /// <summary>The like-for-like ideal for a toggled window: a baseline whose cells were learned
+    /// at the very same boost mix. What a perfectly matched reference would compare against.</summary>
+    private static List<BaselineBucket> BuildMixBaseline(double phi, Random rng)
+    {
+        var rows = new List<BaselineBucket>();
+        foreach (Cell c in Baseline)
+        {
+            double dSum = 0, pSum = 0, fSum = 0, gSum = 0; int n = 0;
+            for (int i = 0; i < RegimeSamplesPerCell * 2; i++)
+            {
+                double regime = i < RegimeSamplesPerCell * 2 * phi ? BoostOnFactor : BoostOffFactor;
+                double power = Math.Max(1, c.PowerW * regime * (1 + Gauss(rng, OrganicPowerSpread)));
+                double delta = TrueDelta(c, power) + Gauss(rng, 0.6);
+                double fan = Math.Max(0, c.FanRpm * (1 + 0.4 * (power / c.PowerW - 1)) + Gauss(rng, 60));
+                dSum += delta; pSum += power; fSum += fan; gSum += 10 + Gauss(rng, 0.5); n++;
+            }
+            double dAvg = dSum / n;
+            rows.Add(new BaselineBucket(
+                c.Bucket, Warm, dAvg, dAvg + 3, fSum / n, n * 5, AmbientC + dAvg,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : gSum / n, PowerAvg: pSum / n));
+        }
+        return rows;
+    }
+
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----
 
     private static SensitivityCurve SweepPaste(Random rng) =>

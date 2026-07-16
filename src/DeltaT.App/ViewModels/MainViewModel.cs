@@ -42,7 +42,7 @@ public partial class MainViewModel : ObservableObject
     /// a healthy subsystem is visibly healthy instead of silently absent.</summary>
     public IReadOnlyList<AspectColumnViewModel> AspectColumns { get; } = new[]
     {
-        new AspectColumnViewModel(HealthAspect.Paste, "PASTE"),
+        new AspectColumnViewModel(HealthAspect.Paste, "PASTE", showSeparator: false),
         new AspectColumnViewModel(HealthAspect.Airflow, "AIRFLOW"),
         new AspectColumnViewModel(HealthAspect.Fans, "FANS"),
         new AspectColumnViewModel(HealthAspect.Mount, "MOUNT"),

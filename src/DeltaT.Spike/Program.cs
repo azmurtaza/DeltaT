@@ -70,6 +70,18 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  {"blended (mixed)",-18} {cont.BlendedMeanAbsErr,8:0.00} {Signed(cont.BlendedSignedErr),7} {cont.BlendedMaxAbsErr,8:0.0} {cont.BlendedFalseFaults,10}/{cont.Trials}");
     Console.WriteLine($"  {"power-tagged",-18} {cont.TaggedMeanAbsErr,8:0.00} {Signed(cont.TaggedSignedErr),7} {cont.TaggedMaxAbsErr,8:0.0} {cont.TaggedFalseFaults,10}/{cont.Trials}");
     Console.WriteLine();
+
+    // Constant boost toggling: the recent window itself mixes the regimes (the aggregates
+    // blend every minute into one row) and the soak/cooldown rates ride the same watts.
+    // Spread = how far the mean score moves as the boost mix sweeps 0->100% against one
+    // fixed baseline: the verdict fluctuation a toggling user actually sees.
+    var tog = DeltaT.Core.Scoring.DetectionBenchmark.RunBoostToggle();
+    Console.WriteLine("Constant boost-mode toggling (healthy machine, recent window mixes boost on+off)");
+    Console.WriteLine($"  {"pipeline",-26} {"mean err",9} {"signed",8} {"max err",9} {"false faults",13} {"spread",8}");
+    Console.WriteLine($"  {"reference (like-for-like)",-26} {"-",8} {"-",8} {"-",8} {tog.ReferenceFalseFaults,10}/{tog.Trials} {tog.ReferenceSpread,7:0.0}");
+    foreach (var t in tog.Configs)
+        Console.WriteLine($"  {t.Config,-26} {t.MeanAbsErr,8:0.00} {Signed(t.SignedErr),7} {t.MaxAbsErr,8:0.0} {t.FalseFaults,10}/{tog.Trials} {t.ScoreSpread,7:0.0}");
+    Console.WriteLine();
     return;
 
     static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";
