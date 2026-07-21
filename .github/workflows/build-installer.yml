@@ -1,0 +1,38 @@
+name: Build installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore and build
+        run: dotnet build DeltaT.sln -c Release
+
+      - name: Run tests
+        run: dotnet test DeltaT.sln -c Release --no-build
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build installer
+        shell: pwsh
+        run: installer/build-installer.ps1 -Configuration Release
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeltaT-Setup
+          path: installer/out/DeltaT-Setup-*.exe
