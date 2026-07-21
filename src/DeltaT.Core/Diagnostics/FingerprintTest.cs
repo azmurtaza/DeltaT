@@ -180,6 +180,21 @@ public sealed class FingerprintTest
         ComponentKind kind = target == FingerprintTarget.Gpu ? ComponentKind.GpuDiscrete : ComponentKind.Cpu;
         string label = target == FingerprintTarget.Gpu ? "GPU" : "CPU";
 
+        // Fail fast, before spending 90 s under load, when the target has no readable sensor.
+        // On a hybrid AMD-APU + NVIDIA laptop the discrete card parks under Optimus and exposes
+        // no temperature until something wakes it, and DeltaT no longer lets the integrated
+        // Radeon stand in for it (that stand-in is exactly what produced a GPU run recording the
+        // iGPU's temperature). A clear message here beats a burn that ends in "not enough samples".
+        if (target == FingerprintTarget.Gpu
+            && _monitor.Latest is { } latest
+            && latest.Find(ComponentKind.GpuDiscrete)?.TemperatureC is null)
+        {
+            throw new InvalidOperationException(
+                "No discrete GPU temperature is available to fingerprint. On a hybrid laptop the "
+                + "dedicated GPU may be idle or switched off; open a GPU app (or set the graphics "
+                + "mode so the dedicated GPU is active) and try again.");
+        }
+
         var samples = new List<(DateTimeOffset Ts, double Temp, bool Throttling)>();
         var gpuSamples = new List<(double Temp, double Load)>();
         bool onAc = true;

@@ -69,7 +69,11 @@ public static class SettingsKeys
     public const string LocationJson = "ambient.location";        // GeoLocation as JSON
     public const string LastAmbientC = "ambient.lastTemp";
     public const string LastAmbientFetched = "ambient.lastFetched";
-    public const string IndoorOffsetC = "ambient.indoorOffset";   // room − outside, user tunable
+    public const string IndoorOffsetC = "ambient.indoorOffset";   // room − outside, user tunable (weather mode, display only)
+    public const string WeatherRefreshHours = "ambient.refreshHours"; // outside-temp re-fetch cadence (1..6, default 3)
+    public const string IndoorFixedMode = "ambient.fixedMode";    // 1 = score against a fixed indoor temp, not outside weather
+    public const string IndoorFixedTempC = "ambient.fixedTempC";  // the user-set fixed indoor temperature (°C)
+    public const string IndoorFixedSince = "ambient.fixedSince";  // when the current fixed-temp reference began (learning floor for fixed mode)
 
     public const string BaselineEpoch = "baseline.epoch";          // increments on repaste
     public const string BaselineEpochStart = "baseline.epochStart";
@@ -90,6 +94,7 @@ public static class SettingsKeys
     public const string AutostartEnabled = "app.autostart";
     public const string AutoUpdate = "app.autoUpdate";             // check GitHub for newer releases and self-update
     public const string FirstRunDone = "app.firstRunDone";
+    public const string WhatsNewShownVersion = "app.whatsNewShown"; // "M.m.b" of the last release whose what's-new popup was shown
 
     // Overclocker-friendly warning limits. Concern override is the sustained-average
     // temperature past which DeltaT treats the machine as too hot; null = use the

@@ -317,5 +317,136 @@ public sealed class DeltaTDb
                 """;
             cmd.ExecuteNonQuery();
         }
+
+        if (version < 8)
+        {
+            // Ambient-source mode. DeltaT can now score rise-over-ambient against either the
+            // outside weather (mode 0, the original and default) or a user-set fixed indoor
+            // temperature (mode 1). The two are physically incomparable — a fixed-21.5° rise and
+            // a weather-outside rise measure the die against different references — so a reading's
+            // mode must never blend with the other's, on ANY channel. Mode therefore becomes a
+            // primary-key dimension of every learned aggregate and baseline, and a filter column on
+            // the rate/throttle events, so both modes' baselines coexist and the active one is
+            // chosen by the toggle. Purely additive and fail-safe: every existing row is mode 0
+            // (the DEFAULT), and a weather-mode user's queries all pass mode 0, so nothing about
+            // the shipped behaviour changes for anyone who never touches the fixed-temp toggle.
+            //
+            // The four learned tables carry mode in their PK, so recreate them (SQLite can't add a
+            // PK column in place); events just gets a filter column.
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                CREATE TABLE agg_minute_v8(
+                    minute    INTEGER NOT NULL,
+                    kind      TEXT    NOT NULL,
+                    name      TEXT    NOT NULL,
+                    bucket    INTEGER NOT NULL,
+                    band      INTEGER NOT NULL,
+                    on_ac     INTEGER NOT NULL,
+                    n         INTEGER NOT NULL,
+                    temp_sum  REAL    NOT NULL,
+                    temp_min  REAL    NOT NULL,
+                    temp_max  REAL    NOT NULL,
+                    load_sum  REAL    NOT NULL,
+                    delta_sum REAL    NOT NULL DEFAULT 0,
+                    delta_n   INTEGER NOT NULL DEFAULT 0,
+                    fan_sum   REAL    NOT NULL DEFAULT 0,
+                    fan_n     INTEGER NOT NULL DEFAULT 0,
+                    throttle_n INTEGER NOT NULL DEFAULT 0,
+                    gap_sum   REAL    NOT NULL DEFAULT 0,
+                    gap_n     INTEGER NOT NULL DEFAULT 0,
+                    power_sum REAL    NOT NULL DEFAULT 0,
+                    power_n   INTEGER NOT NULL DEFAULT 0,
+                    mode      INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(minute, kind, name, bucket, band, on_ac, mode)
+                );
+                INSERT INTO agg_minute_v8(minute,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n,power_sum,power_n)
+                    SELECT minute,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n,power_sum,power_n FROM agg_minute;
+                DROP TABLE agg_minute;
+                ALTER TABLE agg_minute_v8 RENAME TO agg_minute;
+
+                CREATE TABLE agg_hour_v8(
+                    hour      INTEGER NOT NULL,
+                    kind      TEXT    NOT NULL,
+                    name      TEXT    NOT NULL,
+                    bucket    INTEGER NOT NULL,
+                    band      INTEGER NOT NULL,
+                    on_ac     INTEGER NOT NULL,
+                    n         INTEGER NOT NULL,
+                    temp_sum  REAL    NOT NULL,
+                    temp_min  REAL    NOT NULL,
+                    temp_max  REAL    NOT NULL,
+                    load_sum  REAL    NOT NULL,
+                    delta_sum REAL    NOT NULL DEFAULT 0,
+                    delta_n   INTEGER NOT NULL DEFAULT 0,
+                    fan_sum   REAL    NOT NULL DEFAULT 0,
+                    fan_n     INTEGER NOT NULL DEFAULT 0,
+                    throttle_n INTEGER NOT NULL DEFAULT 0,
+                    gap_sum   REAL    NOT NULL DEFAULT 0,
+                    gap_n     INTEGER NOT NULL DEFAULT 0,
+                    power_sum REAL    NOT NULL DEFAULT 0,
+                    power_n   INTEGER NOT NULL DEFAULT 0,
+                    mode      INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(hour, kind, name, bucket, band, on_ac, mode)
+                );
+                INSERT INTO agg_hour_v8(hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n,power_sum,power_n)
+                    SELECT hour,kind,name,bucket,band,on_ac,n,temp_sum,temp_min,temp_max,load_sum,delta_sum,delta_n,fan_sum,fan_n,throttle_n,gap_sum,gap_n,power_sum,power_n FROM agg_hour;
+                DROP TABLE agg_hour;
+                ALTER TABLE agg_hour_v8 RENAME TO agg_hour;
+
+                CREATE TABLE baseline_v8(
+                    epoch     INTEGER NOT NULL,
+                    kind      TEXT    NOT NULL,
+                    name      TEXT    NOT NULL,
+                    band      INTEGER NOT NULL,
+                    bucket    INTEGER NOT NULL,
+                    delta_avg REAL    NOT NULL,
+                    delta_p95 REAL,
+                    soak_rate REAL,
+                    fan_avg   REAL,
+                    minutes   INTEGER NOT NULL,
+                    updated   INTEGER NOT NULL,
+                    delta_se  REAL,
+                    temp_avg  REAL,
+                    gap_avg   REAL,
+                    power_avg REAL,
+                    mode      INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(epoch, kind, name, band, bucket, mode)
+                );
+                INSERT INTO baseline_v8(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg,power_avg)
+                    SELECT epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg,power_avg FROM baseline;
+                DROP TABLE baseline;
+                ALTER TABLE baseline_v8 RENAME TO baseline;
+
+                CREATE TABLE baseline_power_v8(
+                    epoch     INTEGER NOT NULL,
+                    kind      TEXT    NOT NULL,
+                    name      TEXT    NOT NULL,
+                    band      INTEGER NOT NULL,
+                    bucket    INTEGER NOT NULL,
+                    pband     INTEGER NOT NULL,
+                    delta_avg REAL    NOT NULL,
+                    fan_avg   REAL,
+                    temp_avg  REAL,
+                    gap_avg   REAL,
+                    power_avg REAL,
+                    minutes   INTEGER NOT NULL,
+                    updated   INTEGER NOT NULL,
+                    mode      INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(epoch, kind, name, band, bucket, pband, mode)
+                );
+                INSERT INTO baseline_power_v8(epoch,kind,name,band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated)
+                    SELECT epoch,kind,name,band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated FROM baseline_power;
+                DROP TABLE baseline_power;
+                ALTER TABLE baseline_power_v8 RENAME TO baseline_power;
+
+                ALTER TABLE events ADD COLUMN mode INTEGER NOT NULL DEFAULT 0;
+
+                PRAGMA user_version = 8;
+                """;
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+        }
     }
 }

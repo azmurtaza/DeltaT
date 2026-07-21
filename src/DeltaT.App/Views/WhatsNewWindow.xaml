@@ -1,0 +1,92 @@
+<Window x:Class="DeltaT.App.Views.WhatsNewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:ui="clr-namespace:DeltaT.App.Ui"
+        Title="DeltaT - what's new" Width="480" SizeToContent="Height"
+        MaxHeight="640"
+        Icon="pack://application:,,,/Assets/deltat.ico"
+        Background="{StaticResource Brush.BgGlow}" Foreground="{StaticResource Brush.Text}"
+        FontFamily="{StaticResource Font.Ui}" WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="38" ResizeBorderThickness="0"
+                            GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="38"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Rectangle Grid.RowSpan="2" Fill="{StaticResource Brush.BgDots}"/>
+
+        <!-- chrome bar -->
+        <Border Grid.Row="0" Background="{StaticResource Brush.Rail}"
+                BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,0,0,1">
+            <DockPanel Margin="16,0,4,0">
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ContentControl Style="{StaticResource Brand.Mark}"/>
+                    <Rectangle Width="22" Height="7" Fill="{StaticResource Brush.Hazard}"
+                               VerticalAlignment="Center" Margin="11,1,0,0"/>
+                    <Rectangle Width="1" Fill="{StaticResource Brush.Stroke}" Margin="14,7"/>
+                </StackPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource Button.Caption}" Content="&#xE8BB;"
+                        Click="OnCloseChrome" ToolTip="Close"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                <TextBlock Style="{StaticResource Text.OverlineFaint}" VerticalAlignment="Center"
+                           Margin="0,1,0,0" ui:Tracking.Text="WHAT'S NEW"/>
+            </DockPanel>
+        </Border>
+
+        <!-- Title stays pinned; the intro + item list scroll (the notes are detailed, so a long
+             release can overrun the window height); the GOT IT button stays pinned at the bottom. -->
+        <DockPanel Grid.Row="1" Margin="30,20,30,24">
+            <StackPanel DockPanel.Dock="Top">
+                <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="UPDATED"/>
+                <TextBlock x:Name="TitleText" Style="{StaticResource Text.H1}" FontSize="20" Margin="0,10,0,0"/>
+            </StackPanel>
+
+            <!-- Missing a feature you expected? Request it here. Opens the same reporter as
+                 Settings, preselected to "idea" (the user can still switch it to "bug"). -->
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,16,0,0">
+                <Button Style="{StaticResource Button.Primary}" Content="GOT IT"
+                        Padding="24,9" Click="OnCloseChrome"/>
+                <Button Style="{StaticResource Button.Ghost}" Content="REQUEST A FEATURE"
+                        Margin="10,0,0,0" Click="OnRequestFeature"/>
+            </StackPanel>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,-8,0" Padding="0,0,8,0">
+                <StackPanel>
+                    <TextBlock x:Name="IntroText" Style="{StaticResource Text.Body}" FontSize="12.5"
+                               LineHeight="19" TextWrapping="Wrap"/>
+
+                    <ItemsControl x:Name="ItemsHost" Margin="0,16,0,0"
+                                  ItemsSource="{Binding Items}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Rectangle Grid.Column="0" Width="3" Fill="{StaticResource Brush.Accent}"
+                                               VerticalAlignment="Stretch" Margin="0,2,12,2"/>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Style="{StaticResource Text.Body}" FontSize="13"
+                                                   FontWeight="SemiBold" TextWrapping="Wrap"
+                                                   Text="{Binding Title}"/>
+                                        <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="17"
+                                                   Margin="0,3,0,0" TextWrapping="Wrap" Text="{Binding Body}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</Window>

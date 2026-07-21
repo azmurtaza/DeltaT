@@ -25,7 +25,7 @@ public sealed class ScoreCoordinator
     private Dictionary<ComponentKind, ComponentScore> _latest = new();
     private bool _wasReady;
     private RepasteReport? _pendingRepasteReport;
-    private readonly HashSet<ComponentKind> _unfreezeLogged = new();
+    private readonly HashSet<(ComponentKind Kind, int Mode)> _unfreezeLogged = new();
 
     /// <summary>Dormancy beyond which the learned baseline is treated as unverified:
     /// the physical setup (dust, fans, an unlogged repaste) may have drifted while
@@ -128,47 +128,112 @@ public sealed class ScoreCoordinator
 
     private string EpochReason => _settings.Get(SettingsKeys.BaselineEpochReason) ?? "initial";
 
+    /// <summary>The ambient-source mode DeltaT is currently scoring against: 0 = outside
+    /// weather (the default), 1 = a user-set fixed indoor temperature. Everything scored,
+    /// learned and locked is keyed by this, so the two regimes keep entirely separate
+    /// baselines and one is never compared against the other. Read live from settings, so a
+    /// toggle takes effect on the next scoring pass.</summary>
+    public int ActiveMode => _settings.GetBool(SettingsKeys.IndoorFixedMode, false) ? 1 : 0;
+
+    /// <summary>When the current fixed-indoor reference began. Fixed mode floors its learning and
+    /// recent windows here, so aggregate rows tagged before the reference was set (or under a
+    /// previous fixed temperature) never feed the current fixed baseline.</summary>
+    private DateTimeOffset? FixedSince => _settings.GetTimestamp(SettingsKeys.IndoorFixedSince);
+
+    /// <summary>The window floor for a mode: the epoch start, except fixed mode also floors at the
+    /// moment its current indoor reference began, whichever is later. Weather mode is unaffected.</summary>
+    public DateTimeOffset EffectiveEpochStart(int mode)
+    {
+        DateTimeOffset epochStart = EpochStart;
+        return mode == 1 && FixedSince is { } fs && fs > epochStart ? fs : epochStart;
+    }
+
+    /// <summary>Whether a mode has any locked baseline yet (any component). Used by Settings to
+    /// decide when the first-time "this mode needs to calibrate" warning is warranted.</summary>
+    public bool HasBaseline(int mode) => PastedKinds.Any(k => LockFor(k, mode) is not null);
+
+    /// <summary>Fixed mode has begun learning at least once (a reference timestamp exists).</summary>
+    public bool FixedModeStarted => FixedSince is not null;
+
+    /// <summary>Mark fixed mode's reference as beginning now, if it never has. Called the first
+    /// time fixed mode is enabled, so its learning window floors at the switch-on moment (there is
+    /// no fixed-tagged data before it) without disturbing an existing fixed baseline on a re-enable.</summary>
+    public void EnsureFixedModeStarted(DateTimeOffset nowUtc)
+    {
+        if (FixedSince is null)
+            _settings.SetTimestamp(SettingsKeys.IndoorFixedSince, nowUtc);
+    }
+
+    /// <summary>Restart fixed-mode calibration because its indoor reference changed. The old fixed
+    /// baseline measured rise against a different indoor temperature, so its rows and lock are
+    /// dropped and the learning floor moves to now: fixed-tagged aggregates captured at the old
+    /// reference sit before the floor and are ignored. Weather mode is never touched.</summary>
+    public void ResetFixedBaseline(DateTimeOffset nowUtc)
+    {
+        _settings.SetTimestamp(SettingsKeys.IndoorFixedSince, nowUtc);
+        foreach (ComponentKind kind in PastedKinds)
+        {
+            ClearLock(kind, 1);
+            _settings.Set($"{SettingsKeys.BaselineMeterPeak}.{kind}{ModeSuffix(1)}", "");
+            _settings.Set($"{SettingsKeys.BaselineScoreShown}.{kind}{ModeSuffix(1)}", "");
+        }
+        _repo.DeleteBaselineForMode(Epoch, 1);
+        _wasReady = false;
+    }
+
     // ------------------------------------------------------------- lock plumbing
 
     private static ComponentKind[] PastedKinds { get; } = { ComponentKind.Cpu, ComponentKind.GpuDiscrete };
 
-    private static string LockKey(ComponentKind kind) => $"{SettingsKeys.BaselineLockedUtc}.{kind}";
+    private static readonly int[] AllModes = { 0, 1 };
 
-    private static string EarnedKey(ComponentKind kind) => $"{SettingsKeys.BaselineLockEarned}.{kind}";
+    /// <summary>Settings-key suffix for a mode. Mode 0 (weather) uses the original, unsuffixed
+    /// keys so an existing install's locks/markers keep working byte-for-byte; the fixed-indoor
+    /// mode's keys live beside them under ".fixed".</summary>
+    private static string ModeSuffix(int mode) => mode == 0 ? "" : ".fixed";
 
-    /// <summary>This component's lock, falling back to the pre-per-component global key.</summary>
-    private DateTimeOffset? LockFor(ComponentKind kind) =>
-        _settings.GetTimestamp(LockKey(kind)) ?? _settings.GetTimestamp(SettingsKeys.BaselineLockedUtc);
+    private static string LockKey(ComponentKind kind, int mode) => $"{SettingsKeys.BaselineLockedUtc}.{kind}{ModeSuffix(mode)}";
 
-    private bool LockEarned(ComponentKind kind) => _settings.GetBool(EarnedKey(kind), false);
+    private static string EarnedKey(ComponentKind kind, int mode) => $"{SettingsKeys.BaselineLockEarned}.{kind}{ModeSuffix(mode)}";
 
-    private void SetLock(ComponentKind kind, DateTimeOffset ts, bool earned)
+    /// <summary>This component's lock for a mode. Weather mode falls back to the pre-per-component
+    /// global key (legacy installs); fixed mode has no legacy global.</summary>
+    private DateTimeOffset? LockFor(ComponentKind kind, int mode) => mode == 0
+        ? _settings.GetTimestamp(LockKey(kind, 0)) ?? _settings.GetTimestamp(SettingsKeys.BaselineLockedUtc)
+        : _settings.GetTimestamp(LockKey(kind, mode));
+
+    private bool LockEarned(ComponentKind kind, int mode) => _settings.GetBool(EarnedKey(kind, mode), false);
+
+    private void SetLock(ComponentKind kind, DateTimeOffset ts, bool earned, int mode)
     {
-        _settings.SetTimestamp(LockKey(kind), ts);
-        _settings.SetBool(EarnedKey(kind), earned);
+        _settings.SetTimestamp(LockKey(kind, mode), ts);
+        _settings.SetBool(EarnedKey(kind, mode), earned);
     }
 
-    /// <summary>Clears one component's lock. If the lock came from the shared legacy
-    /// key, the other components inherit it as their own per-component lock first, so
+    /// <summary>Clears one component's lock for a mode. In weather mode, if the lock came from the
+    /// shared legacy key, the other components inherit it as their own per-component lock first, so
     /// healing one component never silently unlocks another.</summary>
-    private void ClearLock(ComponentKind kind)
+    private void ClearLock(ComponentKind kind, int mode)
     {
-        if (_settings.GetTimestamp(SettingsKeys.BaselineLockedUtc) is { } global)
+        if (mode == 0 && _settings.GetTimestamp(SettingsKeys.BaselineLockedUtc) is { } global)
         {
             foreach (ComponentKind other in PastedKinds)
             {
-                if (other != kind && _settings.GetTimestamp(LockKey(other)) is null)
-                    _settings.SetTimestamp(LockKey(other), global);
+                if (other != kind && _settings.GetTimestamp(LockKey(other, 0)) is null)
+                    _settings.SetTimestamp(LockKey(other, 0), global);
             }
             _settings.Set(SettingsKeys.BaselineLockedUtc, "");
         }
-        _settings.Set(LockKey(kind), "");
-        _settings.Set(EarnedKey(kind), "");
+        _settings.Set(LockKey(kind, mode), "");
+        _settings.Set(EarnedKey(kind, mode), "");
     }
 
+    /// <summary>Any baseline ever locked, in any mode (plus the legacy global key). Used by
+    /// startup grandfather/dormancy logic, which cares only whether this machine has ever
+    /// earned a reference.</summary>
     private bool AnyLockExists() =>
         _settings.GetTimestamp(SettingsKeys.BaselineLockedUtc) is not null
-        || PastedKinds.Any(k => _settings.GetTimestamp(LockKey(k)) is not null);
+        || AllModes.Any(m => PastedKinds.Any(k => _settings.GetTimestamp(LockKey(k, m)) is not null));
 
     // ---------------------------------------------------------------- scoring
 
@@ -196,12 +261,13 @@ public sealed class ScoreCoordinator
         if (snap is null)
             return results;
 
-        DateTimeOffset epochStart = EpochStart;
+        int mode = ActiveMode;
+        DateTimeOffset epochStart = EffectiveEpochStart(mode);
         bool anyReady = false;
 
         foreach (ComponentReading c in snap.Components.Where(c => c.Kind.HasPaste()))
         {
-            ComponentScore score = ScoreComponent(c, epochStart, nowUtc, out bool ready);
+            ComponentScore score = ScoreComponent(c, epochStart, nowUtc, mode, out bool ready);
             results[c.Kind] = score;
             anyReady |= ready;
         }
@@ -217,9 +283,9 @@ public sealed class ScoreCoordinator
         {
             _settings.SetInt(SettingsKeys.BaselineOutcomeReportedEpoch, Epoch);
             if (EpochReason == "recalibrate")
-                ReportRecalibrationComplete(nowUtc);
+                ReportRecalibrationComplete(nowUtc, mode);
             else
-                ReportRepasteOutcome(nowUtc);
+                ReportRepasteOutcome(nowUtc, mode);
         }
 
         _settings.SetTimestamp(SettingsKeys.LastSeenUtc, nowUtc); // heartbeat for dormancy detection
@@ -236,14 +302,15 @@ public sealed class ScoreCoordinator
     /// isn't a locked baseline or enough post-lock weeks yet.</summary>
     public TrendResult ComputeTrend(ComponentKind kind, DateTimeOffset nowUtc)
     {
-        if (!kind.HasPaste() || LockFor(kind) is not { } locked)
+        int mode = ActiveMode;
+        if (!kind.HasPaste() || LockFor(kind, mode) is not { } locked)
             return TrendResult.None;
-        List<BaselineRow> baseline = _repo.GetBaseline(Epoch).Where(r => r.Kind == kind).ToList();
+        List<BaselineRow> baseline = _repo.GetBaseline(Epoch, mode).Where(r => r.Kind == kind).ToList();
         if (baseline.Count == 0)
             return TrendResult.None;
         string name = baseline[0].Name;
         IReadOnlyList<WeeklyLoadedCell> cells =
-            _repo.GetWeeklyLoadedCells(kind, name, locked.ToUnixTimeSeconds(), nowUtc.ToUnixTimeSeconds());
+            _repo.GetWeeklyLoadedCells(kind, name, locked.ToUnixTimeSeconds(), nowUtc.ToUnixTimeSeconds(), mode);
         return TrendAnalyzer.Analyze(TrendAnalyzer.BuildWeekly(cells, baseline));
     }
 
@@ -254,10 +321,10 @@ public sealed class ScoreCoordinator
     /// things *worse* is called out just as clearly as one that helped. The verdict
     /// is stashed for the remarks layer to surface as a remark (and a toast when the
     /// news is bad).</summary>
-    private void ReportRepasteOutcome(DateTimeOffset nowUtc)
+    private void ReportRepasteOutcome(DateTimeOffset nowUtc, int mode)
     {
-        IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1);
-        IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch);
+        IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1, mode);
+        IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch, mode);
 
         var perComponent = new List<(ComponentKind Kind, BaselineComparison Cmp)>();
         foreach (ComponentKind kind in PastedKinds)
@@ -308,11 +375,11 @@ public sealed class ScoreCoordinator
     /// new data did NOT match the old baseline (else it would have been adopted), so
     /// tell the user what actually moved when the comparison is conclusive. That
     /// difference is the answer they recalibrated to get.</summary>
-    private void ReportRecalibrationComplete(DateTimeOffset nowUtc)
+    private void ReportRecalibrationComplete(DateTimeOffset nowUtc, int mode)
     {
         var changes = new List<string>();
-        IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1);
-        IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch);
+        IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1, mode);
+        IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch, mode);
         foreach (ComponentKind kind in PastedKinds)
         {
             BaselineComparison cmp = BaselineComparer.Compare(before, after, kind);
@@ -325,14 +392,14 @@ public sealed class ScoreCoordinator
             ? $" Versus the old baseline (weather- and fan-corrected): {string.Join(", ", changes)}."
             : "";
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
-            $"Recalibration complete. A fresh baseline is locked in and scoring is back on solid ground.{comparison}", null);
+            $"Recalibration complete. A fresh baseline is locked in and scoring is back on solid ground.{comparison}", null, mode);
     }
 
     private ComponentScore ScoreComponent(
-        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset nowUtc, out bool ready)
+        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset nowUtc, int mode, out bool ready)
     {
-        DateTimeOffset? locked = LockFor(c.Kind);
-        CalibrationState cal = AssessWindow(c, epochStart, locked, nowUtc, out var baselineStats, out long learningEndTs);
+        DateTimeOffset? locked = LockFor(c.Kind, mode);
+        CalibrationState cal = AssessWindow(c, epochStart, locked, nowUtc, mode, out var baselineStats, out long learningEndTs);
 
         // Self-heal: a lock whose own learning window doesn't assess ready was never
         // earned by a confidence pass — it's a freeze left behind by the old backfill
@@ -341,30 +408,30 @@ public sealed class ScoreCoordinator
         // lock too old to still have its learning minutes (pruned at 90 days) is only
         // healed when its stored baseline never learned a loaded cell — a reference that
         // can't score paste anyway.
-        if (locked is not null && !cal.Ready && !LockEarned(c.Kind) && ShouldUnfreeze(c, locked.Value, nowUtc))
+        if (locked is not null && !cal.Ready && !LockEarned(c.Kind, mode) && ShouldUnfreeze(c, locked.Value, nowUtc, mode))
         {
-            ClearLock(c.Kind);
-            _repo.DeleteBaseline(Epoch, c.Kind, c.Name);
-            if (_unfreezeLogged.Add(c.Kind))
+            ClearLock(c.Kind, mode);
+            _repo.DeleteBaseline(Epoch, c.Kind, c.Name, mode);
+            if (_unfreezeLogged.Add((c.Kind, mode)))
             {
                 _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "system", c.Kind.ToString(), c.Name, 1,
-                    $"Calibration self-heal: {c.Kind.Label()} baseline learning had been frozen prematurely by an earlier version. Learning resumed with all of this epoch's data.", null);
+                    $"Calibration self-heal: {c.Kind.Label()} baseline learning had been frozen prematurely by an earlier version. Learning resumed with all of this epoch's data.", null, mode);
             }
             locked = null;
-            cal = AssessWindow(c, epochStart, null, nowUtc, out baselineStats, out learningEndTs);
+            cal = AssessWindow(c, epochStart, null, nowUtc, mode, out baselineStats, out learningEndTs);
         }
 
         // A pre-marker legit lock that still assesses ready earns its marker now, so it
         // stays trusted even after its learning minutes age out of retention.
-        if (locked is not null && cal.Ready && !LockEarned(c.Kind))
-            _settings.SetBool(EarnedKey(c.Kind), true);
+        if (locked is not null && cal.Ready && !LockEarned(c.Kind, mode))
+            _settings.SetBool(EarnedKey(c.Kind, mode), true);
 
         // The moment confidence first crosses the bar, freeze this component's learning
         // window so the trusted reference never drifts over newer (possibly degraded) data.
         bool justLocked = false;
         if (locked is null && cal.Ready)
         {
-            SetLock(c.Kind, nowUtc, earned: true);
+            SetLock(c.Kind, nowUtc, earned: true, mode);
             locked = nowUtc;
             justLocked = true;
         }
@@ -376,7 +443,7 @@ public sealed class ScoreCoordinator
         // making the user re-earn a baseline nothing invalidated. If behavior moved,
         // learning continues — that difference is what the recalibrate was for.
         else if (locked is null && Epoch > 0 && EpochReason == "recalibrate"
-                 && TryAdoptPreviousBaseline(c, cal, nowUtc))
+                 && TryAdoptPreviousBaseline(c, cal, nowUtc, mode))
         {
             locked = nowUtc;
         }
@@ -396,8 +463,8 @@ public sealed class ScoreCoordinator
         // new session reveals variance (that's the statistics working), but a meter falling
         // 76% → 58% reads as the app losing its homework. Display never regresses; the lock
         // still waits for real confidence.
-        double progress = RatchetMeter(c.Kind, cal.DisplayProgress);
-        double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs);
+        double progress = RatchetMeter(c.Kind, cal.DisplayProgress, mode);
+        double? soakBaseline = _repo.GetAverageSoakRate(c.Kind, epochStartTs, learningEndTs, mode);
 
         // Recent pool: a rolling 7 days, floored at epoch start so it never reaches back
         // across a repaste/recalibrate into the previous paste's minutes. It deliberately
@@ -413,22 +480,22 @@ public sealed class ScoreCoordinator
         // over and "recent" is post-lock only, as drift detection needs.
         long weekAgo = nowTs - (long)TimeSpan.FromDays(7).TotalSeconds;
         long recentFromTs = locked is not null ? Math.Max(epochStartTs, weekAgo) : weekAgo;
-        var recentStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, recentFromTs, nowTs));
+        var recentStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, recentFromTs, nowTs, mode: mode));
         double recentHours = Math.Max(1, (nowTs - recentFromTs) / 3600.0);
 
-        bool scoreShownBefore = _settings.GetInt(ScoreShownKey(c.Kind)) == Epoch;
+        bool scoreShownBefore = _settings.GetInt(ScoreShownKey(c.Kind, mode)) == Epoch;
 
         var input = new ScoreInput(
             c.Kind, c.Name,
             Recent: recentStats.Select(s => new RecentBucketObs(
                 s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg, s.PowerAvg)).ToList(),
-            Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null && !justLocked, baselineStats, soakBaseline, nowUtc),
+            Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null && !justLocked, baselineStats, soakBaseline, nowUtc, mode),
             RecentWindowHours: recentHours,
-            ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs),
-            SoakRateRecent: _repo.GetAverageSoakRate(c.Kind, recentFromTs, nowTs),
+            ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs, mode),
+            SoakRateRecent: _repo.GetAverageSoakRate(c.Kind, recentFromTs, nowTs, mode),
             SoakRateBaseline: soakBaseline,
-            CooldownRateRecent: _repo.GetAverageCooldownRate(c.Kind, recentFromTs, nowTs),
-            CooldownRateBaseline: _repo.GetAverageCooldownRate(c.Kind, epochStartTs, learningEndTs),
+            CooldownRateRecent: _repo.GetAverageCooldownRate(c.Kind, recentFromTs, nowTs, mode),
+            CooldownRateBaseline: _repo.GetAverageCooldownRate(c.Kind, epochStartTs, learningEndTs, mode),
             LimitC: c.ThrottleLimitC,
             Profile: c.Kind == ComponentKind.Cpu ? _profile.Cpu : _profile.Gpu,
             BaselineReady: ready,
@@ -446,7 +513,7 @@ public sealed class ScoreCoordinator
         // is an entry gate, not a hold requirement (see ScoringEngine), so the score
         // keeps updating live instead of vanishing when a noisy session dips confidence.
         if (score.Provisional && !scoreShownBefore)
-            _settings.SetInt(ScoreShownKey(c.Kind), Epoch);
+            _settings.SetInt(ScoreShownKey(c.Kind, mode), Epoch);
         return score;
     }
 
@@ -455,14 +522,14 @@ public sealed class ScoreCoordinator
         ? _settings.GetDouble(SettingsKeys.ConcernOverrideCpuC)
         : _settings.GetDouble(SettingsKeys.ConcernOverrideGpuC);
 
-    private static string ScoreShownKey(ComponentKind kind) => $"{SettingsKeys.BaselineScoreShown}.{kind}";
+    private static string ScoreShownKey(ComponentKind kind, int mode) => $"{SettingsKeys.BaselineScoreShown}.{kind}{ModeSuffix(mode)}";
 
     /// <summary>Displayed calibration progress never regresses within an epoch: returns
     /// the high-water mark of what this component's meter has already shown, persisting
     /// new peaks. A new epoch (repaste/recalibrate) starts the ratchet fresh.</summary>
-    private double RatchetMeter(ComponentKind kind, double current)
+    private double RatchetMeter(ComponentKind kind, double current, int mode)
     {
-        string key = $"{SettingsKeys.BaselineMeterPeak}.{kind}";
+        string key = $"{SettingsKeys.BaselineMeterPeak}.{kind}{ModeSuffix(mode)}";
         double peak = 0;
         if (_settings.Get(key) is { } stored)
         {
@@ -487,7 +554,7 @@ public sealed class ScoreCoordinator
     /// never reaches confidence, so a lightly used machine honestly keeps learning
     /// instead of locking a hollow baseline.</summary>
     private CalibrationState AssessWindow(
-        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset? locked, DateTimeOffset nowUtc,
+        ComponentReading c, DateTimeOffset epochStart, DateTimeOffset? locked, DateTimeOffset nowUtc, int mode,
         out List<BucketStat> baselineStats, out long learningEndTs)
     {
         long epochStartTs = epochStart.ToUnixTimeSeconds();
@@ -496,15 +563,15 @@ public sealed class ScoreCoordinator
         learningEndTs = Math.Min(locked?.ToUnixTimeSeconds() ?? nowTs, nowTs);
         long end = learningEndTs;
 
-        // Baseline pool: learning window, AC power only, known ambient only.
-        baselineStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, epochStartTs, end));
+        // Baseline pool: learning window, AC power only, known ambient only, active mode only.
+        baselineStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, epochStartTs, end, mode: mode));
 
         int loadedSessions = _repo.CountLoadedSessions(
-            c.Kind, c.Name, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds);
+            c.Kind, c.Name, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode);
 
         return BaselineBuilder.Assess(epochStart, nowUtc, baselineStats,
             (bucket, band) => _repo.GetSessionMeanDeltas(
-                c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds),
+                c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode),
             loadedSessions,
             pasteIsFresh: EpochReason == "repaste");
     }
@@ -515,14 +582,14 @@ public sealed class ScoreCoordinator
     /// the comparer needs ≥30 matched loaded minutes, the weighted change must sit
     /// within the practical noise floor (not merely within a thin sample's wide error
     /// bars), and at least two independent loaded bouts must back the new data.</summary>
-    private bool TryAdoptPreviousBaseline(ComponentReading c, CalibrationState cal, DateTimeOffset nowUtc)
+    private bool TryAdoptPreviousBaseline(ComponentReading c, CalibrationState cal, DateTimeOffset nowUtc, int mode)
     {
         if (cal.LoadedSessions < 2)
             return false;
-        IReadOnlyList<BaselineRow> previous = _repo.GetBaseline(Epoch - 1);
+        IReadOnlyList<BaselineRow> previous = _repo.GetBaseline(Epoch - 1, mode);
         if (previous.Count == 0)
             return false;
-        List<BaselineRow> current = _repo.GetBaseline(Epoch)
+        List<BaselineRow> current = _repo.GetBaseline(Epoch, mode)
             .Where(r => r.Kind == c.Kind && r.Name == c.Name).ToList(); // provisional rows from earlier passes
         if (current.Count == 0)
             return false;
@@ -537,42 +604,46 @@ public sealed class ScoreCoordinator
             .Where(r => r.Kind == c.Kind)
             .Select(r => r with { Epoch = Epoch, Name = c.Name, Updated = nowTs })
             .ToList());
-        SetLock(c.Kind, nowUtc, earned: true);
+        SetLock(c.Kind, nowUtc, earned: true, mode);
         // The adoption IS this epoch's outcome — don't also announce "recalibration
         // complete" as if a from-scratch relearn had finished.
         _settings.SetInt(SettingsKeys.BaselineOutcomeReportedEpoch, Epoch);
         _repo.InsertEvent(nowTs, "remark", c.Kind.ToString(), c.Name, 1,
-            $"Recalibration check: {c.Kind.Label()} behaves exactly like its old baseline at matching load and weather (fan-corrected, within {cmp.WeightedDeltaChangeC:+0.#;-0.#}°). The old reference carries over, so there's no point relearning what hasn't changed.", null);
+            $"Recalibration check: {c.Kind.Label()} behaves exactly like its old baseline at matching load and weather (fan-corrected, within {cmp.WeightedDeltaChangeC:+0.#;-0.#}°). The old reference carries over, so there's no point relearning what hasn't changed.", null, mode);
         return true;
     }
 
-    private bool ShouldUnfreeze(ComponentReading c, DateTimeOffset locked, DateTimeOffset nowUtc)
+    private bool ShouldUnfreeze(ComponentReading c, DateTimeOffset locked, DateTimeOffset nowUtc, int mode)
     {
         if (nowUtc - locked < LockReassessableFor)
             return true; // the window's minutes still exist, and they say "not ready"
         // Too old to re-judge fairly: heal only a reference that never learned any
         // loaded cell — it can't score paste, so there is nothing to lose.
-        return !_repo.GetBaseline(Epoch).Any(r =>
+        return !_repo.GetBaseline(Epoch, mode).Any(r =>
             r.Kind == c.Kind && r.Name == c.Name && r.Bucket is LoadBucket.Heavy or LoadBucket.Medium or LoadBucket.Max);
     }
 
     private List<BaselineBucket> BuildBaseline(
         ComponentReading c, long fromTs, long lockedToTs, long nowTs, bool locked,
-        IReadOnlyList<BucketStat> windowStats, double? soakAvg, DateTimeOffset nowUtc)
+        IReadOnlyList<BucketStat> windowStats, double? soakAvg, DateTimeOffset nowUtc, int mode)
     {
+        // Every built row is stamped with the active mode before it is stored, so the two
+        // ambient-source regimes keep entirely separate baseline rows.
+        List<BaselineRow> Build(IReadOnlyList<BucketStat> stats, long toTs) => BaselineBuilder.Build(
+            Epoch, c.Kind, c.Name, stats,
+            (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs, mode),
+            (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, toTs, BaselineBuilder.SessionGapSeconds, mode),
+            soakAvg, nowUtc).Select(r => r with { Mode = mode }).ToList();
+
         List<BaselineRow> rows;
         if (!locked)
         {
             // Still learning (or locking on this very pass): rebuild the reference from
             // the learning window and persist it — at the lock transition this is the
             // write that makes the stored rows the durable reference from here on.
-            rows = BaselineBuilder.Build(
-                Epoch, c.Kind, c.Name, windowStats,
-                (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs),
-                (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs, BaselineBuilder.SessionGapSeconds),
-                soakAvg, nowUtc);
+            rows = Build(windowStats, lockedToTs);
             _repo.UpsertBaseline(rows);
-            PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc);
+            PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc, mode);
         }
         else
         {
@@ -580,7 +651,7 @@ public sealed class ScoreCoordinator
             // every pass silently evaporated the baseline once the learning window's
             // minutes aged past the 90-day retention — the score kept its verdict but
             // lost every cell it was judging against.
-            rows = _repo.GetBaseline(Epoch).Where(r => r.Kind == c.Kind && r.Name == c.Name).ToList();
+            rows = _repo.GetBaseline(Epoch, mode).Where(r => r.Kind == c.Kind && r.Name == c.Name).ToList();
 
             // Stored rows missing under a live lock (seeded store, lost table): repair
             // them from the frozen learning window while its minutes still exist. The
@@ -588,13 +659,9 @@ public sealed class ScoreCoordinator
             // seep into the healthy reference.
             if (rows.Count == 0 && windowStats.Count > 0)
             {
-                rows = BaselineBuilder.Build(
-                    Epoch, c.Kind, c.Name, windowStats,
-                    (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs),
-                    (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, lockedToTs, BaselineBuilder.SessionGapSeconds),
-                    soakAvg, nowUtc);
+                rows = Build(windowStats, lockedToTs);
                 _repo.UpsertBaseline(rows);
-                PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc);
+                PersistPowerSubcells(c, fromTs, lockedToTs, nowUtc, mode);
             }
 
             // Keep the baseline honest about weather it meets after the lock: learn a
@@ -606,15 +673,11 @@ public sealed class ScoreCoordinator
             if (nowTs > lockedToTs)
             {
                 var known = rows.Select(r => (r.Bucket, r.Band)).ToHashSet();
-                List<BucketStat> newBandStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, fromTs, nowTs))
+                List<BucketStat> newBandStats = FilterForScoring(_repo.GetBucketStats(c.Kind, c.Name, fromTs, nowTs, mode: mode))
                     .Where(s => !known.Contains((s.Bucket, s.Band))).ToList();
                 if (newBandStats.Count > 0)
                 {
-                    List<BaselineRow> newRows = BaselineBuilder.Build(
-                        Epoch, c.Kind, c.Name, newBandStats,
-                        (bucket, band) => _repo.GetMinuteDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, nowTs),
-                        (bucket, band) => _repo.GetSessionMeanDeltas(c.Kind, c.Name, bucket, band, onAc: true, fromTs, nowTs, BaselineBuilder.SessionGapSeconds),
-                        soakAvg, nowUtc);
+                    List<BaselineRow> newRows = Build(newBandStats, nowTs);
                     _repo.UpsertBaseline(newRows);
                     rows.AddRange(newRows);
                 }
@@ -627,7 +690,7 @@ public sealed class ScoreCoordinator
         // a reading to its own power regime. They sit beside the blended cells; the scoring
         // rise/power match picks the nearest-power one, and every other consumer ignores them
         // (IsPowerSubcell). A bucket with no sub-cells is unchanged.
-        foreach (BaselinePowerRow s in _repo.GetBaselinePower(Epoch, c.Kind, c.Name))
+        foreach (BaselinePowerRow s in _repo.GetBaselinePower(Epoch, c.Kind, c.Name, mode))
             cells.Add(new BaselineBucket(s.Bucket, s.Band, s.DeltaAvg, null, s.FanAvg, s.Minutes,
                 s.TempAvg, s.GapAvg, s.PowerAvg, IsPowerSubcell: true));
         return cells;
@@ -637,11 +700,12 @@ public sealed class ScoreCoordinator
     /// given window (the same window the blended baseline was built from), so they freeze with the
     /// lock. Passing an empty result clears stale sub-cells, so a bucket that stops being
     /// multi-modal falls back to its blended cell.</summary>
-    private void PersistPowerSubcells(ComponentReading c, long fromTs, long toTs, DateTimeOffset nowUtc)
+    private void PersistPowerSubcells(ComponentReading c, long fromTs, long toTs, DateTimeOffset nowUtc, int mode)
     {
-        IReadOnlyList<PowerBandStat> pstats = _repo.GetPowerBandStats(c.Kind, c.Name, fromTs, toTs, BaselineBuilder.PowerBandWidthW);
-        List<BaselinePowerRow> sub = BaselineBuilder.BuildPowerSubcells(Epoch, c.Kind, c.Name, pstats, nowUtc);
-        _repo.UpsertBaselinePower(Epoch, c.Kind, c.Name, sub);
+        IReadOnlyList<PowerBandStat> pstats = _repo.GetPowerBandStats(c.Kind, c.Name, fromTs, toTs, BaselineBuilder.PowerBandWidthW, mode);
+        List<BaselinePowerRow> sub = BaselineBuilder.BuildPowerSubcells(Epoch, c.Kind, c.Name, pstats, nowUtc)
+            .Select(r => r with { Mode = mode }).ToList();
+        _repo.UpsertBaselinePower(Epoch, c.Kind, c.Name, sub, mode);
     }
 
     /// <summary>Paste scoring only trusts samples on AC power with known ambient —
@@ -656,7 +720,7 @@ public sealed class ScoreCoordinator
         StartNewEpoch(nowUtc, "repaste");
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "repaste", null, null, 1,
             string.IsNullOrWhiteSpace(note) ? "Thermal paste replaced. New baseline learning started." : $"Thermal paste replaced: {note}",
-            null);
+            null, ActiveMode);
         Compute(nowUtc);
     }
 
@@ -672,7 +736,7 @@ public sealed class ScoreCoordinator
             string.IsNullOrWhiteSpace(note)
                 ? "Baseline recalibration started. DeltaT will verify the machine against its old baseline under real load, keep it if nothing changed, and relearn only what did. History and trends stay put."
                 : $"Baseline recalibration started: {note}",
-            null);
+            null, ActiveMode);
         Compute(nowUtc);
     }
 
@@ -682,11 +746,14 @@ public sealed class ScoreCoordinator
         _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
         _settings.Set(SettingsKeys.BaselineEpochReason, reason);
         _settings.Set(SettingsKeys.BaselineLockedUtc, ""); // fresh epoch: windows grow again until they re-lock
-        foreach (ComponentKind kind in PastedKinds)
-        {
-            _settings.Set(LockKey(kind), "");
-            _settings.Set(EarnedKey(kind), "");
-        }
+        // A repaste or recalibrate is a physical change to the machine that both ambient-source
+        // modes must relearn against, so clear the locks for every mode, not just the active one.
+        foreach (int mode in AllModes)
+            foreach (ComponentKind kind in PastedKinds)
+            {
+                _settings.Set(LockKey(kind, mode), "");
+                _settings.Set(EarnedKey(kind, mode), "");
+            }
         _wasReady = false;
         BaselineStale = false; // a fresh learning window supersedes the stale one
         DormantDays = 0;

@@ -46,6 +46,16 @@ public static class DemoSeeder
     /// boosted (a mixed window would measure the blend, not the regime).</summary>
     private const double BoostOnDaysAgo = 10.0;
 
+    /// <summary>Undervolt scenario: the baseline learns at stock power, then the user
+    /// undervolts and the recent window draws this fraction of it. Stays inside the
+    /// engine's 0.5–2.0 comparability clamp, so the reading is corrected rather than sat
+    /// out (unlike a deep power cap, which is deliberately not comparable).</summary>
+    private const double UndervoltScale = 0.75;
+
+    /// <summary>Days ago the undervolt is applied. Outside the 7-day recent window, so
+    /// every recent reading is undervolted rather than a blend of both regimes.</summary>
+    private const double UndervoltDaysAgo = 10.0;
+
     /// <param name="provisional">When true, start the epoch just two days ago and leave
     /// the baseline unlocked, so the score is still calibrating but far enough along to
     /// show a provisional estimate — for screenshotting the pre-lock UI.</param>
@@ -55,7 +65,11 @@ public static class DemoSeeder
     /// state (one component scored, one still calibrating) that the dashboard has to
     /// report honestly. Only the GPU gets a lock key: the shared legacy key would be
     /// inherited by the CPU too (see ScoreCoordinator.LockFor) and lock it by proxy.</param>
-    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc, bool provisional = false, bool overclock = false, bool lightCpu = false)
+    /// <param name="undervolt">The mirror of <paramref name="overclock"/>: the baseline
+    /// learns at stock watts, then the recent window draws 25% less (an undervolt, a lower
+    /// power limit). The die runs cooler with the cooler untouched, so the engine must
+    /// report a power change and an unchanged thermal resistance, not an improvement.</param>
+    public static void Seed(DeltaTDb db, TelemetryRepository repo, SettingsStore settings, bool degraded, DateTimeOffset nowUtc, bool provisional = false, bool overclock = false, bool lightCpu = false, bool undervolt = false)
     {
         ClearAll(db);
 
@@ -86,11 +100,11 @@ public static class DemoSeeder
         }
         SeedWeather(settings, nowUtc);
 
-        List<MinuteAccum> minutes = GenerateTimeline(degraded, overclock, lightCpu, nowUtc);
+        List<MinuteAccum> minutes = GenerateTimeline(degraded, overclock, lightCpu, undervolt, nowUtc);
         repo.UpsertMinutes(minutes);
         RollupHours(db);
 
-        SeedEvents(repo, nowUtc, degraded, overclock);
+        SeedEvents(repo, nowUtc, degraded, overclock, undervolt);
     }
 
     // ---------------------------------------------------------------- timeline
@@ -99,9 +113,9 @@ public static class DemoSeeder
     /// Load follows a daily rhythm (idle nights, working days, gaming evenings, the
     /// odd render/compile burst); temperature is ambient + a load-driven rise + a
     /// scenario-dependent excess that grows toward the present in the repaste case.</summary>
-    private static List<MinuteAccum> GenerateTimeline(bool degraded, bool overclock, bool lightCpu, DateTimeOffset nowUtc)
+    private static List<MinuteAccum> GenerateTimeline(bool degraded, bool overclock, bool lightCpu, bool undervolt, DateTimeOffset nowUtc)
     {
-        var rng = new Random(degraded ? 4242 : overclock ? 9091 : lightCpu ? 5150 : 1717);
+        var rng = new Random(undervolt ? 6270 : degraded ? 4242 : overclock ? 9091 : lightCpu ? 5150 : 1717);
         DateTimeOffset start = FloorMinute(nowUtc.AddDays(-HistoryDays));
         int totalMinutes = (int)(nowUtc - start).TotalMinutes;
 
@@ -148,7 +162,7 @@ public static class DemoSeeder
             // ΔT ≈ P × R_thermal: with the cooler unchanged, the whole rise scales with
             // the watts. The excess (a thermal-resistance fault) is added after, since a
             // degraded joint is a worse R, not a power change.
-            double pf = PowerFactor(daysAgo, overclock);
+            double pf = PowerFactor(daysAgo, overclock, undervolt);
 
             double cpuNoise = Noise(rng, 1.2), gpuNoise = Noise(rng, 1.0);
             double cpuStock = 20 + cpuLoad / 100.0 * 42 + excessCpu + cpuNoise;
@@ -220,11 +234,14 @@ public static class DemoSeeder
     /// <summary>Degradation curve: flat through the learning window, then a curved
     /// climb toward the present (steeper near the end) — the visible "paste drying
     /// out" trend. Healthy machines drift only a degree or two over a month.</summary>
-    /// <summary>Power draw relative to stock. Only the overclock scenario moves it: the
-    /// learning window runs boost-off, then boost flips on before the recent window opens.
-    /// A step, not a ramp, because that is what flipping a boost toggle looks like.</summary>
-    private static double PowerFactor(double daysAgo, bool overclock) =>
-        overclock && daysAgo >= BoostOnDaysAgo ? BoostOffScale : 1.0;
+    /// <summary>Power draw relative to stock. Two scenarios move it, in opposite
+    /// directions: overclock learns the baseline boost-off and flips boost on before the
+    /// recent window opens; undervolt learns at stock and drops the recent window's watts.
+    /// A step, not a ramp, because that is what flipping a power knob looks like.</summary>
+    private static double PowerFactor(double daysAgo, bool overclock, bool undervolt) =>
+        overclock && daysAgo >= BoostOnDaysAgo ? BoostOffScale
+        : undervolt && daysAgo < UndervoltDaysAgo ? UndervoltScale
+        : 1.0;
 
     private static double Excess(double daysAgo, bool degraded, bool cpuPeak)
     {
@@ -299,7 +316,7 @@ public static class DemoSeeder
 
     // ------------------------------------------------------------------ events
 
-    private static void SeedEvents(TelemetryRepository repo, DateTimeOffset now, bool degraded, bool overclock = false)
+    private static void SeedEvents(TelemetryRepository repo, DateTimeOffset now, bool degraded, bool overclock = false, bool undervolt = false)
     {
         long At(double daysAgo) => now.AddDays(-daysAgo).ToUnixTimeSeconds();
         void Ev(double daysAgo, string type, ComponentKind? kind, int sev, string msg, string? data = null) =>
@@ -308,7 +325,7 @@ public static class DemoSeeder
         // proportion to the missing watts. Tag each rate with the factor in force that day.
         void Soak(double daysAgo, double cpuRate, double gpuRate)
         {
-            double pf = PowerFactor(daysAgo, overclock);
+            double pf = PowerFactor(daysAgo, overclock, undervolt);
             string R(double v) => (v * pf).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
             Ev(daysAgo, "soak", ComponentKind.Cpu, 0, "Heat-soak measured on load onset.", $"{{\"rate\":{R(cpuRate)}}}");
             Ev(daysAgo, "soak", ComponentKind.GpuDiscrete, 0, "Heat-soak measured on load onset.", $"{{\"rate\":{R(gpuRate)}}}");
@@ -327,6 +344,18 @@ public static class DemoSeeder
         {
             Ev(BoostOnDaysAgo, "remark", null, 1, "CPU package power jumped about 39% at the same load. Nothing about the cooling changed, so DeltaT is judging every comparison at equal wattage from here.");
             Ev(4, "remark", ComponentKind.Cpu, 0, "Weekly check-in: the machine runs hotter than the baseline, but only because it draws more power. Thermal resistance is unchanged.");
+            foreach (double d in new[] { 6.0, 3.0, 1.0 })
+                Soak(d, 2.0, 1.8);
+            return;
+        }
+
+        // Undervolt: the mirror of the overclock scenario. Cooling never changes, the watts
+        // drop, so the die runs cooler while thermal resistance is identical. The engine
+        // should normalize it away rather than reading a healthy machine as improved.
+        if (undervolt)
+        {
+            Ev(UndervoltDaysAgo, "remark", null, 1, "CPU package power dropped about 25% at the same load. Nothing about the cooling changed, so DeltaT is judging every comparison at equal wattage from here.");
+            Ev(4, "remark", ComponentKind.Cpu, 0, "Weekly check-in: the machine runs cooler than the baseline, but only because it draws less power. Thermal resistance is unchanged.");
             foreach (double d in new[] { 6.0, 3.0, 1.0 })
                 Soak(d, 2.0, 1.8);
             return;

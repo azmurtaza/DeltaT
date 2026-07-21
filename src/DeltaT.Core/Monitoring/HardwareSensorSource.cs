@@ -1,3 +1,4 @@
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using LibreHardwareMonitor.Hardware;
@@ -55,6 +56,65 @@ public sealed class HardwareSensorSource : ISensorSource
             }
             return null;
         }
+    }
+
+    /// <summary>True when a discrete-named Radeon card is present. Lets an AMD APU that shares a
+    /// machine with a discrete Radeon (rather than an NVIDIA card) still yield the discrete slot.</summary>
+    private bool HasDiscreteRadeon()
+    {
+        foreach (IHardware hw in _computer.Hardware)
+        {
+            if (hw.HardwareType == HardwareType.GpuAmd && IsDiscreteAmdName(hw.Name))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Does Windows itself list a discrete GPU on this machine? On a hybrid
+    /// AMD-APU + NVIDIA laptop (a ROG Zephyrus G14, an ASUS TUF) the dGPU sits behind
+    /// Optimus and is frequently parked, so LHM enumerates no GpuNvidia hardware at all
+    /// while it sleeps. Left to LHM alone, <see cref="HasDiscreteRadeon"/> and the NVIDIA
+    /// check both come up empty, the APU's Radeon is NOT demoted, and it steals the
+    /// GpuDiscrete slot: the GPU fingerprint and score then read the sensorless iGPU
+    /// (the "not enough sensor samples" / "CPU reading is really the GPU" report). The OS
+    /// video-controller list sees the dGPU whether it is parked or awake, so it is the
+    /// authoritative "a real discrete GPU physically exists here" signal. Queried once and
+    /// cached: WMI costs tens of ms and the hardware roster never changes within a session.</summary>
+    private bool OsHasDiscreteGpu()
+    {
+        if (_osHasDiscreteGpu is { } cached)
+            return cached;
+        bool found = false;
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
+            foreach (ManagementBaseObject obj in searcher.Get())
+            {
+                if (obj["Name"] is string name && IsDiscreteGpuName(name))
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        catch { /* WMI unavailable: fall back to LHM-only detection, exactly as before. */ }
+        _osHasDiscreteGpu = found;
+        return found;
+    }
+    private bool? _osHasDiscreteGpu;
+
+    /// <summary>Recognise a discrete GPU from a Windows <c>Win32_VideoController</c> name.
+    /// NVIDIA laptop/desktop cards, or a discrete-named Radeon. Intel and AMD-APU integrated
+    /// graphics deliberately fall through (the whole point is to spot a card the APU's iGPU
+    /// must not impersonate). Basic display adapters (RDP, Microsoft Basic) fall through too.
+    /// Pure, so it is unit-tested against the controller names DeltaT has seen.</summary>
+    public static bool IsDiscreteGpuName(string name)
+    {
+        string n = (name ?? "").ToUpperInvariant();
+        if (n.Contains("NVIDIA") || n.Contains("GEFORCE") || n.Contains("RTX")
+            || n.Contains("GTX") || n.Contains("QUADRO"))
+            return true;
+        return IsDiscreteAmdName(name ?? "");
     }
     private bool _cpuTempEverMissingLogged;
     private bool _acpiFallbackLogged;
@@ -127,7 +187,15 @@ public sealed class HardwareSensorSource : ISensorSource
         // NVML first: when it is live it serves the discrete NVIDIA card's fast-moving
         // values (~0.19 ms) and the visitor below can leave LHM's 61 ms NVIDIA update on a
         // slow clock, since all LHM is still needed for there is hotspot and fan RPM.
-        NvmlSample nv = _nvml.Read(NvidiaName);
+        string? nvidiaName = NvidiaName;
+        // Is there a real discrete GPU (NVIDIA, or a discrete-named Radeon) to own the GPU slot?
+        // Only then is an AMD APU's integrated Radeon demoted to integrated; on an APU-only
+        // machine it stays the GPU so nothing loses its readout. Consult the OS too, not just
+        // LHM's live roster: on a hybrid AMD-APU + NVIDIA laptop the dGPU parks under Optimus
+        // and LHM stops enumerating it, but Windows still lists it, so the iGPU never gets to
+        // impersonate the discrete card while the real one sleeps.
+        bool otherDiscreteGpuPresent = nvidiaName is not null || HasDiscreteRadeon() || OsHasDiscreteGpu();
+        NvmlSample nv = _nvml.Read(nvidiaName);
         _visitor.NvidiaServedByNvml = _nvml.IsLive;
         // Set from the previous tick's outcome (MapCpu runs after the visitor). The first
         // tick therefore refreshes LHM's CPU fully, which is what we want anyway: it is what
@@ -161,8 +229,15 @@ public sealed class HardwareSensorSource : ISensorSource
                 // NVML's sample only applies to the NVIDIA card; an AMD card is read from
                 // LHM exactly as before.
                 HardwareType.GpuNvidia => MapDiscreteGpu(hw, ecFans.GpuRpm, nv),
-                HardwareType.GpuAmd => MapDiscreteGpu(hw, ecFans.GpuRpm, default),
-                HardwareType.GpuIntel => MapIntelGpu(hw),
+                // LHM reports an APU's integrated Radeon and a discrete Radeon card under the
+                // same HardwareType. Left as GpuDiscrete, an AMD APU (Radeon 760M / Vega /
+                // "Radeon Graphics") on a hybrid laptop became a SECOND discrete GPU and
+                // stole the slot from the real NVIDIA/Radeon-RX card, so Find(GpuDiscrete)
+                // returned the sensorless iGPU (the "no sensor" / wrong-GPU-temp reports).
+                HardwareType.GpuAmd => IsIntegratedAmdGpu(hw.Name, otherDiscreteGpuPresent)
+                    ? MapIntegratedGpu(hw)
+                    : MapDiscreteGpu(hw, ecFans.GpuRpm, default),
+                HardwareType.GpuIntel => MapIntegratedGpu(hw),
                 HardwareType.Storage => MapStorage(hw),
                 HardwareType.Battery => MapBattery(hw),
                 HardwareType.Motherboard => MapMotherboard(hw),
@@ -596,16 +671,51 @@ public sealed class HardwareSensorSource : ISensorSource
             limit);
     }
 
-    private static ComponentReading MapIntelGpu(IHardware hw) => new(
-        ComponentKind.GpuIntegrated, hw.Name,
-        MaxTemp(hw, _ => true),
-        null,
-        Percent(Find(hw, SensorType.Load, "D3D 3D")),
-        null,
-        Watts(Find(hw, SensorType.Power, "GPU Power")),
-        null,
-        false,
-        null);
+    /// <summary>An integrated GPU (Intel iGPU or an AMD APU's Radeon graphics). It is not a
+    /// paste component and is not shown as a card or scored, so this reading exists mainly to
+    /// claim the part out of the discrete slot; the values are still filled in honestly for
+    /// the CSV export and any future readout. Vendor-agnostic: Intel exposes load as "D3D 3D"
+    /// and temp on the package, AMD exposes "GPU Core" for both.</summary>
+    private ComponentReading MapIntegratedGpu(IHardware hw)
+    {
+        GpuSensors s = ResolveGpu(hw);
+        return new ComponentReading(
+            ComponentKind.GpuIntegrated, hw.Name,
+            Temp(s.Core) ?? MaxTemp(hw, _ => true),
+            Temp(s.HotSpot),
+            Percent(s.Load) ?? Percent(Find(hw, SensorType.Load, "D3D 3D")),
+            null,
+            FirstWatts(s.Power),
+            null,
+            false,
+            null);
+    }
+
+    /// <summary>Does this <see cref="HardwareType.GpuAmd"/> name a genuine discrete Radeon card
+    /// (as opposed to an APU's integrated graphics)? Discrete Radeons always carry an "RX",
+    /// "Pro", "Instinct", "Radeon VII" or "Frontier" model; APU graphics ("Radeon Graphics",
+    /// "Radeon 760M/780M/680M", "Vega N Graphics", "R5/R7 Graphics") never do.</summary>
+    public static bool IsDiscreteAmdName(string name)
+    {
+        string n = (name ?? "").ToUpperInvariant();
+        return n.Contains("RX ") || n.Contains(" RX") || n.Contains("RADEON PRO")
+            || n.Contains("INSTINCT") || n.Contains("RADEON VII") || n.Contains("FRONTIER");
+    }
+
+    /// <summary>True when an AMD GPU should be treated as an integrated APU rather than the
+    /// discrete card. LHM reports both under one type, so this decides by name plus context:
+    /// a discrete-named Radeon is never demoted; an APU-style Radeon is demoted to integrated
+    /// ONLY when a real discrete GPU is also present to own the slot
+    /// (<paramref name="otherDiscreteGpuPresent"/>). If the APU is the machine's only GPU (a
+    /// Ryzen ultrabook or handheld with no dGPU) it stays the GPU, so those machines don't
+    /// silently lose their readout. Pure, so it is unit-tested against the real names DeltaT
+    /// has seen.</summary>
+    public static bool IsIntegratedAmdGpu(string name, bool otherDiscreteGpuPresent)
+    {
+        if (IsDiscreteAmdName(name))
+            return false; // a discrete Radeon card is never demoted
+        return otherDiscreteGpuPresent; // APU-style: integrated only if a real dGPU exists
+    }
 
     /// <summary>Drive activity is a rate, so LHM needs two samples to state one: it reports
     /// 100 - (idle time elapsed / wall time elapsed), each side diffed against the previous

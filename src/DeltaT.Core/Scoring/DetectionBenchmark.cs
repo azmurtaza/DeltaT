@@ -848,6 +848,104 @@ public static class DetectionBenchmark
             filtSum / trials, filtMax, filtFalse, refFalse);
     }
 
+    // ===================== Phase 7: fixed-indoor ambient regime separation =====================
+    // DeltaT can score rise against either the outside weather (mode 0) or a user-set fixed indoor
+    // temperature (mode 1). The two measure the die against DIFFERENT references, so their rises are
+    // not comparable: if a fixed-indoor reading (rise over the set indoor temp) is judged against a
+    // weather-mode baseline (rise over the true outside temp), the whole rise shifts by the gap
+    // between the two references and reads as a broad thermal fault on a perfectly healthy machine.
+    // The mode dimension keeps the two regimes' baselines entirely separate so this can never
+    // happen. This phase measures both the harm (scoring fixed-mode data against the weather
+    // baseline, the bug a mode-blind pipeline would have) and the fix (scoring it against the
+    // fixed-mode baseline, what the shipped pipeline guarantees), so the separation is a measured
+    // property and not a claim.
+
+    public sealed record AmbientRegimeResult(
+        int Trials,
+        // Fixed-mode reading judged against its OWN fixed-mode baseline (the shipped behaviour).
+        double SeparatedMeanScore, int SeparatedFalseFaults,
+        // The same reading judged against the WEATHER baseline (the mode-blind bug).
+        double CrossModeMeanScore, int CrossModeFalseFaults);
+
+    /// <summary>A healthy machine scored in fixed-indoor mode, where the user's set indoor
+    /// temperature sits a few degrees below the true ambient the die actually sees (an AC set-point
+    /// that undershoots the room, both within one ambient band). Its recorded rise is therefore
+    /// inflated by that gap. Scored against a matching fixed-mode baseline the inflation cancels
+    /// (both sides carry it); scored against a weather-mode baseline it does not, and the gap reads
+    /// as a fault. Reference is the separated score, so the cross-mode error is exactly the
+    /// contamination the mode separation removes.</summary>
+    public static AmbientRegimeResult RunAmbientRegime(int seed = 20260721, int trials = 400)
+    {
+        var rng = new Random(seed);
+        double sepScoreSum = 0, crossScoreSum = 0;
+        int sepFalse = 0, crossFalse = 0;
+        for (int i = 0; i < trials; i++)
+        {
+            // Gap between the true ambient and the user's fixed set-point, a few degrees, kept
+            // inside one band so the weather baseline's cells actually line up with the reading.
+            double offset = 3 + rng.NextDouble() * 3; // +3..6 °C of inflated rise
+            List<RecentBucketObs> recent = BuildFixedIndoorRecent(offset, rng);
+            List<BaselineBucket> fixedBaseline = BuildFixedIndoorBaseline(offset, rng);
+            List<BaselineBucket> weatherBaseline = BuildFixedIndoorBaseline(0, rng);
+
+            double sep = ScoreHealthy(recent, fixedBaseline, out ThermalCause cs);
+            double cross = ScoreHealthy(recent, weatherBaseline, out ThermalCause cc);
+
+            sepScoreSum += sep;
+            crossScoreSum += cross;
+            if (CauseClass(cs) != 0 || sep < 85) sepFalse++;
+            if (CauseClass(cc) != 0 || cross < 85) crossFalse++;
+        }
+        return new AmbientRegimeResult(trials, sepScoreSum / trials, sepFalse, crossScoreSum / trials, crossFalse);
+    }
+
+    /// <summary>Healthy recent telemetry in fixed-indoor mode: the recorded rise is the true rise
+    /// plus <paramref name="offset"/> (the die measured against a fixed reference that sits that far
+    /// below the true ambient). Absolute die temperature stays physically correct.</summary>
+    private static List<RecentBucketObs> BuildFixedIndoorRecent(double offset, Random rng)
+    {
+        const double trueAmbient = 30; // Warm band
+        var recent = new List<RecentBucketObs>();
+        foreach (Cell c in Baseline)
+        {
+            double trueRise = c.Delta + Gauss(rng, 0.6);
+            double recordedDelta = trueRise + offset;             // rise over the fixed indoor reference
+            double dieTemp = trueAmbient + trueRise;              // = fixedRef + recordedDelta
+            double power = Math.Max(1, c.PowerW + Gauss(rng, c.PowerW * 0.03));
+            double fan = Math.Max(0, c.FanRpm + Gauss(rng, 60));
+            recent.Add(new RecentBucketObs(
+                c.Bucket, Warm, 60, recordedDelta, dieTemp, dieTemp + 4, fan, 0,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : 10 + Gauss(rng, 0.5), PowerAvg: power));
+        }
+        return recent;
+    }
+
+    /// <summary>A baseline learned at a reference sitting <paramref name="offset"/>° below the true
+    /// ambient (offset 0 = the weather baseline learned at the true ambient). Same band and same
+    /// absolute die temperature either way; only the recorded rise carries the offset.</summary>
+    private static List<BaselineBucket> BuildFixedIndoorBaseline(double offset, Random rng)
+    {
+        const double trueAmbient = 30;
+        var rows = new List<BaselineBucket>();
+        foreach (Cell c in Baseline)
+        {
+            double dSum = 0, pSum = 0, fSum = 0, gSum = 0; const int n = 30;
+            for (int i = 0; i < n; i++)
+            {
+                double trueRise = c.Delta + Gauss(rng, 0.6);
+                dSum += trueRise + offset;
+                pSum += Math.Max(1, c.PowerW + Gauss(rng, c.PowerW * 0.03));
+                fSum += Math.Max(0, c.FanRpm + Gauss(rng, 60));
+                gSum += 10 + Gauss(rng, 0.5);
+            }
+            double dAvg = dSum / n;
+            rows.Add(new BaselineBucket(
+                c.Bucket, Warm, dAvg, dAvg + 3, fSum / n, n * 5, trueAmbient + (dAvg - offset),
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : gSum / n, PowerAvg: pSum / n));
+        }
+        return rows;
+    }
+
     // ===================== Phase 5: deep power caps & power-coupled faults =====================
     // The headline benchmark judges the PRIMARY cause and a score<70 line. That is too coarse for
     // the promise "a power knob never reads as a fault on ANY aspect": a false FanFault can sit at

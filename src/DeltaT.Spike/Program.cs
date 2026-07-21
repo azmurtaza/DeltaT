@@ -108,6 +108,17 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  {"blended (pre-fix)",-26} {bat.ContaminatedMeanErr,8:0.00} {bat.ContaminatedMaxErr,8:0.0} {bat.ContaminatedFalseFaults,10}/{bat.Trials}");
     Console.WriteLine($"  {"AC-only (shipped)",-26} {bat.FilteredMeanErr,8:0.00} {bat.FilteredMaxErr,8:0.0} {bat.FilteredFalseFaults,10}/{bat.Trials}");
     Console.WriteLine();
+
+    // Fixed-indoor ambient regime separation: a healthy machine in fixed-indoor mode whose set
+    // temperature undershoots the true ambient. Judged against its own fixed baseline the inflated
+    // rise cancels; judged against the weather baseline (the mode-blind bug) it reads as a fault.
+    // The mode dimension guarantees the former.
+    var reg = DeltaT.Core.Scoring.DetectionBenchmark.RunAmbientRegime();
+    Console.WriteLine("Fixed-indoor ambient regime (healthy machine, fixed set-point below true ambient)");
+    Console.WriteLine($"  {"baseline used",-30} {"mean score",10} {"false faults",13}");
+    Console.WriteLine($"  {"fixed baseline (shipped)",-30} {reg.SeparatedMeanScore,9:0.0} {reg.SeparatedFalseFaults,10}/{reg.Trials}");
+    Console.WriteLine($"  {"weather baseline (mode-blind)",-30} {reg.CrossModeMeanScore,9:0.0} {reg.CrossModeFalseFaults,10}/{reg.Trials}");
+    Console.WriteLine();
     return;
 
     static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";
