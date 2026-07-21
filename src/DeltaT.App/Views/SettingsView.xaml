@@ -32,7 +32,7 @@
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="{Binding LocationText}"/>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,4,0,10"
-                                       Text="Looked up once, then cached. The outside temperature refreshes every 3 hours."/>
+                                       Text="Looked up once, then cached. The outside temperature re-fetches on the cadence below."/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Style="{StaticResource Button.Primary}" Content="AUTO-DETECT"
                                         Command="{Binding AutoDetectCommand}"/>
@@ -54,7 +54,48 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- Fixed indoor temperature: score rise against a set room temperature
+                                 (climate-controlled rooms) instead of the outside weather. Each mode
+                                 keeps its own baseline; the toggle switches between them. -->
                             <Grid Style="{StaticResource SettingRow}" Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Use a fixed indoor temperature"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="For a climate-controlled room: score against a set indoor temperature, not the outside weather. Keeps its own baseline, so switching is safe."/>
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" Style="{StaticResource Toggle}" VerticalAlignment="Center"
+                                          IsChecked="{Binding IndoorFixedMode}"/>
+                            </Grid>
+
+                            <!-- Fixed temperature input (fixed mode only). Committed on Enter/blur so
+                                 the fixed baseline relearns once per deliberate change, not per keystroke. -->
+                            <Grid Style="{StaticResource SettingRow}" Margin="0,0,0,14"
+                                  Visibility="{Binding IndoorFixedMode, Converter={StaticResource BoolToVis}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Indoor temperature"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="Your room's steady temperature. Changing it relearns the fixed baseline."/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBox Style="{StaticResource Input}" Width="82" TextAlignment="Right"
+                                             Text="{Binding IndoorFixedTempDisplay, UpdateSourceTrigger=LostFocus, StringFormat=F1}"/>
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="12.5" MinWidth="26"
+                                               Margin="8,0,0,0" VerticalAlignment="Center" Text="{Binding TempUnit}"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Indoor offset (weather mode only): display-only nudge, hidden when a
+                                 fixed indoor temperature is in charge. -->
+                            <Grid Style="{StaticResource SettingRow}" Margin="0"
+                                  Visibility="{Binding IndoorFixedMode, Converter={StaticResource InvBoolToVis}}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -71,6 +112,22 @@
                                     <TextBlock Style="{StaticResource Text.Numeral}" FontSize="12.5" Width="44"
                                                Margin="10,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
                                                Text="{Binding IndoorOffset, StringFormat='{}{0:+0.#;-0.#;0}°'}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}" Margin="0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0">
+                                    <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="Weather refresh"/>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" TextWrapping="Wrap"
+                                               Text="How often the outside temperature updates. Shorter for fast-swinging weather."/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <RadioButton x:Name="Ref1H" Style="{StaticResource Seg}" Content="1H" GroupName="refresh" Checked="OnRefresh1H"/>
+                                    <RadioButton x:Name="Ref2H" Style="{StaticResource Seg}" Content="2H" GroupName="refresh" Checked="OnRefresh2H"/>
+                                    <RadioButton x:Name="Ref3H" Style="{StaticResource Seg}" Content="3H" GroupName="refresh" Checked="OnRefresh3H"/>
                                 </StackPanel>
                             </Grid>
                         </StackPanel>
@@ -196,6 +253,33 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
+                    <!-- Support lives in its own card, not buried in Feedback: not everyone
+                         files a report, and a tip jar shouldn't hide behind one. A thin ember
+                         edge and heart glyph catch the eye without a loud filled button. -->
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Support DeltaT">
+                        <Border BorderBrush="{StaticResource Brush.Accent}" BorderThickness="1,0,0,0" Padding="12,2,0,2">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Foreground="{StaticResource Brush.Accent}" FontSize="13"
+                                                   VerticalAlignment="Center" Margin="0,0,7,0" Text="&#x2665;"/>
+                                        <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                                   Text="Free, no ads, no account."/>
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap"
+                                               Text="Built in spare time. If it earned its keep, a small tip keeps it improving. No pressure."/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource Button.Ghost}" Content="LEAVE A TIP"
+                                        VerticalAlignment="Center" Click="OnSupportDeltaT"
+                                        ToolTip="Binance Pay or USDT. Takes a few seconds, means a lot."/>
+                            </Grid>
+                        </Border>
+                    </HeaderedContentControl>
+
                 </StackPanel>
 
                 <!-- ================= maintenance band: one uniform row across the
@@ -241,13 +325,18 @@
                                 <CheckBox Grid.Column="1" Style="{StaticResource Toggle}" VerticalAlignment="Center"
                                           IsChecked="{Binding AutoUpdateEnabled}"/>
                             </Grid>
-                            <Grid Margin="0">
+                            <Grid Margin="0,0,0,10">
                                 <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" VerticalAlignment="Center"
                                            FontFamily="{StaticResource Font.Mono}"
                                            Text="{Binding CurrentVersionText, StringFormat='Current: {0}'}"/>
                                 <Button Style="{StaticResource Button.Ghost}" Content="CHECK NOW"
                                         HorizontalAlignment="Right" Command="{Binding CheckForUpdatesCommand}"/>
                             </Grid>
+                            <Button Style="{StaticResource Button.Link}" HorizontalAlignment="Left"
+                                    Command="{Binding OpenProjectPageCommand}"
+                                    ToolTip="github.com/azmurtaza/DeltaT — latest installer and documentation">
+                                <TextBlock FontSize="11.5" Text="Project page, installer &amp; docs ↗"/>
+                            </Button>
                         </StackPanel>
                     </HeaderedContentControl>
 

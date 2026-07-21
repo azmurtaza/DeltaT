@@ -64,12 +64,18 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
 
     public enum FanDecode { Parked, Rpm, Implausible }
 
+    // How often to re-check whether OmenMon has appeared since we opened the EC. OmenMon can be
+    // started after DeltaT; when it is, we release the EC session so its readings recover.
+    private static readonly TimeSpan ConflictRecheck = TimeSpan.FromSeconds(15);
+
     private readonly Func<MachineIdentity> _identify;
+    private readonly Func<bool> _ecConflictPresent;
     private WindowsEmbeddedControllerIO? _ec;
     private bool _initTried;
     private bool _dead;
     private bool _everDecoded;
     private int _consecutiveMisses;
+    private DateTimeOffset _lastConflictCheck = DateTimeOffset.MinValue;
     // The EC's byte order for a fan word, latched on the first believable decode. Both fans
     // share one EC so one latch serves both. Once known we trust ONLY that order: accepting
     // either order on every tick is a spike vector, because a torn read that is implausible in
@@ -78,8 +84,17 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
 
     public HpOmenEcFanReader() : this(MachineIdentityProvider.Detect) { }
 
-    /// <summary>Test/diagnostic seam: supply the machine identity instead of probing WMI.</summary>
-    public HpOmenEcFanReader(Func<MachineIdentity> identify) => _identify = identify;
+    /// <summary>Test/diagnostic seam: supply the machine identity (and optionally the EC-conflict
+    /// probe) instead of scanning WMI and the process list.</summary>
+    /// <param name="ecConflictPresent">Returns true when another app that owns the same PawnIO EC
+    /// session is running (OmenMon). When it is, this reader yields the EC entirely rather than
+    /// colliding: two processes on the one EC module knock each other's readings out (issue #1).
+    /// Defaults to a scan for an OmenMon process.</param>
+    public HpOmenEcFanReader(Func<MachineIdentity> identify, Func<bool>? ecConflictPresent = null)
+    {
+        _identify = identify;
+        _ecConflictPresent = ecConflictPresent ?? OmenMonProcessRunning;
+    }
 
     public LaptopFanSample Read()
     {
@@ -89,6 +104,20 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
             Init();
         if (_ec is null)
             return default;
+
+        // OmenMon may have launched after we opened the EC. Re-check occasionally (a process scan
+        // is not free) and, if it is now running, hand the EC session back to it: keeping it would
+        // leave OmenMon blind. Our fans go to "--" until DeltaT is restarted without OmenMon, which
+        // is the right trade, OmenMon is the user's fan controller and DeltaT only reads.
+        if (DateTimeOffset.UtcNow - _lastConflictCheck >= ConflictRecheck)
+        {
+            _lastConflictCheck = DateTimeOffset.UtcNow;
+            if (_ecConflictPresent())
+            {
+                Dispose();
+                return default;
+            }
+        }
 
         var data = new byte[FanRegisters.Length];
         try
@@ -161,6 +190,16 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
                 _dead = true;
                 return;
             }
+            if (_ecConflictPresent())
+            {
+                // OmenMon is already running and owns the EC. Do not open our own session: two
+                // processes on the same PawnIO EC module knock each other out (issue #1). Yield
+                // it entirely. The OmenMon pipe reader auditions ahead of us, so if OmenMon is
+                // publishing its fan RPM DeltaT still gets full fan telemetry without the EC.
+                _dead = true;
+                return;
+            }
+            _lastConflictCheck = DateTimeOffset.UtcNow;
             _ec = new WindowsEmbeddedControllerIO();
         }
         catch
@@ -170,6 +209,26 @@ public sealed class HpOmenEcFanReader : ILaptopFanProbe
         }
         if (_ec is null)
             _dead = true;
+    }
+
+    /// <summary>Is an OmenMon (or OmenMon Reborn) process running? It owns the same PawnIO EC
+    /// module, so DeltaT must not open the EC alongside it. A best-effort scan: any failure reads
+    /// as "not present" so a WMI/permissions hiccup never wrongly blinds DeltaT's own fan reading.</summary>
+    private static bool OmenMonProcessRunning()
+    {
+        try
+        {
+            foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses())
+            {
+                using (p)
+                {
+                    if (p.ProcessName.Contains("omenmon", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+        }
+        catch { /* process enumeration blocked: assume no conflict rather than blind ourselves */ }
+        return false;
     }
 
     /// <summary>True only for an HP OMEN or Victus. The manufacturer gate keeps the EC map off

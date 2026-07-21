@@ -16,6 +16,12 @@ public interface IAmbientProvider
     /// yesterday's 20° stamped onto today's heatwave poisons the baseline. Display may
     /// still show it, flagged.</summary>
     bool IsStale => false;
+
+    /// <summary>Which reference the current <see cref="CurrentAmbientC"/> measures rise
+    /// against: 0 = the outside weather (the original, default model), 1 = a user-set
+    /// fixed indoor temperature. Telemetry tags every learned row with this so the two
+    /// regimes' baselines never blend.</summary>
+    int AmbientMode => 0;
 }
 
 public sealed record GeoLocation(double Latitude, double Longitude, string City, string Country, string Source)
@@ -27,13 +33,21 @@ public sealed record AmbientReading(double OutsideC, DateTimeOffset FetchedUtc, 
 
 /// <summary>Outside temperature, the honest way: the *location* is resolved once
 /// (IP lookup or manual pick) and cached — it rarely changes. The *temperature*
-/// is re-fetched every 3 h because weather moves even when you don't. Offline,
+/// is re-fetched on a user-tunable cadence (default 3 h) because weather moves
+/// even when you don't. Offline,
 /// the last reading survives restarts and is flagged stale rather than dropped.
 /// APIs: Open-Meteo (weather + geocoding, keyless) and ipapi.co (one-shot locate).</summary>
 public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromHours(3);
-    private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(4.5);
+    /// <summary>How often the outside temperature is re-fetched. User-tunable (Settings), because
+    /// near the equator the temperature can swing hour to hour and a 3 h cadence lags it; default
+    /// 3 h, clamped 1..6. Read fresh each refresh cycle, so a change applies from the next tick.</summary>
+    private TimeSpan RefreshInterval =>
+        TimeSpan.FromHours(Math.Clamp(_settings.GetInt(SettingsKeys.WeatherRefreshHours) ?? 3, 1, 6));
+
+    /// <summary>A reading older than this is treated as unknown by the telemetry pipeline. Scales
+    /// with the refresh cadence (1.5x), so a faster refresh also tightens what counts as stale.</summary>
+    private TimeSpan StaleAfter => RefreshInterval * 1.5;
 
     private readonly SettingsStore _settings;
     private readonly HttpClient _http;
@@ -77,12 +91,39 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
         get { lock (_gate) return _reading; }
     }
 
+    /// <summary>The ambient the scoring pipeline measures rise against. In fixed-indoor mode
+    /// this is the user's set temperature (a controlled room DeltaT trusts over the weather);
+    /// otherwise it is the outside reading. The display offset (weather mode only) is applied
+    /// at the display edge, not here.</summary>
     public double? CurrentAmbientC
+    {
+        get
+        {
+            if (FixedMode && FixedTempC is { } fixedC)
+                return fixedC;
+            lock (_gate) return _reading?.OutsideC;
+        }
+    }
+
+    /// <summary>The raw outside reading, ignoring fixed-indoor mode. For the display and for
+    /// anything that specifically wants the weather (the outside-temperature readout).</summary>
+    public double? OutsideC
     {
         get { lock (_gate) return _reading?.OutsideC; }
     }
 
-    public bool IsStale => Current is { } r && DateTimeOffset.UtcNow - r.FetchedUtc > StaleAfter;
+    /// <summary>User has chosen to score against a fixed indoor temperature instead of the
+    /// outside weather.</summary>
+    public bool FixedMode => _settings.GetBool(SettingsKeys.IndoorFixedMode, false);
+
+    /// <summary>The user-set fixed indoor temperature (°C), when one has been entered.</summary>
+    public double? FixedTempC => _settings.GetDouble(SettingsKeys.IndoorFixedTempC);
+
+    public int AmbientMode => FixedMode ? 1 : 0;
+
+    // A user-set indoor temperature is never "stale": it's a deliberate constant, not a fetched
+    // reading that can age out. Only the weather path can go stale.
+    public bool IsStale => !FixedMode && Current is { } r && DateTimeOffset.UtcNow - r.FetchedUtc > StaleAfter;
 
     /// <summary>Resolve location if needed, fetch once, then keep refreshing every 3 h.</summary>
     public async Task StartAsync()
@@ -95,17 +136,42 @@ public sealed class AmbientService : IAmbientProvider, IAsyncDisposable
         }
         await RefreshAsync().ConfigureAwait(false);
 
-        _cts = new CancellationTokenSource();
+        StartRefreshLoop();
+    }
+
+    /// <summary>Starts the background refresh loop. Uses <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
+    /// rather than a fixed-period timer so <see cref="RefreshInterval"/> is re-read every cycle:
+    /// a cadence change takes effect on the next tick, and <see cref="ApplyRefreshInterval"/> makes
+    /// it immediate.</summary>
+    private void StartRefreshLoop()
+    {
+        var cts = new CancellationTokenSource();
+        _cts = cts;
         _loop = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(RefreshInterval);
             try
             {
-                while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false))
+                while (!cts.IsCancellationRequested)
+                {
+                    await Task.Delay(RefreshInterval, cts.Token).ConfigureAwait(false);
                     await RefreshAsync().ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) { }
         });
+    }
+
+    /// <summary>Apply a just-changed refresh cadence now: restart the loop on the new interval and
+    /// pull a fresh reading immediately, so the user sees the effect without waiting a whole cycle.
+    /// The old loop observes cancellation and exits on its own.</summary>
+    public void ApplyRefreshInterval()
+    {
+        if (_cts is null)
+            return; // not started yet (StartAsync will pick up the new interval)
+        CancellationTokenSource? old = _cts;
+        StartRefreshLoop();
+        old.Cancel();
+        _ = RefreshAsync();
     }
 
     public void SetLocation(GeoLocation location, bool refresh = true)

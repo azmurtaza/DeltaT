@@ -37,8 +37,34 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _locationText = "";
     [ObservableProperty] private string _cityQuery = "";
     [ObservableProperty] private bool _searching;
-    [ObservableProperty] private bool _fahrenheit;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TempUnit))]
+    [NotifyPropertyChangedFor(nameof(IndoorFixedTempDisplay))]
+    private bool _fahrenheit;
     [ObservableProperty] private double _indoorOffset;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FixedTempEnabled))]
+    private bool _indoorFixedMode;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IndoorFixedTempDisplay))]
+    private double _indoorFixedTempC;
+    [ObservableProperty] private int _weatherRefreshHours;
+
+    /// <summary>The fixed-temperature input is only meaningful while fixed mode is on.</summary>
+    public bool FixedTempEnabled => IndoorFixedMode;
+
+    /// <summary>The unit suffix shown next to the fixed-temperature field, following the °C/°F toggle.</summary>
+    public string TempUnit => Fahrenheit ? "°F" : "°C";
+
+    /// <summary>The fixed indoor temperature in whatever unit the user has chosen. Storage is always
+    /// °C (<see cref="IndoorFixedTempC"/>); this converts on the display edge only, so flipping the
+    /// °C/°F toggle re-reads this instantly (both are notified above) without touching the stored
+    /// value or the baseline, and a value typed in °F round-trips back to °C on commit.</summary>
+    public double IndoorFixedTempDisplay
+    {
+        get => Math.Round(Fahrenheit ? IndoorFixedTempC * 9 / 5 + 32 : IndoorFixedTempC, 1);
+        set => IndoorFixedTempC = Fahrenheit ? (value - 32) * 5 / 9 : value;
+    }
     [ObservableProperty] private int _sampleIntervalSeconds;
     [ObservableProperty] private bool _closeToTray;
     [ObservableProperty] private bool _notificationsEnabled;
@@ -84,6 +110,9 @@ public partial class SettingsViewModel : ObservableObject
 
         _fahrenheit = settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
         _indoorOffset = settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
+        _indoorFixedMode = settings.GetBool(SettingsKeys.IndoorFixedMode, false);
+        _indoorFixedTempC = settings.GetDouble(SettingsKeys.IndoorFixedTempC) ?? 22;
+        _weatherRefreshHours = Math.Clamp(settings.GetInt(SettingsKeys.WeatherRefreshHours) ?? 3, 1, 6);
         _sampleIntervalSeconds = settings.GetInt(SettingsKeys.SampleIntervalSeconds) ?? 2;
         _closeToTray = settings.GetBool(SettingsKeys.CloseToTray, true);
         _notificationsEnabled = settings.GetBool(SettingsKeys.NotificationsEnabled, true);
@@ -147,6 +176,83 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnIndoorOffsetChanged(double value) =>
         _settings.SetDouble(SettingsKeys.IndoorOffsetC, Math.Round(value, 1));
+
+    /// <summary>Switch scoring between "rise over outside weather" and "rise over a fixed indoor
+    /// temperature". Each mode keeps its own baseline: turning fixed mode on resumes (or, the very
+    /// first time, starts learning) a separate fixed-mode baseline, and the weather baseline is
+    /// untouched and returns when it is turned back off. The two are never blended. The warning
+    /// fires only when fixed mode has no baseline yet (the one time the score will recalibrate).</summary>
+    partial void OnIndoorFixedModeChanged(bool value)
+    {
+        if (value && !_scores.HasBaseline(1))
+        {
+            MessageBoxResult answer = MessageBox.Show(
+                "Score against a fixed indoor temperature?\n\n"
+                + "DeltaT will learn a separate baseline for this mode, so the health score recalibrates until it does (a day or two of real load). Your weather baseline is kept untouched and comes back the moment you switch this off. The two are never mixed.",
+                "Fixed indoor temperature", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                IndoorFixedMode = false; // revert; the re-entrant false branch just persists it
+                return;
+            }
+        }
+
+        _settings.SetBool(SettingsKeys.IndoorFixedMode, value);
+        if (value)
+            _scores.EnsureFixedModeStarted(DateTimeOffset.UtcNow);
+        _scores.Compute(DateTimeOffset.UtcNow); // reflect the switched baseline immediately
+        StatusText = value
+            ? $"Scoring against a fixed indoor temperature of {FormatFixedTemp()}. Weather baseline kept for when you switch back."
+            : "Back to scoring against the outside weather. Your weather baseline resumed.";
+    }
+
+    /// <summary>The fixed indoor temperature the die's rise is measured against. Changing it moves
+    /// the ambient reference, which invalidates the fixed-mode baseline learned at the old value,
+    /// so DeltaT relearns the fixed baseline from here (only when fixed mode is actually in use).
+    /// Weather mode and history are never touched.</summary>
+    partial void OnIndoorFixedTempCChanged(double value)
+    {
+        double t = Math.Round(Math.Clamp(value, 0, 45), 1);
+        _settings.SetDouble(SettingsKeys.IndoorFixedTempC, t);
+        bool matters = IndoorFixedMode || _scores.HasBaseline(1) || _scores.FixedModeStarted;
+        if (matters)
+        {
+            _scores.ResetFixedBaseline(DateTimeOffset.UtcNow);
+            _scores.Compute(DateTimeOffset.UtcNow);
+            StatusText = $"Fixed indoor temperature set to {FormatFixedTemp()}. DeltaT is relearning the fixed-mode baseline at the new reference.";
+        }
+    }
+
+    private string FormatFixedTemp()
+    {
+        double c = IndoorFixedTempC;
+        return Fahrenheit ? $"{c * 9 / 5 + 32:0.#} °F" : $"{c:0.#} °C";
+    }
+
+    partial void OnWeatherRefreshHoursChanged(int value)
+    {
+        int hours = Math.Clamp(value, 1, 6);
+        _settings.SetInt(SettingsKeys.WeatherRefreshHours, hours);
+        _ambient.ApplyRefreshInterval();
+        StatusText = $"Outside temperature now refreshes every {hours} {(hours == 1 ? "hour" : "hours")}. Fetching a fresh reading now.";
+    }
+
+    /// <summary>Open the project's GitHub page: the latest installer (Releases) and the docs
+    /// (readme) both live there. Answers the "where do I download it again / find the docs" ask.</summary>
+    [RelayCommand]
+    private void OpenProjectPage()
+    {
+        string url = $"https://github.com/{UpdateChecker.Owner}/{UpdateChecker.Repo}";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusText = "Opened the DeltaT project page (latest installer and docs).";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Couldn't open the browser: {ex.Message}. The project is at {url}";
+        }
+    }
 
     partial void OnSampleIntervalSecondsChanged(int value)
     {

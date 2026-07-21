@@ -19,7 +19,7 @@ public sealed class TelemetryPipeline : IDisposable
     private readonly TelemetryRepository _repo;
 
     private readonly List<RawSampleRow> _rawBatch = new();
-    private readonly Dictionary<(long Minute, string Id, LoadBucket Bucket, int Band, bool OnAc), MinuteAccum> _openMinutes = new();
+    private readonly Dictionary<(long Minute, string Id, LoadBucket Bucket, int Band, bool OnAc, int Mode), MinuteAccum> _openMinutes = new();
     private long _currentMinute = -1;
     private long _currentHour = -1;
     private long _lastPruneDay = -1;
@@ -46,6 +46,9 @@ public sealed class TelemetryPipeline : IDisposable
             // banding today's samples with yesterday's temperature would quietly poison
             // the learned deltas. Unknown ambient lands in band -1, which scoring skips.
             double? ambient = _ambient.IsStale ? null : _ambient.CurrentAmbientC;
+            // Ambient-source mode (0 = outside weather, 1 = fixed indoor temperature). Every
+            // learned row is tagged with it so the two regimes' baselines never blend.
+            int mode = _ambient.AmbientMode;
             long ts = snap.TimestampUtc.ToUnixTimeSeconds();
             long minute = ts / 60 * 60;
             long hour = ts / 3600 * 3600;
@@ -77,7 +80,7 @@ public sealed class TelemetryPipeline : IDisposable
                 _rawBatch.Add(new RawSampleRow(
                     ts, c.Kind, c.Name, c.TemperatureC, c.HotspotC, c.LoadPercent,
                     c.FanRpm, c.PowerW, c.IsThrottling, ambient, snap.OnAcPower));
-                Accumulate(minute, c, ambient, snap.OnAcPower, chassisFan);
+                Accumulate(minute, c, ambient, snap.OnAcPower, chassisFan, mode);
             }
 
             // Minute rolled over → everything accumulated for earlier minutes is final.
@@ -109,7 +112,7 @@ public sealed class TelemetryPipeline : IDisposable
         }
     }
 
-    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan)
+    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan, int mode)
     {
         if (c.TemperatureC is not { } temp)
             return;
@@ -123,13 +126,13 @@ public sealed class TelemetryPipeline : IDisposable
         LoadBucket bucket = c.Bucket ?? LoadBucket.Idle;
         int band = ambient is { } a ? (int)AmbientBands.FromCelsius(a) : -1;
 
-        var key = (minute, c.Id, bucket, band, onAc);
+        var key = (minute, c.Id, bucket, band, onAc, mode);
         if (!_openMinutes.TryGetValue(key, out MinuteAccum? acc))
         {
             _openMinutes[key] = acc = new MinuteAccum
             {
                 Minute = minute, Kind = c.Kind, Name = c.Name,
-                Bucket = bucket, Band = band, OnAc = onAc,
+                Bucket = bucket, Band = band, OnAc = onAc, Mode = mode,
             };
         }
 
@@ -194,7 +197,8 @@ public sealed class TelemetryPipeline : IDisposable
                 e.TimestampUtc.ToUnixTimeSeconds(), "throttle", e.Kind.ToString(), e.Name,
                 severity: 2,
                 message: $"{e.Kind.Label()} touched {e.TemperatureC:0}°C (limit {e.LimitC:0}°C) and pulled back.",
-                dataJson: JsonSerializer.Serialize(new { temp = e.TemperatureC, limit = e.LimitC }));
+                dataJson: JsonSerializer.Serialize(new { temp = e.TemperatureC, limit = e.LimitC }),
+                mode: _ambient.AmbientMode);
         }
         catch (Exception ex) { Error?.Invoke("throttle event write failed", ex); }
     }
@@ -207,7 +211,8 @@ public sealed class TelemetryPipeline : IDisposable
                 m.TimestampUtc.ToUnixTimeSeconds(), "soak", m.Kind.ToString(), m.Name,
                 severity: 0,
                 message: $"{m.Kind.Label()} heat-soak: {m.StartTempC:0}→{m.PeakTempC:0}°C in {m.SecondsToPeak:0}s ({m.RatePerMinute:0.0}°C/min).",
-                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, peak = m.PeakTempC, seconds = m.SecondsToPeak, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }));
+                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, peak = m.PeakTempC, seconds = m.SecondsToPeak, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }),
+                mode: _ambient.AmbientMode);
         }
         catch (Exception ex) { Error?.Invoke("soak event write failed", ex); }
     }
@@ -220,7 +225,8 @@ public sealed class TelemetryPipeline : IDisposable
                 m.TimestampUtc.ToUnixTimeSeconds(), "cooldown", m.Kind.ToString(), m.Name,
                 severity: 0,
                 message: $"{m.Kind.Label()} cooldown: {m.StartTempC:0}→{m.SettledTempC:0}°C in {m.SecondsToSettle:0}s ({m.RatePerMinute:0.0}°C/min).",
-                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, settled = m.SettledTempC, seconds = m.SecondsToSettle, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }));
+                dataJson: JsonSerializer.Serialize(new { start = m.StartTempC, settled = m.SettledTempC, seconds = m.SecondsToSettle, rate = m.RatePerMinute, on_ac = m.OnAcPower ? 1 : 0 }),
+                mode: _ambient.AmbientMode);
         }
         catch (Exception ex) { Error?.Invoke("cooldown event write failed", ex); }
     }

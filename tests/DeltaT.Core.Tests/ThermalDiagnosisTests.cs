@@ -387,6 +387,40 @@ public class BatteryRateTests
     }
 }
 
+/// <summary>Fixed-indoor ambient regime separation. A machine scored against a fixed indoor
+/// temperature learns rise over a different reference than a weather-scored one; the two must
+/// never be compared. These lock in that the mixing genuinely harms (so the benchmark can see
+/// the failure the mode dimension prevents) and that scoring a fixed-mode reading against its own
+/// fixed-mode baseline stays clean.</summary>
+public class AmbientRegimeTests
+{
+    private static readonly DetectionBenchmark.AmbientRegimeResult R =
+        DetectionBenchmark.RunAmbientRegime(seed: 909, trials: 400);
+
+    [Fact]
+    public void BenchmarkSeesTheMixing()
+    {
+        // If judging fixed-mode data against the weather baseline ever stops false-alarming, the
+        // measurement has gone blind and the "never mix regimes" guarantee is no longer tested.
+        // A +3..6° inflated rise on every bucket is a clear broad fault, so most trials must flag.
+        Assert.True(R.CrossModeFalseFaults >= (int)(0.75 * R.Trials),
+            $"mode-blind scoring should false-alarm, got {R.CrossModeFalseFaults}/{R.Trials}");
+        Assert.True(R.CrossModeMeanScore <= 80,
+            $"mode-blind mean score should sink, got {R.CrossModeMeanScore:0.0}");
+    }
+
+    [Fact]
+    public void SeparatedBaseline_StaysClean()
+    {
+        // Scored against its own fixed-mode baseline, the same inflated rise cancels: healthy stays
+        // healthy. This is exactly what the mode dimension guarantees the shipped pipeline does.
+        Assert.True(R.SeparatedFalseFaults <= 8,
+            $"fixed-mode scoring should stay clean, got {R.SeparatedFalseFaults}/{R.Trials} false faults");
+        Assert.True(R.SeparatedMeanScore >= 92,
+            $"fixed-mode mean score should stay high, got {R.SeparatedMeanScore:0.0}");
+    }
+}
+
 /// <summary>Phase 0 go/no-go for the guided-calibration (workout) idea, measured not
 /// intuited: does a baseline acquired from controlled synthetic loads yield the SAME
 /// fault attribution as one acquired organically? The finding these lock in is that the

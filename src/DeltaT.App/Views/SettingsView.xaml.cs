@@ -12,18 +12,22 @@ public partial class SettingsView : UserControl
     public SettingsView()
     {
         InitializeComponent();
-        DataContextChanged += (_, _) => SyncIntervalPills();
+        DataContextChanged += (_, _) => SyncPills();
     }
 
     private SettingsViewModel? Vm => DataContext as SettingsViewModel;
 
-    private void SyncIntervalPills()
+    private void SyncPills()
     {
         if (Vm is not { } vm) return;
         _initialized = false;
         (vm.SampleIntervalSeconds switch
         {
             1 => Int1, 3 => Int3, 5 => Int5, _ => Int2,
+        }).IsChecked = true;
+        (vm.WeatherRefreshHours switch
+        {
+            1 => Ref1H, 2 => Ref2H, _ => Ref3H,
         }).IsChecked = true;
         _initialized = true;
     }
@@ -39,6 +43,16 @@ public partial class SettingsView : UserControl
     private void OnInterval3(object sender, RoutedEventArgs e) => SetInterval(3);
     private void OnInterval5(object sender, RoutedEventArgs e) => SetInterval(5);
 
+    private void SetRefreshHours(int hours)
+    {
+        if (_initialized && Vm is { } vm)
+            vm.WeatherRefreshHours = hours;
+    }
+
+    private void OnRefresh1H(object sender, RoutedEventArgs e) => SetRefreshHours(1);
+    private void OnRefresh2H(object sender, RoutedEventArgs e) => SetRefreshHours(2);
+    private void OnRefresh3H(object sender, RoutedEventArgs e) => SetRefreshHours(3);
+
     private void OnCityKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && Vm is { } vm && vm.SearchCityCommand.CanExecute(null))
@@ -47,4 +61,7 @@ public partial class SettingsView : UserControl
 
     private void OnSendFeedback(object sender, RoutedEventArgs e) =>
         ((App)Application.Current).OpenFeedbackWindow();
+
+    private void OnSupportDeltaT(object sender, RoutedEventArgs e) =>
+        ((App)Application.Current).OpenDonateWindow();
 }

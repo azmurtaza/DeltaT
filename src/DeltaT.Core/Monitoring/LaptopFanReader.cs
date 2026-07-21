@@ -68,8 +68,14 @@ public sealed class LaptopFanReader : IDisposable
             new LenovoWmiFanReader(),
             new AsusWmiFanReader(),
             new HpWmiFanReader(),
+            // Cooperative source for HP's consumer gaming line: if OmenMon is running it owns the
+            // EC and publishes fan RPM on a named pipe, so we read that and never open the EC
+            // ourselves. Auditions immediately before the EC probe, so when the pipe answers the
+            // EC path is never reached and OmenMon keeps working (issue #1).
+            new OmenMonPipeFanReader(),
             // Last: the only EC-based probe. It auditions after HP's business WMI (so a business
-            // HP never reaches the EC path) and self-gates dark on anything but an OMEN/Victus.
+            // HP never reaches the EC path) and self-gates dark on anything but an OMEN/Victus,
+            // and yields the EC entirely when OmenMon is running.
             new HpOmenEcFanReader(),
         })
     {

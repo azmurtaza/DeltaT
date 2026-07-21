@@ -66,7 +66,10 @@ public partial class DeviceViewModel : ObservableObject
     public void Refresh()
     {
         bool fahrenheit = _settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
-        double roomOffset = _settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
+        // In fixed-indoor mode the ambient reference IS the user's set temperature, so the
+        // weather-mode display offset does not apply (it would double-count).
+        bool fixedMode = _ambient.FixedMode;
+        double roomOffset = fixedMode ? 0 : (_settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0);
         double? ambientC = _ambient.CurrentAmbientC;
         SensorSnapshot? snap = _latest();
 
@@ -76,7 +79,9 @@ public partial class DeviceViewModel : ObservableObject
 
         string unit = fahrenheit ? "°F" : "°C";
         AmbientText = ambientC is { } amb
-            ? $"outside reference {Temp(amb, fahrenheit):0.#}{unit}"
+            ? fixedMode
+                ? $"indoor reference {Temp(amb, fahrenheit):0.#}{unit} (fixed)"
+                : $"outside reference {Temp(amb, fahrenheit):0.#}{unit}"
             : "outside reference unavailable";
 
         var limits = new List<string>();

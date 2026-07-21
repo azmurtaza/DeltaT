@@ -45,6 +45,7 @@ public partial class App : Application
     private bool _quitting;
     private bool _trayHintShown;
     private string? _uishotDir;
+    private DeltaT.Core.Updates.WhatsNewRelease? _pendingWhatsNew;
 
     public static bool IsSimulated { get; private set; }
 
@@ -132,6 +133,18 @@ public partial class App : Application
 
         if (_uishotDir is not null)
             _ = CaptureUiShotsAsync(_uishotDir);
+    }
+
+    // TEMP helper for the full-height what's-new shot.
+    private static IEnumerable<T> FindVisuals<T>(DependencyObject root) where T : DependencyObject
+    {
+        int n = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            DependencyObject c = VisualTreeHelper.GetChild(root, i);
+            if (c is T t) yield return t;
+            foreach (T d in FindVisuals<T>(c)) yield return d;
+        }
     }
 
     /// <summary>Dev-only (`--uishot=DIR`, combine with --simulate): walks every view,
@@ -277,6 +290,38 @@ public partial class App : Application
             await Shot(fp, "fingerprint_workup");
 
             fp.Close();
+
+            // Support panel (a normal modal dialog otherwise): render it offscreen for a shot.
+            var donate = new Views.DonateWindow { WindowStartupLocation = WindowStartupLocation.Manual, Left = -4000, Top = -4000 };
+            donate.Show();
+            await Shot(donate, "donate");
+            donate.Close();
+
+            // What's-new popup: same offscreen render, seeded with the newest curated release.
+            if (Core.Updates.WhatsNewNotes.Releases.Count > 0)
+            {
+                var whatsNew = new Views.WhatsNewWindow(Core.Updates.WhatsNewNotes.Releases[^1])
+                { WindowStartupLocation = WindowStartupLocation.Manual, Left = -4000, Top = -4000 };
+                whatsNew.Show();
+                // Capture the real window exactly as a user sees it, at each scroll page from
+                // top to bottom, so a few shots cover the whole list.
+                await Task.Delay(300);
+                ScrollViewer? wnScroll = FindVisuals<ScrollViewer>(whatsNew).FirstOrDefault();
+                await Shot(whatsNew, "whatsnew_1");
+                if (wnScroll is not null)
+                {
+                    int page = 2;
+                    double step = wnScroll.ViewportHeight - 24;
+                    while (wnScroll.VerticalOffset < wnScroll.ScrollableHeight - 1)
+                    {
+                        wnScroll.ScrollToVerticalOffset(wnScroll.VerticalOffset + step);
+                        await Dispatcher.Yield(DispatcherPriority.Render);
+                        await Task.Delay(250);
+                        await Shot(whatsNew, "whatsnew_" + page++);
+                    }
+                }
+                whatsNew.Close();
+            }
         }
         catch (Exception ex)
         {
@@ -295,15 +340,16 @@ public partial class App : Application
         if (_uishotDir is not null)
             _settings.SetBool(SettingsKeys.FirstRunDone, true); // uishot wants the real screens, not onboarding
         _repo = new TelemetryRepository(_db);
-        // Dev/demo screenshots (`--seed=healthy|repaste|provisional|overclock`): lay down
-        // a realistic multi-week history before anything else reads the store.
+        // Dev/demo screenshots (`--seed=healthy|repaste|provisional|overclock|undervolt`):
+        // lay down a realistic multi-week history before anything else reads the store.
         if (ParseSeed(args) is { } seed)
             DemoSeeder.Seed(_db, _repo, _settings,
                 degraded: seed is "repaste" or "degraded" or "aging",
                 DateTimeOffset.UtcNow,
                 provisional: seed == "provisional",
                 overclock: seed is "overclock" or "boost",
-                lightCpu: seed == "mixed");
+                lightCpu: seed == "mixed",
+                undervolt: seed == "undervolt");
         _ambient = new AmbientService(_settings);
 
         MachineIdentity machine = MachineIdentityProvider.Detect();
@@ -360,7 +406,7 @@ public partial class App : Application
         { Simulated = simulate, Elevated = simulate || IsElevated(), RequestElevation = RelaunchAsAdmin };
         if (args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
             _vm.UiVisible = false; // tray start: no window yet, skip card churn
-        _tray = new TrayManager(_monitor, ShowMainWindow, Quit);
+        _tray = new TrayManager(_monitor, ShowMainWindow, Quit, ShowRemarks);
 
         _remarks.RemarkRaised += r =>
         {
@@ -420,6 +466,21 @@ public partial class App : Application
         // newer release is out (unless the user opted out). Never during sim/screenshots.
         if (!simulate && _uishotDir is null && _updates.AutoUpdateEnabled)
             _ = CheckForUpdatesOnStartupAsync();
+
+        // What's-new: decide once, now (before onboarding can flip FirstRunDone), so a fresh
+        // install is correctly seen as first-run and never gets a changelog. Record the
+        // running version regardless of the outcome, so the popup can only ever fire once per
+        // version. The window itself is shown the first time the user opens the main window
+        // (see ShowMainWindow), so a silent tray-start login doesn't pop it over nothing.
+        if (!simulate && _uishotDir is null)
+        {
+            Version running = UpdateService.CurrentVersion;
+            _pendingWhatsNew = Core.Updates.WhatsNewGate.Evaluate(
+                running,
+                _settings.Get(SettingsKeys.WhatsNewShownVersion),
+                firstRun: !_settings.GetBool(SettingsKeys.FirstRunDone, false));
+            _settings.Set(SettingsKeys.WhatsNewShownVersion, Core.Updates.WhatsNewGate.VersionKey(running));
+        }
     }
 
     /// <summary>Background one-shot: if a newer release exists, download it and hand off
@@ -461,8 +522,9 @@ public partial class App : Application
         };
     }
 
-    /// <summary>`--seed=healthy|repaste|provisional|overclock` fills the sim db with demo
-    /// history for screenshots. Returns null when absent, else the normalized mode string.</summary>
+    /// <summary>`--seed=healthy|repaste|provisional|overclock|undervolt` fills the sim db
+    /// with demo history for screenshots. Returns null when absent, else the normalized
+    /// mode string.</summary>
     private static string? ParseSeed(string[] args)
     {
         string? arg = args.FirstOrDefault(a => a.StartsWith("--seed", StringComparison.OrdinalIgnoreCase));
@@ -528,6 +590,27 @@ public partial class App : Application
         if (_window.WindowState == WindowState.Minimized)
             _window.WindowState = WindowState.Normal;
         _window.Activate();
+
+        // First time the window is actually up this session, surface the what's-new popup if
+        // this launch upgraded into a version with notes. Deferred so ShowMainWindow returns
+        // first, and one-shot (the field is cleared), so it can't stack.
+        if (_pendingWhatsNew is { } release)
+        {
+            _pendingWhatsNew = null;
+            Dispatcher.BeginInvoke(() =>
+            {
+                try { new WhatsNewWindow(release) { Owner = _window }.ShowDialog(); }
+                catch (Exception ex) { Log("whatsnew", ex); }
+            });
+        }
+    }
+
+    /// <summary>Open the app straight onto the Remarks feed. The landing spot for a
+    /// clicked remark toast: the remark's advice lives there.</summary>
+    public void ShowRemarks()
+    {
+        ShowMainWindow();
+        _window?.NavigateTo("remarks");
     }
 
     private void OnWindowClosing(object? sender, CancelEventArgs e)
@@ -566,20 +649,26 @@ public partial class App : Application
         if (_scores is null || _repo is null)
             return (0, DeltaT.Core.Scoring.BaselineBuilder.MinLoadedSessions);
         string cpuName = _monitor?.Latest?.Find(ComponentKind.Cpu)?.Name ?? "CPU";
-        long from = _scores.EpochStart.ToUnixTimeSeconds();
+        int mode = _scores.ActiveMode;
+        long from = _scores.EffectiveEpochStart(mode).ToUnixTimeSeconds();
         long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         int bouts = _repo.CountLoadedSessions(ComponentKind.Cpu, cpuName, onAc: true, from, to,
-            DeltaT.Core.Scoring.BaselineBuilder.SessionGapSeconds);
+            DeltaT.Core.Scoring.BaselineBuilder.SessionGapSeconds, mode);
         return (bouts, DeltaT.Core.Scoring.BaselineBuilder.MinLoadedSessions);
     }
 
-    public void OpenFeedbackWindow()
+    public void OpenFeedbackWindow(bool asIdea = false)
     {
         if (_feedback is null)
             return;
         var vm = new FeedbackViewModel(_feedback);
+        if (asIdea)
+            vm.IsIdea = true; // preselect the "idea" kind; the user can still switch to "bug"
         new FeedbackWindow { DataContext = vm, Owner = _window }.ShowDialog();
     }
+
+    public void OpenDonateWindow() =>
+        new Views.DonateWindow { Owner = _window }.ShowDialog();
 
     public void Quit()
     {

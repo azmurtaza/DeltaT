@@ -127,7 +127,7 @@
       if (FILTER === 'idea' && f.kind !== 'idea') continue;
       if (FILTER === 'open' && f.handled) continue;
       shown++;
-      var meta = [f.machine, f.cpu, f.os, f.app_version ? ('v' + f.app_version) : '',
+      var meta = [f.machine, f.cpu, f.gpu, f.os, f.app_version ? ('v' + f.app_version) : '',
                   f.elevated === true ? 'admin' : (f.elevated === false ? 'standard' : '')]
                  .filter(Boolean).map(esc).join('  /  ');
       html += '<div class="card ' + (f.handled ? 'done' : '') + '">';

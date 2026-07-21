@@ -54,7 +54,7 @@ public class ScoreCoordinatorTests : IDisposable
 
     /// <summary>One contiguous loaded (or idle) bout of telemetry minutes.</summary>
     private void WriteSession(ComponentKind kind, string name, DateTimeOffset start, int minutes, double delta,
-        LoadBucket bucket = LoadBucket.Heavy, int band = 2)
+        LoadBucket bucket = LoadBucket.Heavy, int band = 2, int mode = 0)
     {
         var accs = new List<MinuteAccum>();
         for (int i = 0; i < minutes; i++)
@@ -62,7 +62,7 @@ public class ScoreCoordinatorTests : IDisposable
             accs.Add(new MinuteAccum
             {
                 Minute = start.AddMinutes(i).ToUnixTimeSeconds() / 60 * 60,
-                Kind = kind, Name = name, Bucket = bucket, Band = band, OnAc = true,
+                Kind = kind, Name = name, Bucket = bucket, Band = band, OnAc = true, Mode = mode,
                 N = 30,
                 TempSum = (delta + 25) * 30, TempMin = delta + 24, TempMax = delta + 26,
                 LoadSum = (bucket == LoadBucket.Heavy ? 85 : 5) * 30,
@@ -73,11 +73,11 @@ public class ScoreCoordinatorTests : IDisposable
     }
 
     /// <summary>Four tight, well-separated loaded sessions — enough to earn a lock.</summary>
-    private void WriteLockworthyLoad(ComponentKind kind, string name, DateTimeOffset firstSession)
+    private void WriteLockworthyLoad(ComponentKind kind, string name, DateTimeOffset firstSession, double baseDelta = 60.0, int mode = 0)
     {
-        double[] deltas = { 60.0, 60.1, 59.9, 60.05 };
+        double[] deltas = { baseDelta, baseDelta + 0.1, baseDelta - 0.1, baseDelta + 0.05 };
         for (int s = 0; s < deltas.Length; s++)
-            WriteSession(kind, name, firstSession.AddHours(s * 5), minutes: 15, delta: deltas[s]);
+            WriteSession(kind, name, firstSession.AddHours(s * 5), minutes: 15, delta: deltas[s], mode: mode);
     }
 
     // ------------------------------------------------------------ the 0% bug
@@ -329,6 +329,122 @@ public class ScoreCoordinatorTests : IDisposable
         // Still locked (earned locks are trusted), still judging against real cells.
         Assert.False(scores[ComponentKind.Cpu].Calibrating);
         Assert.Contains(_repo.GetBaseline(0), r => r.Bucket == LoadBucket.Heavy && r.Kind == ComponentKind.Cpu);
+    }
+
+    // --------------------------------------------------- fixed indoor temperature mode
+
+    private void EnableFixedMode() => _settings.SetBool(SettingsKeys.IndoorFixedMode, true);
+    private void DisableFixedMode() => _settings.SetBool(SettingsKeys.IndoorFixedMode, false);
+
+    [Fact]
+    public void WeatherAndFixed_LearnSeparateBaselines_ThatNeverMix()
+    {
+        // Weather mode first: learn a baseline at rise 60.
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2), baseDelta: 60, mode: 0);
+        DateTimeOffset weatherNow = T0.AddDays(1);
+        UseSnapshot(weatherNow);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(weatherNow);
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+
+        // Switch to fixed indoor mode. The fixed reference sits higher than the outside was, so
+        // the die's rise over it is smaller (45). Both regimes' data land in the SAME time window
+        // and the SAME ambient band from here on, so only the mode tag can keep them apart.
+        EnableFixedMode();
+        coordinator.EnsureFixedModeStarted(weatherNow);
+
+        // With no fixed baseline yet, fixed mode must NOT borrow the weather lock/score.
+        UseSnapshot(weatherNow.AddMinutes(1));
+        var early = coordinator.Compute(weatherNow.AddMinutes(1));
+        Assert.False(early[ComponentKind.Cpu].Scored); // fixed baseline is still calibrating
+        Assert.Null(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.fixed"));
+
+        // Interleave both regimes' data in the same window: fixed at 45, weather at 60.
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, weatherNow.AddHours(1), baseDelta: 45, mode: 1);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, weatherNow.AddHours(2), baseDelta: 60, mode: 0);
+
+        DateTimeOffset fixedNow = weatherNow.AddDays(1);
+        UseSnapshot(fixedNow);
+        coordinator.Compute(fixedNow);
+
+        // Fixed baseline locked independently, and each baseline learned ITS OWN rise, uncontaminated.
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.fixed"));
+        double fixedDelta = _repo.GetBaseline(0, mode: 1).Single(r => r.Bucket == LoadBucket.Heavy).DeltaAvg;
+        double weatherDelta = _repo.GetBaseline(0, mode: 0).Single(r => r.Bucket == LoadBucket.Heavy).DeltaAvg;
+        Assert.InRange(fixedDelta, 44, 46);    // learned the fixed regime, not pulled toward 60
+        Assert.InRange(weatherDelta, 59, 61);  // weather baseline untouched by the fixed data
+    }
+
+    [Fact]
+    public void TogglingModes_SwitchesBaselines_WithoutWiping()
+    {
+        // Learn both baselines.
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2), baseDelta: 60, mode: 0);
+        DateTimeOffset t1 = T0.AddDays(1);
+        UseSnapshot(t1);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(t1);
+
+        EnableFixedMode();
+        coordinator.EnsureFixedModeStarted(t1);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, t1.AddHours(1), baseDelta: 45, mode: 1);
+        DateTimeOffset t2 = t1.AddDays(1);
+        UseSnapshot(t2);
+        coordinator.Compute(t2);
+
+        string weatherLock = $"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}";
+        string fixedLock = $"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.fixed";
+        DateTimeOffset? weatherAt = _settings.GetTimestamp(weatherLock);
+        DateTimeOffset? fixedAt = _settings.GetTimestamp(fixedLock);
+        Assert.NotNull(weatherAt);
+        Assert.NotNull(fixedAt);
+
+        // Flip weather -> fixed -> weather several times and compute each time. Neither lock may
+        // be cleared or moved: toggling switches which baseline is active, it never relearns.
+        for (int i = 0; i < 3; i++)
+        {
+            DisableFixedMode();
+            UseSnapshot(t2.AddHours(i * 2 + 1));
+            var w = coordinator.Compute(t2.AddHours(i * 2 + 1));
+            Assert.True(w[ComponentKind.Cpu].Scored); // weather baseline serves immediately
+
+            EnableFixedMode();
+            UseSnapshot(t2.AddHours(i * 2 + 2));
+            var f = coordinator.Compute(t2.AddHours(i * 2 + 2));
+            Assert.True(f[ComponentKind.Cpu].Scored); // fixed baseline serves immediately
+        }
+
+        Assert.Equal(weatherAt, _settings.GetTimestamp(weatherLock));
+        Assert.Equal(fixedAt, _settings.GetTimestamp(fixedLock));
+    }
+
+    [Fact]
+    public void ChangingFixedTemperature_RelearnsFixedBaseline_LeavesWeatherUntouched()
+    {
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2), baseDelta: 60, mode: 0);
+        DateTimeOffset t1 = T0.AddDays(1);
+        UseSnapshot(t1);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(t1);
+
+        EnableFixedMode();
+        coordinator.EnsureFixedModeStarted(t1);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, t1.AddHours(1), baseDelta: 45, mode: 1);
+        DateTimeOffset t2 = t1.AddDays(1);
+        UseSnapshot(t2);
+        coordinator.Compute(t2);
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.fixed"));
+
+        // User changes the fixed temperature: the fixed baseline is invalid (learned at the old
+        // reference) and must be dropped and relearned; weather is never touched.
+        coordinator.ResetFixedBaseline(t2.AddMinutes(1));
+        Assert.Null(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.fixed"));
+        Assert.Empty(_repo.GetBaseline(0, mode: 1));
+        Assert.NotEmpty(_repo.GetBaseline(0, mode: 0)); // weather baseline survives
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
     }
 
     public void Dispose()

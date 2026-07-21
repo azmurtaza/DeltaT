@@ -23,6 +23,12 @@ public sealed class TrayManager : IDisposable
     private readonly MonitoringService _monitor;
     private readonly Dispatcher _dispatcher;
     private readonly MenuItem _pauseItem;
+    private readonly Action _showWindow;
+    private readonly Action _showRemarks;
+    // Which surface a balloon click should open. A remark toast routes to the Remarks
+    // feed (where its advice lives); an app notice (tray hint, "updating") just opens
+    // the window. Latest-wins, since only one balloon shows at a time.
+    private bool _lastBalloonWasRemark;
     private DateTimeOffset _lastIconUpdate = DateTimeOffset.MinValue;
     private int _lastShownTemp = int.MinValue;
     private string _lastTooltip = "";
@@ -32,10 +38,12 @@ public sealed class TrayManager : IDisposable
     private double _pendingFraction;
     private int _uiHopQueued;
 
-    public TrayManager(MonitoringService monitor, Action showWindow, Action quit)
+    public TrayManager(MonitoringService monitor, Action showWindow, Action quit, Action showRemarks)
     {
         _monitor = monitor;
         _dispatcher = Application.Current.Dispatcher;
+        _showWindow = showWindow;
+        _showRemarks = showRemarks;
 
         _pauseItem = new MenuItem { Header = "Pause monitoring" };
         _pauseItem.Click += (_, _) =>
@@ -69,11 +77,24 @@ public sealed class TrayManager : IDisposable
         };
         _tray.TrayLeftMouseUp += (_, _) => showWindow();
 
+        // A clicked toast should take the user somewhere useful, not just sit there. A
+        // remark toast opens the Remarks feed (its advice); any other notice opens the
+        // window. Fires from the balloon itself and from the Action Center entry Windows
+        // keeps for it, so the toast stays actionable after it fades.
+        _tray.TrayBalloonTipClicked += (_, _) =>
+        {
+            if (_lastBalloonWasRemark)
+                _showRemarks();
+            else
+                _showWindow();
+        };
+
         _monitor.SnapshotCaptured += OnSnapshot;
     }
 
     public void ShowFirstTrayHint()
     {
+        _lastBalloonWasRemark = false;
         _tray.ShowBalloonTip("DeltaT is still watching",
             "Closing the window keeps monitoring alive here in the tray. Right-click the icon to quit for real.",
             BalloonIcon.Info);
@@ -81,14 +102,18 @@ public sealed class TrayManager : IDisposable
 
     public void ShowInfo(string title, string message)
     {
+        _lastBalloonWasRemark = false;
         _tray.ShowBalloonTip(title, message, BalloonIcon.Info);
     }
 
     public void ShowRemarkToast(DeltaT.Core.Remarks.Remark remark)
     {
+        _lastBalloonWasRemark = true;
         _tray.ShowBalloonTip(
             remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? "Needs attention" : "DeltaT noticed",
-            remark.Text,
+            // The balloon is clickable now, so invite the click. Windows truncates a long
+            // body anyway; the full advice waits in the Remarks feed the click opens.
+            remark.Text + "\n\nClick to see what DeltaT suggests.",
             remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? BalloonIcon.Error : BalloonIcon.Warning);
     }
 

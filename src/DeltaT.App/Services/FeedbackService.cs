@@ -46,6 +46,10 @@ public sealed class FeedbackService
             os = RuntimeInformation.OSDescription,
             machine = _machine.Display,
             cpu = _machine.CpuName,
+            // GPU(s) as WMI names them: the discrete card plus any integrated one, comma-joined.
+            // Absent from every report before now, which is why GPU bugs (the AMD iGPU one) had no
+            // GPU line to triage from. Null when WMI listed none, never an empty string.
+            gpu = _machine.GpuNames.Count > 0 ? string.Join(", ", _machine.GpuNames) : null,
             elevated = _elevated,
         };
 
