@@ -9,7 +9,7 @@ found a way to abuse it, please tell me.
 **Please do not open a public issue for a security problem.**
 
 Use GitHub's private vulnerability reporting instead: go to the
-[Security tab](https://github.com/azmurtaza/DeltaT/security/advisories/new) and
+[Security tab](https://github.com/deltat-app/DeltaT/security/advisories/new) and
 open a draft advisory. It is private between you and me until a fix ships, and it
 does not require you to have any prior contact with the project.
 

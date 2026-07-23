@@ -16,7 +16,7 @@ public class UpdateCheckerTests
             : "[]";
         return $$"""
             {"tag_name":"{{tag}}","draft":{{(draft ? "true" : "false")}},"prerelease":{{(prerelease ? "true" : "false")}},
-             "html_url":"https://github.com/azmurtaza/DeltaT/releases/tag/{{tag}}","body":"notes here","assets":{{assets}}}
+             "html_url":"https://github.com/deltat-app/DeltaT/releases/tag/{{tag}}","body":"notes here","assets":{{assets}}}
             """;
     }
 

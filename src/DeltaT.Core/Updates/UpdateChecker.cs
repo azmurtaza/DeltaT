@@ -17,7 +17,7 @@ internal sealed record InstallerAsset(string Url, string? Sha256);
 /// only <see cref="CheckAsync"/> touches the wire.</summary>
 public sealed class UpdateChecker
 {
-    public const string Owner = "azmurtaza";
+    public const string Owner = "deltat-app";
     public const string Repo = "DeltaT";
 
     private readonly HttpClient _http;
