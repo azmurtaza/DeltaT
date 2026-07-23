@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using DeltaT.App.Services;
 
 namespace DeltaT.App.Controls;
 
@@ -401,7 +402,7 @@ public sealed class TimeSeriesChart : FrameworkElement
         double axisY = h - MarginBottom;
         dc.DrawLine(AxisPen, new Point(MarginLeft, axisY), new Point(w - MarginRight, axisY));
         TimeSpan span = TimeSpan.FromSeconds(t1 - t0);
-        string fmt = span.TotalHours <= 26 ? "HH:mm" : span.TotalDays <= 8 ? "ddd HH:mm" : "MMM d";
+        string fmt = span.TotalHours <= 26 ? TimeFormat.TimeOnly : span.TotalDays <= 8 ? TimeFormat.DayAndTime : "MMM d";
         int xTicks = Math.Max(3, (int)(plotW / 130));
         for (int i = 0; i <= xTicks; i++)
         {
@@ -479,7 +480,7 @@ public sealed class TimeSeriesChart : FrameworkElement
         dc.DrawEllipse(AccentBrush, null, new Point(cx, Y(traceValue)), 2.5, 2.5);
 
         string when = DateTimeOffset.FromUnixTimeSeconds(nearest.Ts).ToLocalTime()
-            .ToString(span.TotalHours <= 26 ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture);
+            .ToString(span.TotalHours <= 26 ? TimeFormat.TimeOnly : TimeFormat.DateAndTime, CultureInfo.InvariantCulture);
         string line1 = $"{when}   {traceValue:0.#}°  ({nearest.Min:0}–{nearest.Max:0}°)";
         string line2 = ambientAt is { } av ? $"outside {av:0.#}°   Δ {traceValue - av:+0.#;-0.#}°" : "";
         FormattedText t1f = Label(line1, MonoSemiFace, 11, TextBrush, dip);

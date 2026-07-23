@@ -20,6 +20,11 @@ namespace DeltaT.App.Services;
 public sealed class TrayManager : IDisposable
 {
     private readonly TaskbarIcon _tray;
+    // The DeltaT delta, shown as the large icon on every balloon so a notification carries
+    // the brand instead of a generic system glyph. On Windows 10/11 the shell renders a
+    // custom-icon balloon as a modern toast card. Null only if the icon can't be loaded,
+    // in which case the balloons fall back to the built-in severity glyph.
+    private readonly System.Drawing.Icon? _brandIcon;
     private readonly MonitoringService _monitor;
     private readonly Dispatcher _dispatcher;
     private readonly MenuItem _pauseItem;
@@ -89,13 +94,33 @@ public sealed class TrayManager : IDisposable
                 _showWindow();
         };
 
+        try
+        {
+            System.Windows.Resources.StreamResourceInfo? sri =
+                Application.GetResourceStream(new Uri("pack://application:,,,/Assets/deltat.ico"));
+            if (sri?.Stream is { } s)
+                using (s) _brandIcon = new System.Drawing.Icon(s, 64, 64);
+        }
+        catch { _brandIcon = null; }
+
         _monitor.SnapshotCaptured += OnSnapshot;
+    }
+
+    // Shows a balloon with the DeltaT logo as the large icon (a modern toast card on
+    // Windows 10/11), falling back to the built-in severity glyph if the brand icon
+    // couldn't be loaded.
+    private void Balloon(string title, string message, BalloonIcon fallback)
+    {
+        if (_brandIcon is not null)
+            _tray.ShowBalloonTip(title, message, _brandIcon, largeIcon: true);
+        else
+            _tray.ShowBalloonTip(title, message, fallback);
     }
 
     public void ShowFirstTrayHint()
     {
         _lastBalloonWasRemark = false;
-        _tray.ShowBalloonTip("DeltaT is still watching",
+        Balloon("DeltaT is still watching",
             "Closing the window keeps monitoring alive here in the tray. Right-click the icon to quit for real.",
             BalloonIcon.Info);
     }
@@ -103,16 +128,16 @@ public sealed class TrayManager : IDisposable
     public void ShowInfo(string title, string message)
     {
         _lastBalloonWasRemark = false;
-        _tray.ShowBalloonTip(title, message, BalloonIcon.Info);
+        Balloon(title, message, BalloonIcon.Info);
     }
 
     public void ShowRemarkToast(DeltaT.Core.Remarks.Remark remark)
     {
         _lastBalloonWasRemark = true;
-        _tray.ShowBalloonTip(
+        Balloon(
             remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? "Needs attention" : "DeltaT noticed",
-            // The balloon is clickable now, so invite the click. Windows truncates a long
-            // body anyway; the full advice waits in the Remarks feed the click opens.
+            // The balloon is clickable, so invite the click. Windows truncates a long body
+            // anyway; the full advice waits in the Remarks feed the click opens.
             remark.Text + "\n\nClick to see what DeltaT suggests.",
             remark.Severity == DeltaT.Core.Remarks.RemarkSeverity.Alert ? BalloonIcon.Error : BalloonIcon.Warning);
     }
@@ -192,6 +217,27 @@ public sealed class TrayManager : IDisposable
     private static readonly Typeface TileFace =
         new(new FontFamily("Cascadia Mono, Consolas"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
 
+    // The real DeltaT delta, drawn as the tray glyph until a temperature is available (and
+    // therefore the small attribution icon on a notification, which mirrors the tray icon).
+    // Null if the packed icon can't be decoded, in which case the "Δ" tile is used instead.
+    private static readonly ImageSource? BrandGlyph = LoadBrandGlyph();
+
+    private static ImageSource? LoadBrandGlyph()
+    {
+        try
+        {
+            var img = new BitmapImage();
+            img.BeginInit();
+            img.UriSource = new Uri("pack://application:,,,/Assets/deltat.ico");
+            img.DecodePixelWidth = 32;
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.EndInit();
+            img.Freeze();
+            return img;
+        }
+        catch { return null; }
+    }
+
     private static SolidColorBrush Frozen(Color c)
     {
         var b = new SolidColorBrush(c);
@@ -214,22 +260,32 @@ public sealed class TrayManager : IDisposable
         var visual = new DrawingVisual();
         using (DrawingContext dc = visual.RenderOpen())
         {
-            Color accent = temp is null ? ThermalPalette.Accent : ThermalPalette.ColorFromFraction(fraction);
-            var accentBrush = new SolidColorBrush(accent);
-            accentBrush.Freeze();
-
-            dc.DrawRoundedRectangle(TileBg, TileBorder, new Rect(0.5, 0.5, size - 1, size - 1), 3, 3);
-
-            string text = temp?.ToString(CultureInfo.InvariantCulture) ?? "Δ";
-            double fontSize = text.Length >= 3 ? 14 : text.Length == 2 ? 17 : 18;
-            var ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                TileFace, fontSize, accentBrush, 1.0);
-            dc.DrawText(ft, new Point((size - ft.Width) / 2, (size - ft.Height) / 2 - 1.5));
-
-            if (temp is not null)
+            // Before any temperature is read, show the real DeltaT logo rather than a "Δ"
+            // tile, so the startup tray icon (and the notification's small attribution icon,
+            // which mirrors it) carries the brand mark.
+            if (temp is null && BrandGlyph is not null)
             {
-                double barW = Math.Max(3, (size - 8) * Math.Clamp(fraction, 0, 1));
-                dc.DrawRectangle(accentBrush, null, new Rect(4, size - 6, barW, 2.5));
+                dc.DrawImage(BrandGlyph, new Rect(0, 0, size, size));
+            }
+            else
+            {
+                Color accent = temp is null ? ThermalPalette.Accent : ThermalPalette.ColorFromFraction(fraction);
+                var accentBrush = new SolidColorBrush(accent);
+                accentBrush.Freeze();
+
+                dc.DrawRoundedRectangle(TileBg, TileBorder, new Rect(0.5, 0.5, size - 1, size - 1), 3, 3);
+
+                string text = temp?.ToString(CultureInfo.InvariantCulture) ?? "Δ";
+                double fontSize = text.Length >= 3 ? 14 : text.Length == 2 ? 17 : 18;
+                var ft = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                    TileFace, fontSize, accentBrush, 1.0);
+                dc.DrawText(ft, new Point((size - ft.Width) / 2, (size - ft.Height) / 2 - 1.5));
+
+                if (temp is not null)
+                {
+                    double barW = Math.Max(3, (size - 8) * Math.Clamp(fraction, 0, 1));
+                    dc.DrawRectangle(accentBrush, null, new Rect(4, size - 6, barW, 2.5));
+                }
             }
         }
 
@@ -242,6 +298,7 @@ public sealed class TrayManager : IDisposable
     public void Dispose()
     {
         _monitor.SnapshotCaptured -= OnSnapshot;
+        _brandIcon?.Dispose();
         _tray.Dispose();
     }
 }

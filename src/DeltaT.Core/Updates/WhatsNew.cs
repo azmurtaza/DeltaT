@@ -20,6 +20,30 @@ public static class WhatsNewNotes
         // Style: this is a technical app, so cover EVERY new thing in real detail (see the
         // "What's-new content" rule in CLAUDE.md). One item per genuinely new capability, each
         // body explaining what it does, how it works, and why it matters. No "a few small changes".
+        new WhatsNewRelease(new Version(2, 2, 1),
+            "This release brings fan speed readings to Lenovo Legion laptops, adds a 12-hour clock option and proper branded notifications, and fixes a GPU test crash, the auto-updater, and a clipped window.",
+            new WhatsNewItem[]
+            {
+                // --- New features ---
+                new("New: fan speed readings on Lenovo Legion and LOQ laptops",
+                    "DeltaT can now read CPU and GPU fan RPM on Legion and LOQ machines. Fan speed is what lets DeltaT tell 'cooler because the fans are working harder' apart from 'genuinely cooling better', so without it the score falls back to raw temperature differences. Lenovo has moved this reading across three firmware interfaces over the years and left the old ones answering zero, which made a modern Legion look like it had no fans at all. DeltaT now tries all three and uses whichever actually responds. Verified on a Legion 7i Gen 9, and strictly read only, so your fan curves are never touched."),
+                new("New: 12-hour clock option",
+                    "Settings now has a toggle for 12-hour times with AM/PM instead of 24-hour. It applies everywhere a time appears: the history graphs and their hover readout, the remarks feed, and the dashboard. Takes effect straight away, no restart needed."),
+                new("New: notifications now carry the DeltaT mark",
+                    "Notifications now show the DeltaT logo as their main icon, which Windows 10 and 11 render as a proper toast card rather than a plain system balloon, so it is clear at a glance which app is talking. The tray icon also shows the logo during startup, before the first temperature reading arrives."),
+
+                // --- Fixes ---
+                new("Fixed: the GPU test could crash DeltaT on some newer graphics drivers",
+                    "The GPU fingerprint now runs its load in a separate background process. On some early drivers for the newest NVIDIA cards (seen on an RTX 50-series laptop whose GPU also drives the display), that load could fault at the driver level, and a fault of that kind cannot be caught from inside the app, so it took DeltaT down mid-test. Isolated in its own process, it now kills only the helper and the test reports the failure instead."),
+                new("Fixed: update failing with a 'cannot find the file specified' error",
+                    "On some machines, especially DeltaT installed outside the default Program Files location, applying an update failed with 'The system cannot find the file specified'. DeltaT was launching its update helper by short name from its own install folder, which some Windows setups couldn't resolve. It now uses the helper's full system path from a location that always exists."),
+                new("Fixed: buttons cut off at the bottom of this window",
+                    "On some screen sizes and display scaling settings, the buttons along the bottom of this what's new window were clipped by the window edge and could not be clicked. It now sizes itself so they always fit."),
+
+                // --- Notes ---
+                new("Note: DeltaT now has a written privacy policy",
+                    "There is now a full privacy policy on the project page. Nothing has changed, it just writes down what was always true: your readings, baselines and history stay in a database on your own machine. The only things that leave are the weather lookup, the version check, and a feedback report if you send one."),
+            }),
         new WhatsNewRelease(new Version(2, 2, 0),
             "This release adds a fixed-temperature scoring mode and a tip jar, and fixes GPU detection, OmenMon coexistence, and a few unit and settings issues.",
             new WhatsNewItem[]

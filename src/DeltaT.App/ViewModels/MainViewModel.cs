@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeltaT.App.Controls;
+using DeltaT.App.Services;
 using DeltaT.Core.Knowledge;
 using DeltaT.Core.Machine;
 using DeltaT.Core.Monitoring;
@@ -482,7 +483,7 @@ public partial class MainViewModel : ObservableObject
     public void OnRemark(Remark remark)
     {
         LatestRemark = remark.Text;
-        LatestRemarkTime = remark.TimestampUtc.ToLocalTime().ToString("HH:mm");
+        LatestRemarkTime = remark.TimestampUtc.ToLocalTime().ToString(TimeFormat.TimeOnly);
         LatestRemarkTag = remark.Severity switch
         {
             RemarkSeverity.Alert => "ALERT",

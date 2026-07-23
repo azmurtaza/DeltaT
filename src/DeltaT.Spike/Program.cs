@@ -513,6 +513,7 @@ if (args.Contains("--fans", StringComparer.OrdinalIgnoreCase))
     {
         ("Acer Nitro/Predator", @"root\wmi", "AcerGamingFunction"),
         ("Lenovo Legion/LOQ", @"root\WMI", "LENOVO_FAN_METHOD"),
+        ("Lenovo Legion (Gen 9+)", @"root\WMI", "LENOVO_OTHER_METHOD"),
         ("ASUS ROG/TUF", @"root\WMI", "AsusAtkWmi_WMNB"),
         ("HP business-class", @"root\HP\InstrumentedBIOS", "HPBIOS_BIOSNumericSensor"),
         ("HP business-class (alt)", @"root\WMI", "HPBIOS_BIOSNumericSensor"),
@@ -553,26 +554,177 @@ if (args.Contains("--fans", StringComparer.OrdinalIgnoreCase))
     }
     catch { /* not an HP business BIOS */ }
 
+    // Lenovo: the class exists on Legion/LOQ, but the current reader guesses the getter name
+    // (LENOVO_FAN_METHOD.Fan_GetCurrentFanSpeed) and it never answers on real hardware. Dump the
+    // real method list off both candidate classes so the correct call can be wired with
+    // certainty, then actively try the Legion Toolkit getter so one run confirms the fix. All
+    // read-only: only method signatures are listed and only a Get* is invoked, never a Set*.
+    foreach (string cls in new[] { "LENOVO_FAN_METHOD", "LENOVO_GAMEZONE_DATA" })
+    {
+        try
+        {
+            using var mc = new ManagementClass(@"root\WMI", cls, null);
+            List<MethodData> methods = mc.Methods.Cast<MethodData>().ToList();
+            Line();
+            Line($"{cls} methods ({methods.Count}):");
+            foreach (MethodData m in methods)
+            {
+                string ins = m.InParameters is null ? "" : string.Join(", ",
+                    m.InParameters.Properties.Cast<PropertyData>().Select(p => $"{p.Type} {p.Name}"));
+                string outs = m.OutParameters is null ? "" : string.Join(", ",
+                    m.OutParameters.Properties.Cast<PropertyData>().Select(p => $"{p.Type} {p.Name}"));
+                Line($"  {m.Name}({ins}) -> {outs}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Line();
+            Line($"{cls}: not present ({ex.GetType().Name})");
+        }
+    }
+
+    // Actively call the Legion getters. Two questions have to be separated here, because on an
+    // idle machine they look identical: is this WMI class alive at all on Gen 9 firmware, and are
+    // the fan getters real or stubbed? A Legion parks its fans completely at idle, so a genuine
+    // parked 0 and a stubbed 0 are the same reading. GetVersion/GetCPUTemp are the discriminator
+    // (not load-dependent, and obviously wrong if zero), and the fan values are re-read under a
+    // real CPU load below, where a working getter must climb off zero.
+    ManagementObject? gzInst = null;
+    try
+    {
+        using var gz = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM LENOVO_GAMEZONE_DATA");
+        gzInst = gz.Get().Cast<ManagementObject>().FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        Line($"LENOVO_GAMEZONE_DATA query failed ({ex.GetType().Name})");
+    }
+
+    // Gen 9+ fan source, sampled alongside the old one under load below: whichever climbs off
+    // zero as the fans spin is the interface this firmware actually implements.
+    ManagementObject? omInst = null;
+    try
+    {
+        using var om = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM LENOVO_OTHER_METHOD");
+        omInst = om.Get().Cast<ManagementObject>().FirstOrDefault();
+    }
+    catch
+    {
+        // Older firmware without the class; the probe list below reports it.
+    }
+
+    string OmRead(int id)
+    {
+        if (omInst is null)
+            return "n/a";
+        try
+        {
+            using ManagementBaseObject ip = omInst.GetMethodParameters("GetFeatureValue");
+            ip["IDs"] = id;
+            using ManagementBaseObject? op = omInst.InvokeMethod("GetFeatureValue", ip, null);
+            return op?["Value"]?.ToString() ?? "(null)";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR:{ex.GetType().Name}";
+        }
+    }
+
+    if (gzInst is not null)
+    {
+        Line();
+        Line("LENOVO_GAMEZONE_DATA getters at idle (GetVersion/GetCPUTemp prove the class returns live data):");
+        foreach (string m in new[] { "GetVersion", "GetCPUTemp", "GetGPUTemp", "GetThermalMode",
+                                     "GetFanCount", "GetFanMaxSpeed", "GetFan1Speed", "GetFan2Speed" })
+            Line($"  {m,-16}() -> Data={GzRead(gzInst, m)}");
+    }
+
+    // Lenovo moved the fan getter twice and left the superseded ones answering 0, so all three
+    // generations' protocols are probed here (ids from LenovoLegionToolkit's V3/V1/V2 sensor
+    // controllers). Whichever returns a real nonzero RPM is the one this firmware implements.
     Line();
-    Line("live read through the real probe coordinator (10 samples, 2 s apart):");
+    Line("Lenovo fan protocols, all three generations (only one is implemented per firmware):");
+    LenovoProbe("LENOVO_OTHER_METHOD", "GetFeatureValue", "Value", "IDs", 0x04030001, 0x04030002);
+    LenovoProbe("LENOVO_FAN_METHOD", "Fan_GetCurrentFanSpeed", "CurrentFanSpeed", "FanID", 0, 1);
+
+    void LenovoProbe(string cls, string method, string outProp, string param, int cpuArg, int gpuArg)
+    {
+        try
+        {
+            using var s = new ManagementObjectSearcher(@"root\WMI", $"SELECT * FROM {cls}");
+            ManagementObject? inst = s.Get().Cast<ManagementObject>().FirstOrDefault();
+            if (inst is null)
+            {
+                Line($"  {cls,-22} -> class absent");
+                return;
+            }
+            using (inst)
+            {
+                foreach ((string label, int arg) in new[] { ("cpu", cpuArg), ("gpu", gpuArg) })
+                {
+                    try
+                    {
+                        using ManagementBaseObject ip = inst.GetMethodParameters(method);
+                        ip[param] = arg;
+                        using ManagementBaseObject? op = inst.InvokeMethod(method, ip, null);
+                        Line($"  {cls,-22} {method}({param}=0x{arg:X}) {label} -> {outProp}={op?[outProp] ?? "(null)"}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Line($"  {cls,-22} {method}({param}=0x{arg:X}) {label} -> failed ({ex.GetType().Name}: {ex.Message.Trim()})");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Line($"  {cls,-22} -> query failed ({ex.GetType().Name})");
+        }
+    }
+
+    Line();
+    Line("live read UNDER CPU LOAD (a Legion parks its fans at idle, so the machine is loaded");
+    Line("here to force them to spin; 20 samples, 3 s apart, about 60 s total):");
+    using (var burner = new DeltaT.Core.Diagnostics.CpuBurner())
     using (var fans = new DeltaT.Core.Monitoring.LaptopFanReader())
     {
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 20; i++)
         {
             LaptopFanSample s = fans.Read();
-            Line($"  [{i:00}] cpu={FmtFan(s.CpuRpm)}  gpu={FmtFan(s.GpuRpm)}  latched={fans.ActiveVendor ?? "(none yet)"}");
-            Thread.Sleep(2000);
+            string raw = gzInst is null ? "" :
+                $"   gz: fan1={GzRead(gzInst, "GetFan1Speed"),-5} fan2={GzRead(gzInst, "GetFan2Speed"),-5} temp={GzRead(gzInst, "GetCPUTemp"),-4}"
+                + $" om: cpu={OmRead(0x04030001),-5} gpu={OmRead(0x04030002)}";
+            Line($"  [{i:00}] cpu={FmtFan(s.CpuRpm)}  gpu={FmtFan(s.GpuRpm)}  latched={fans.ActiveVendor ?? "(none yet)",-8}{raw}");
+            Thread.Sleep(3000);
         }
         Line();
         Line(fans.ActiveVendor is { } v
             ? $"RESULT: fan telemetry works on this machine via the {v} interface."
-            : "RESULT: no vendor answered. DeltaT runs fine, but with no fan RPM the scoring "
-              + "falls back to raw deltas (no fan normalization). On an HP Omen/Victus the fans are "
-              + "EC-only: run --omen to probe the Embedded Controller directly. On an MSI it is "
-              + "expected (not yet covered).");
+            : "RESULT: no vendor answered. If the raw fan values above stayed 0 while cpuTemp "
+              + "climbed under load, this firmware answers the fan getters but does not implement "
+              + "them, and the fans must be read another way. DeltaT still runs fine, but with no "
+              + "fan RPM the scoring falls back to raw deltas (no fan normalization). On an HP "
+              + "Omen/Victus the fans are EC-only: run --omen. On an MSI it is expected (not yet covered).");
     }
+    gzInst?.Dispose();
+    omInst?.Dispose();
 
     static string FmtFan(double? rpm) => rpm is { } r ? $"{r,5:0} rpm" : "   -- ";
+
+    // Read one parameterless LENOVO_GAMEZONE_DATA getter, reporting the failure rather than
+    // hiding it, so "answered with 0" and "did not answer" stay distinguishable.
+    static string GzRead(ManagementObject inst, string method)
+    {
+        try
+        {
+            using ManagementBaseObject? op = inst.InvokeMethod(method, null, null);
+            return op?["Data"]?.ToString() ?? "(null)";
+        }
+        catch (Exception ex)
+        {
+            return $"ERR:{ex.GetType().Name}";
+        }
+    }
     return;
 }
 

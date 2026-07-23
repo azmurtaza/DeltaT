@@ -87,6 +87,7 @@ public static class SettingsKeys
     public const string LastSeenUtc = "app.lastSeenUtc";           // heartbeat: last scoring pass, for dormancy detection
 
     public const string UnitsFahrenheit = "ui.fahrenheit";
+    public const string Clock12Hour = "ui.clock12h";               // show times as 12-hour (AM/PM) instead of 24-hour
     public const string CloseToTray = "ui.closeToTray";
     public const string NotificationsEnabled = "ui.notifications";
     public const string SampleIntervalSeconds = "monitor.intervalSeconds";

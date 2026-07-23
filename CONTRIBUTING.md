@@ -67,7 +67,7 @@ dotnet run --project src/DeltaT.App -- --simulate --uishot=DIR
 ## Reports from hardware I do not have are the best contribution
 
 Fan RPM is the one reading that depends on your laptop's vendor. Acer Nitro and
-Predator are verified on real hardware. Lenovo Legion and LOQ, ASUS ROG, TUF and
+Predator, and Lenovo Legion and LOQ, are verified on real hardware. ASUS ROG, TUF and
 Zenbook, HP business laptops, and HP OMEN and Victus are all implemented from
 public protocol documentation but have **never been confirmed on a real machine**.
 They fail safe, so a wrong guess goes dark rather than reporting a wrong number,

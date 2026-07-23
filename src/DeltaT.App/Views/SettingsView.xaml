@@ -143,6 +143,12 @@
                             </Grid>
                             <Grid Style="{StaticResource SettingRow}">
                                 <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                           Text="Show time in 12-hour format (AM/PM)"/>
+                                <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right"
+                                          IsChecked="{Binding TwelveHourClock}"/>
+                            </Grid>
+                            <Grid Style="{StaticResource SettingRow}">
+                                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
                                            Text="Close button hides to tray (monitoring continues)"/>
                                 <CheckBox Style="{StaticResource Toggle}" HorizontalAlignment="Right"
                                           IsChecked="{Binding CloseToTray}"/>

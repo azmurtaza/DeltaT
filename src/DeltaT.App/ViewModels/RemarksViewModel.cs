@@ -4,6 +4,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeltaT.App.Controls;
+using DeltaT.App.Services;
 using DeltaT.Core.Remarks;
 using DeltaT.Core.Storage;
 
@@ -59,7 +60,7 @@ public partial class RemarksViewModel : ObservableObject
 
     public void Prepend(Remark remark) =>
         Items.Insert(0, new RemarkItem(
-            remark.TimestampUtc.ToLocalTime().ToString("MMM d · HH:mm"),
+            remark.TimestampUtc.ToLocalTime().ToString(TimeFormat.DateDotTime),
             remark.Text,
             DotFor(remark.Severity switch
             {
@@ -68,7 +69,7 @@ public partial class RemarksViewModel : ObservableObject
             "REMARK"));
 
     private static RemarkItem ToItem(StoredEvent e) => new(
-        DateTimeOffset.FromUnixTimeSeconds(e.Ts).ToLocalTime().ToString("MMM d · HH:mm"),
+        DateTimeOffset.FromUnixTimeSeconds(e.Ts).ToLocalTime().ToString(TimeFormat.DateDotTime),
         e.Message,
         DotFor(e.Severity, e.Type),
         e.Type.ToUpperInvariant());

@@ -167,11 +167,21 @@ public sealed class FingerprintTest
 
     private readonly MonitoringService _monitor;
     private readonly IAmbientProvider _ambient;
+    private readonly Func<string?, IDisposable>? _gpuBurnFactory;
 
-    public FingerprintTest(MonitoringService monitor, IAmbientProvider ambient)
+    /// <param name="gpuBurnFactory">How to start the GPU load, given the discrete card's name.
+    /// When null the load runs in-process via <see cref="GpuBurner"/> (the Spike and tests).
+    /// The real app passes a factory that runs the load in a CHILD PROCESS: OpenCL on some
+    /// early GPU drivers (seen on a Blackwell RTX 50-series laptop that drives its own display)
+    /// faults at the driver level, and a native access violation / TDR reset cannot be caught in
+    /// managed code, so an in-process burn takes the whole app down. Isolated in a child, that
+    /// fault kills only the child and the test reports it instead of crashing.</param>
+    public FingerprintTest(MonitoringService monitor, IAmbientProvider ambient,
+        Func<string?, IDisposable>? gpuBurnFactory = null)
     {
         _monitor = monitor;
         _ambient = ambient;
+        _gpuBurnFactory = gpuBurnFactory;
     }
 
     public async Task<FingerprintResult> RunAsync(FingerprintTarget target,
@@ -364,6 +374,6 @@ public sealed class FingerprintTest
         // Aim the compute load at the same GPU the sensors watch (the discrete card
         // on a hybrid laptop, not the display iGPU).
         string? gpuName = _monitor.Latest?.Find(ComponentKind.GpuDiscrete)?.Name;
-        return new GpuBurner(gpuName);
+        return _gpuBurnFactory is { } factory ? factory(gpuName) : new GpuBurner(gpuName);
     }
 }

@@ -131,12 +131,25 @@ public sealed class UpdateService
             $"Start-Sleep -Seconds 1; " +
             $"Start-Process -FilePath '{exe}' -ArgumentList '--minimized'";
 
+        // Resolve powershell.exe by full path and run from a directory that always exists.
+        // With UseShellExecute=false the child inherits our install-dir as its working
+        // directory and relies on PATH to find the bare "powershell.exe"; on some machines
+        // (a non-default install location, a trimmed PATH) that failed with "the system
+        // cannot find the file specified". A fully-qualified exe plus an explicit, guaranteed
+        // working directory removes both failure modes.
+        string powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (!File.Exists(powershell))
+            powershell = "powershell.exe";
+
         Process.Start(new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = powershell,
             Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{command}\"",
             UseShellExecute = false,
             CreateNoWindow = true,
+            WorkingDirectory = Path.GetTempPath(),
         });
 
         Application.Current.Dispatcher.Invoke(() => Application.Current.Shutdown());

@@ -41,6 +41,7 @@ public partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(TempUnit))]
     [NotifyPropertyChangedFor(nameof(IndoorFixedTempDisplay))]
     private bool _fahrenheit;
+    [ObservableProperty] private bool _twelveHourClock;
     [ObservableProperty] private double _indoorOffset;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FixedTempEnabled))]
@@ -109,6 +110,7 @@ public partial class SettingsViewModel : ObservableObject
         UpdatesAvailable = !simulated || showUpdatesPanel;
 
         _fahrenheit = settings.GetBool(SettingsKeys.UnitsFahrenheit, false);
+        _twelveHourClock = settings.GetBool(SettingsKeys.Clock12Hour, false);
         _indoorOffset = settings.GetDouble(SettingsKeys.IndoorOffsetC) ?? 0;
         _indoorFixedMode = settings.GetBool(SettingsKeys.IndoorFixedMode, false);
         _indoorFixedTempC = settings.GetDouble(SettingsKeys.IndoorFixedTempC) ?? 22;
@@ -173,6 +175,12 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     partial void OnFahrenheitChanged(bool value) => _settings.SetBool(SettingsKeys.UnitsFahrenheit, value);
+
+    partial void OnTwelveHourClockChanged(bool value)
+    {
+        _settings.SetBool(SettingsKeys.Clock12Hour, value);
+        TimeFormat.Use12Hour = value; // so the charts and feed pick it up on their next redraw
+    }
 
     partial void OnIndoorOffsetChanged(double value) =>
         _settings.SetDouble(SettingsKeys.IndoorOffsetC, Math.Round(value, 1));

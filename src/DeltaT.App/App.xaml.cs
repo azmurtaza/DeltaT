@@ -53,21 +53,31 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Child-process GPU burn: this launch exists only to hold a GPU load in isolation,
+        // so a graphics-driver fault crashes this throwaway process instead of the real app.
+        // Handled first, before elevation, the singleton mutex, or any UI. It never returns.
+        if (e.Args.Any(a => a.Equals("--gpu-burn", StringComparison.OrdinalIgnoreCase)))
+        {
+            GpuBurnProcess.RunChild(e.Args);
+            return;
+        }
+
         DeltaTDb.MigrateLegacyStore();
 
         bool simulate = e.Args.Any(a => a.StartsWith("--simulate", StringComparison.OrdinalIgnoreCase));
         bool minimized = e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
         bool noElevate = e.Args.Contains("--no-elevate", StringComparer.OrdinalIgnoreCase);
         _uishotDir = e.Args.FirstOrDefault(a => a.StartsWith("--uishot=", StringComparison.OrdinalIgnoreCase))?[9..];
+        bool toastDemo = e.Args.Any(a => a.StartsWith("--toast-demo", StringComparison.OrdinalIgnoreCase));
         IsSimulated = simulate;
 
         // One DeltaT at a time; a second launch just surfaces the first. The
-        // screenshot harness is exempt — it runs against a throwaway sim db and
-        // must be able to capture alongside a live tray instance.
+        // screenshot harness and the toast-demo harness are exempt — they run against a
+        // throwaway sim db and must be able to run alongside a live tray instance.
         _mutex = new Mutex(true, @"Local\DeltaT.App.Singleton", out bool isFirst);
         _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\DeltaT.App.Show");
         bool elevatingHandoff = e.Args.Contains("--elevating", StringComparer.OrdinalIgnoreCase);
-        if (!isFirst && _uishotDir is null)
+        if (!isFirst && _uishotDir is null && !toastDemo)
         {
             // Normal second launch → just surface the running instance and exit.
             // Elevation handoff is different: the non-elevated instance that spawned
@@ -133,6 +143,37 @@ public partial class App : Application
 
         if (_uishotDir is not null)
             _ = CaptureUiShotsAsync(_uishotDir);
+
+        // Dev-only: `--toast-demo=N` fires one sample notification through the real toast
+        // path (1 warning remark, 2 alert remark, 3 tray hint, 4 update notice) a moment
+        // after startup, then keeps running so the toast stays actionable. Lets a real
+        // banner be seen/captured without waiting for a live thermal event.
+        string? demo = e.Args.FirstOrDefault(a => a.StartsWith("--toast-demo", StringComparison.OrdinalIgnoreCase));
+        if (demo is not null)
+        {
+            int n = int.TryParse(demo.Split('=').ElementAtOrDefault(1), out int v) ? v : 1;
+            _ = Dispatcher.BeginInvoke(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1.5));
+                switch (n)
+                {
+                    case 2:
+                        _tray?.ShowRemarkToast(new Remark("demo", DateTimeOffset.UtcNow, RemarkSeverity.Alert,
+                            "Thermal throttling 3x in the last hour. The cooling isn't keeping up with the load.", null));
+                        break;
+                    case 3:
+                        _tray?.ShowFirstTrayHint();
+                        break;
+                    case 4:
+                        _tray?.ShowInfo("DeltaT is updating", "Installing v2.2.1. DeltaT will restart in a moment.");
+                        break;
+                    default:
+                        _tray?.ShowRemarkToast(new Remark("demo", DateTimeOffset.UtcNow, RemarkSeverity.Warning,
+                            "CPU has been creeping up about 0.8 degrees a month over the last 6 weeks at matched load and weather. Worth keeping an eye on.", null));
+                        break;
+                }
+            });
+        }
     }
 
     // TEMP helper for the full-height what's-new shot.
@@ -337,6 +378,7 @@ public partial class App : Application
     {
         _db = new DeltaTDb(simulate ? SimulatedDbPath() : null);
         _settings = new SettingsStore(_db);
+        TimeFormat.Use12Hour = _settings.GetBool(SettingsKeys.Clock12Hour, false);
         if (_uishotDir is not null)
             _settings.SetBool(SettingsKeys.FirstRunDone, true); // uishot wants the real screens, not onboarding
         _repo = new TelemetryRepository(_db);
@@ -630,7 +672,8 @@ public partial class App : Application
     {
         if (_monitor is null || _ambient is null || _repo is null)
             return;
-        var test = new FingerprintTest(_monitor, _ambient);
+        // Run the GPU load out of process, so a graphics-driver fault can't crash DeltaT.
+        var test = new FingerprintTest(_monitor, _ambient, gpuName => new GpuBurnProcess(gpuName));
         var vm = new FingerprintViewModel(
             test,
             new FingerprintSequence(test, _monitor),
