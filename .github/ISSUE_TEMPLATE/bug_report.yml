@@ -12,7 +12,7 @@ body:
         account needed. Either way works.
 
         **Found a security problem?** Please do not file it here. See
-        [SECURITY.md](https://github.com/deltat-app/DeltaT/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/azmurtaza/DeltaT/blob/main/SECURITY.md).
 
   - type: textarea
     id: what-happened

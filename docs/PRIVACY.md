@@ -63,4 +63,4 @@ you'd rather update manually.
 
 Questions about this policy, or a request to delete a submitted feedback
 report, can be sent via the contact info in the feedback form, or by opening
-an issue at [github.com/deltat-app/DeltaT](https://github.com/deltat-app/DeltaT).
+an issue at [github.com/azmurtaza/DeltaT](https://github.com/azmurtaza/DeltaT).

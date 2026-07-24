@@ -128,6 +128,6 @@ DeltaT is free software under the [GNU General Public License v3](LICENSE). You 
 
 Two additional terms apply, permitted by section 7 of that license and set out in full in [NOTICE](NOTICE). A modified version must be renamed and must not present itself as DeltaT, and any promise you make to your own users is yours to keep rather than the original author's. They exist because a tool that runs with administrator rights and tells you your hardware is healthy is one a user has to be able to trace back to whoever actually built it.
 
-**Only builds from [this repository's releases](https://github.com/deltat-app/DeltaT/releases) are DeltaT.** The app updates itself from here and nowhere else, and it verifies that what it downloaded is byte for byte the file published here before it runs it. A copy obtained from anywhere else is somebody else's software, whatever it calls itself.
+**Only builds from [this repository's releases](https://github.com/azmurtaza/DeltaT/releases) are DeltaT.** The app updates itself from here and nowhere else, and it verifies that what it downloaded is byte for byte the file published here before it runs it. A copy obtained from anywhere else is somebody else's software, whatever it calls itself.
 
 Third-party components and the services DeltaT talks to are listed in [NOTICE](NOTICE).

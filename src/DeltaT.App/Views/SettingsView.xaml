@@ -340,7 +340,7 @@
                             </Grid>
                             <Button Style="{StaticResource Button.Link}" HorizontalAlignment="Left"
                                     Command="{Binding OpenProjectPageCommand}"
-                                    ToolTip="github.com/deltat-app/DeltaT (latest installer and documentation)">
+                                    ToolTip="github.com/azmurtaza/DeltaT (latest installer and documentation)">
                                 <TextBlock FontSize="11.5" Text="Project page, installer &amp; docs ↗"/>
                             </Button>
                         </StackPanel>
