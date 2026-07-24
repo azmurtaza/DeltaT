@@ -34,6 +34,8 @@ public partial class DeviceViewModel : ObservableObject
 
     [ObservableProperty] private string _limitsText = "";
     [ObservableProperty] private string _ambientText = "";
+    [ObservableProperty] private string _powerBudgetText = "";
+    [ObservableProperty] private bool _hasPowerBudget;
 
     public DeviceViewModel(MachineIdentity machine, ThermalProfile profile,
         Func<SensorSnapshot?> latest, AmbientService ambient, SettingsStore settings)
@@ -84,12 +86,51 @@ public partial class DeviceViewModel : ObservableObject
                 : $"outside reference {Temp(amb, fahrenheit):0.#}{unit}"
             : "outside reference unavailable";
 
+        ComponentReading? cpu = snap?.Find(ComponentKind.Cpu);
         var limits = new List<string>();
-        if (snap?.Find(ComponentKind.Cpu)?.ThrottleLimitC is { } cpuLimit)
+        if (cpu?.ThrottleLimitC is { } cpuLimit)
             limits.Add($"CPU TjMax {Temp(cpuLimit, fahrenheit):0}{unit}, read from the silicon");
         if (snap?.Find(ComponentKind.GpuDiscrete)?.ThrottleLimitC is { } gpuLimit)
             limits.Add($"GPU throttle point {Temp(gpuLimit, fahrenheit):0}{unit}");
         LimitsText = limits.Count > 0 ? string.Join("\n", limits) : "No limits reported yet. Sensors still warming up.";
+
+        PowerBudgetText = BuildPowerBudget(cpu);
+        HasPowerBudget = PowerBudgetText.Length > 0;
+    }
+
+    /// <summary>The Intel-only absolute power-budget readout: the CPU's configured PL1/PL2, and
+    /// whether it is currently reaching that budget or being held below it by heat. Strictly
+    /// gated so a deliberately power-limited machine (boost off, low power plan) reads as
+    /// "by configuration", never as a thermal problem. Empty (row hidden) on an Intel CPU whose
+    /// MSRs can't be read yet; a one-line note on AMD, whose budget lives in a different register
+    /// set.</summary>
+    private string BuildPowerBudget(ComponentReading? cpu)
+    {
+        if (cpu?.PowerLimit is not { } pl)
+        {
+            bool amd = CpuName.Contains("AMD", StringComparison.OrdinalIgnoreCase)
+                       || CpuName.Contains("Ryzen", StringComparison.OrdinalIgnoreCase);
+            return amd
+                ? "Power budget: this is an Intel-only reading. AMD exposes its limits (PPT/TDC/EDC) through a different interface."
+                : "";
+        }
+
+        var lines = new List<string>();
+        if (pl.Pl2W is { } pl2)
+            lines.Add($"PL2 (short-term turbo): {pl2:0} W" + (pl.TauSeconds is { } tau ? $" for {tau:0.#} s" : ""));
+        if (pl.Pl1W is { } pl1)
+            lines.Add($"PL1 (sustained): {pl1:0} W");
+
+        if (cpu.PowerW is { } w)
+        {
+            if (pl.ThermalActive && pl.Pl2W is { } p2 && w < p2 * 0.85)
+                lines.Add($"Now drawing {w:0} W, held below the budget by heat. Cooling, not power, is the ceiling.");
+            else if (pl.PowerLimitActive || pl.CurrentLimitActive)
+                lines.Add($"Now drawing {w:0} W, capped by the power configuration (not heat). That is by design.");
+            else
+                lines.Add($"Now drawing {w:0} W, within the configured budget.");
+        }
+        return string.Join("\n", lines);
     }
 
     internal static double Temp(double c, bool fahrenheit) => fahrenheit ? c * 9 / 5 + 32 : c;

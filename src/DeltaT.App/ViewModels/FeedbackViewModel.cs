@@ -1,12 +1,14 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeltaT.App.Services;
+using DeltaT.Core.Storage;
 
 namespace DeltaT.App.ViewModels;
 
 public partial class FeedbackViewModel : ObservableObject
 {
     private readonly FeedbackService _service;
+    private readonly SettingsStore _settings;
 
     // compose | sending | done
     [ObservableProperty] private string _state = "compose";
@@ -16,7 +18,12 @@ public partial class FeedbackViewModel : ObservableObject
     [ObservableProperty] private string _contact = "";
     [ObservableProperty] private string _statusText = "";
 
-    public FeedbackViewModel(FeedbackService service) => _service = service;
+    public FeedbackViewModel(FeedbackService service, SettingsStore settings)
+    {
+        _service = service;
+        _settings = settings;
+        Contact = _settings.Get(SettingsKeys.FeedbackContact) ?? "";
+    }
 
     // Mutually exclusive kind toggle, without a converter.
     partial void OnIsBugChanged(bool value)
@@ -49,6 +56,9 @@ public partial class FeedbackViewModel : ObservableObject
         {
             State = "done";
             StatusText = "";
+            string contact = Contact.Trim();
+            if (contact.Length > 0)
+                _settings.Set(SettingsKeys.FeedbackContact, contact);
         }
         else
         {

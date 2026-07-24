@@ -582,6 +582,97 @@ public sealed class TelemetryRepository
         return sessionMeans;
     }
 
+    /// <summary>Per-session mean deltas for one cell, each session normalized to the cell's
+    /// own mean package power before being averaged. This is the version the calibration
+    /// CONFIDENCE gate consumes, and it exists to close a design gap: the locked scoring engine
+    /// compares power-normalized thermal resistance (ΔT × baselineW / recentW), but the readiness
+    /// gate used to demand tight agreement on RAW ΔT. A GPU pulls very different watts across
+    /// games at the same utilization, so its raw session means scatter and the gate read that as
+    /// "I don't know this machine yet" (the GPU "stuck at 80%" report), even though the scorer
+    /// would normalize the wattage away and never see the variance. Expressing every minute's
+    /// delta at the cell's mean power (ΔT × cellMeanW / minuteW, ratio clamped 0.5..2.0 like the
+    /// scorer) strips exactly the cross-session power variance the scorer itself ignores, leaving
+    /// the gate to judge the paste-relevant residual. Units stay °C, so the same target SE applies.
+    ///
+    /// Fail-safe: a minute with no power reading keeps its raw delta, and a cell with no power at
+    /// all (older GPUs, legacy pre-v6 rows) is byte-identical to <see cref="GetSessionMeanDeltas"/>.</summary>
+    public IReadOnlyList<double> GetSessionMeanDeltasPowerNormalized(
+        ComponentKind kind, string name, LoadBucket bucket, int band, bool onAc, long fromTs, long toTs, int gapSeconds, int mode = 0)
+    {
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT minute, delta_sum/delta_n, CASE WHEN power_n > 0 THEN power_sum/power_n ELSE NULL END
+            FROM agg_minute
+            WHERE kind=$kind AND name=$name AND bucket=$bucket AND band=$band AND on_ac=$onac
+              AND mode=$mode
+              AND delta_n > 0 AND minute BETWEEN $from AND $to
+            ORDER BY minute;
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$bucket", (int)bucket);
+        cmd.Parameters.AddWithValue("$band", band);
+        cmd.Parameters.AddWithValue("$onac", onAc ? 1 : 0);
+        cmd.Parameters.AddWithValue("$from", fromTs);
+        cmd.Parameters.AddWithValue("$to", toTs);
+        cmd.Parameters.AddWithValue("$mode", mode);
+
+        var minutes = new List<(long Minute, double Delta, double? Power)>();
+        double powerSum = 0;
+        int powerN = 0;
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                long minute = reader.GetInt64(0);
+                double delta = reader.GetDouble(1);
+                double? power = reader.IsDBNull(2) ? null : reader.GetDouble(2);
+                if (power is { } p && p > 0)
+                {
+                    powerSum += p;
+                    powerN++;
+                }
+                minutes.Add((minute, delta, power));
+            }
+        }
+
+        // The reference the cell's readings are all expressed at: this cell's own mean watts.
+        double? cellMeanPower = powerN > 0 ? powerSum / powerN : null;
+
+        var sessionMeans = new List<double>();
+        long prevMinute = long.MinValue;
+        double runSum = 0;
+        int runN = 0;
+        foreach ((long minute, double delta, double? power) in minutes)
+        {
+            double normalized = delta;
+            if (cellMeanPower is { } mean && power is { } p && p > 0)
+            {
+                double ratio = Math.Clamp(mean / p, PowerRatioClampLow, PowerRatioClampHigh);
+                normalized = delta * ratio;
+            }
+            if (runN > 0 && minute - prevMinute > gapSeconds)
+            {
+                sessionMeans.Add(runSum / runN);
+                runSum = 0;
+                runN = 0;
+            }
+            runSum += normalized;
+            runN++;
+            prevMinute = minute;
+        }
+        if (runN > 0)
+            sessionMeans.Add(runSum / runN);
+        return sessionMeans;
+    }
+
+    // Power-ratio clamp band, mirroring the scoring engine's own correction limits: beyond a
+    // halving/doubling of watts the physics is no longer a clean linear rescale, so the ratio
+    // is capped rather than trusted (a comparability guard against sensor glitches).
+    private const double PowerRatioClampLow = 0.5;
+    private const double PowerRatioClampHigh = 2.0;
+
     /// <summary>Distinct loaded (medium/heavy/full) usage bouts in a window, deduplicated
     /// across load buckets and ambient bands. A single gaming session oscillates between
     /// Medium, Heavy and Max (and can straddle an ambient-band boundary), so counting each

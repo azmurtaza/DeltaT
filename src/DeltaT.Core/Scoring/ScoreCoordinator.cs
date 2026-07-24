@@ -506,7 +506,8 @@ public sealed class ScoreCoordinator
             CalibrationDataConfidence: cal.DataConfidence,
             ProvisionalEverShown: scoreShownBefore,
             ConcernOverrideC: ConcernOverride(c.Kind),
-            HeadroomWarnings: _settings.GetBool(SettingsKeys.HeadroomWarnings, true));
+            HeadroomWarnings: _settings.GetBool(SettingsKeys.HeadroomWarnings, true),
+            CpuThermallyPowerConstrained: IsThermallyPowerConstrained(c));
 
         ComponentScore score = ScoringEngine.Score(input, _fmtTemp);
         // Once a provisional number has been shown, remember it: the confidence floor
@@ -516,6 +517,21 @@ public sealed class ScoreCoordinator
             _settings.SetInt(ScoreShownKey(c.Kind, mode), Epoch);
         return score;
     }
+
+    /// <summary>Fraction of the configured PL2 below which package power is "meaningfully
+    /// short" of the budget. A CPU drawing under this while its thermal limiter asserts is
+    /// being held back by heat, not by its power configuration.</summary>
+    private const double PowerDeficitFraction = 0.85;
+
+    /// <summary>Intel-only: is this CPU confirmed to be thermally pinned below its own PL2
+    /// right now? Requires the thermal/PROCHOT limiter to be asserting AND package power to
+    /// sit meaningfully below the configured PL2 under load. A by-design deficit (boost off, a
+    /// power/current limiter) does NOT assert the thermal bit, so it never trips this.</summary>
+    private static bool IsThermallyPowerConstrained(ComponentReading c) =>
+        c.Kind == ComponentKind.Cpu
+        && c.PowerLimit is { ThermalActive: true, Pl2W: { } pl2 } && pl2 > 0
+        && c.PowerW is { } w && w < pl2 * PowerDeficitFraction
+        && c.LoadPercent is { } load && load >= 40;
 
     /// <summary>User's sustained-temperature concern override for a component, if set.</summary>
     private double? ConcernOverride(ComponentKind kind) => kind == ComponentKind.Cpu
@@ -569,8 +585,12 @@ public sealed class ScoreCoordinator
         int loadedSessions = _repo.CountLoadedSessions(
             c.Kind, c.Name, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode);
 
+        // The readiness gate judges session means power-NORMALIZED, matching what the locked
+        // scorer actually compares (thermal resistance, not raw ΔT). This stops a GPU's
+        // game-to-game wattage scatter from reading as un-lockable noise. The stored baseline
+        // SE (BaselineBuilder.Build) still uses the raw query — only readiness changes here.
         return BaselineBuilder.Assess(epochStart, nowUtc, baselineStats,
-            (bucket, band) => _repo.GetSessionMeanDeltas(
+            (bucket, band) => _repo.GetSessionMeanDeltasPowerNormalized(
                 c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode),
             loadedSessions,
             pasteIsFresh: EpochReason == "repaste");

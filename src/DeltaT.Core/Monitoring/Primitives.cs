@@ -8,6 +8,7 @@ public enum ComponentKind
     Storage,
     Battery,
     Motherboard,
+    Ram,
 }
 
 /// <summary>Utilization bands. All per-component statistics are kept per bucket
@@ -91,6 +92,7 @@ public static class ComponentKinds
         ComponentKind.GpuIntegrated => "iGPU",
         ComponentKind.Storage => "SSD",
         ComponentKind.Battery => "Battery",
+        ComponentKind.Ram => "RAM",
         _ => "Board",
     };
 

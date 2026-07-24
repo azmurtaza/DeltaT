@@ -167,6 +167,19 @@ public sealed class ComponentGlyph : FrameworkElement
                 Poly(Stroke, (9.2, 1.6), (5.2, 8.8), (7.6, 8.8), (6.6, 14.4), (10.9, 7.2), (8.4, 7.2));
                 break;
 
+            case "RAM":
+                // Memory module: the board, its chips, and keyed contact fingers.
+                dc.DrawRectangle(null, Stroke, R(1.6, 4.6, 12.8, 6.4));
+                for (int i = 0; i < 3; i++)
+                    dc.DrawRectangle(FillFaint, null, R(3.0 + i * 3.4, 6.0, 2.4, 2.4)); // chips
+                for (int i = 0; i < 7; i++)
+                {
+                    if (i == 3) continue;                    // key notch gap
+                    double x = 2.6 + i * 1.6;
+                    Line(StrokeFaint, x, 11.0, x, 13.2);     // contact fingers
+                }
+                break;
+
             default:
                 // Generic module.
                 dc.DrawRectangle(null, Stroke, R(3.5, 3.5, 9, 9));

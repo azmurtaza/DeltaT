@@ -378,7 +378,8 @@ public static class ScoringEngine
             input.ThrottleEvents, input.RecentWindowHours, nearLimit, beyondNorm,
             powerRatio,
             LoadedCompared: ex.LoadedCompared > 0,
-            PowerLimitedComparisons: ex.PowerExcludedCells > 0);
+            PowerLimitedComparisons: ex.PowerExcludedCells > 0,
+            ThermallyPowerConstrained: input.CpuThermallyPowerConstrained);
     }
 
     /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>

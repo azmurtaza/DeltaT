@@ -119,6 +119,29 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  {"fixed baseline (shipped)",-30} {reg.SeparatedMeanScore,9:0.0} {reg.SeparatedFalseFaults,10}/{reg.Trials}");
     Console.WriteLine($"  {"weather baseline (mode-blind)",-30} {reg.CrossModeMeanScore,9:0.0} {reg.CrossModeFalseFaults,10}/{reg.Trials}");
     Console.WriteLine();
+
+    // Calibration confidence-gate fidelity: the "stuck at 80%" failure modes. The main table
+    // above bypasses the gate (BaselineReady:true); this exercises the real BaselineBuilder.Assess.
+    // A stable machine must lock in a handful of sessions; a lone thin cell must never veto a
+    // well-pinned baseline; a GPU whose watts scatter game-to-game must lock once its session
+    // means are power-normalized (as the gate now does), where raw ΔT leaves it stuck.
+    var calib = DeltaT.Core.Scoring.DetectionBenchmark.RunCalibrationFidelity();
+    Console.WriteLine("Calibration confidence-gate fidelity (the \"stuck at 80%\" failure modes)");
+    Console.WriteLine($"  stable machine locks:                {calib.StableLockRate * 100,5:0.0}%  (median {calib.StableMedianSessionsToLock:0} sessions)");
+    Console.WriteLine($"  lone thin cell vetoes a ready base:  {calib.RareCellVetoRate * 100,5:0.0}%  (want ~0)");
+    Console.WriteLine($"  scattered GPU locks, raw ΔT:         {calib.GpuRawLockRate * 100,5:0.0}%  (the stuck GPU)");
+    Console.WriteLine($"  scattered GPU locks, power-adjusted: {calib.GpuNormLockRate * 100,5:0.0}%  (the fix)");
+    Console.WriteLine();
+
+    // Intel PL2 thermal-constraint disambiguation: an absolute (day-one) signal read from the
+    // CPU's own MSRs. A machine thermally pinned below its PL2 must surface a thermal/headroom
+    // cause; a deliberately power-limited machine (boost off, the dev-laptop config) must not.
+    var pl2 = DeltaT.Core.Scoring.DetectionBenchmark.RunPl2Disambiguation();
+    Console.WriteLine("Intel PL2 thermal-constraint disambiguation (absolute day-one signal)");
+    Console.WriteLine($"  thermally-pinned CPU names a thermal cause: {pl2.ConstrainedNamedThermal * 100,5:0.0}%");
+    Console.WriteLine($"  boost-off / power-limited false faults:     {pl2.ByDesignFalseFaults * 100,5:0.0}%  (want ~0)");
+    Console.WriteLine($"  boost-off / power-limited mean score:       {pl2.ByDesignMeanScore,5:0.0}");
+    Console.WriteLine();
     return;
 
     static string FmtSev(double? c) => c is { } v ? $"{v:0.#}°" : "n/a";

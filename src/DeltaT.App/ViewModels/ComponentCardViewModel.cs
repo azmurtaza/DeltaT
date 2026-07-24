@@ -33,6 +33,7 @@ public partial class ComponentCardViewModel : ObservableObject
             ComponentKind.GpuIntegrated => "iGPU",
             ComponentKind.Storage => "SSD",
             ComponentKind.Battery => "BAT",
+            ComponentKind.Ram => "RAM",
             _ => "SYS",
         };
         Limit = first.ThrottleLimitC ?? DefaultScaleC(first.Kind);
@@ -78,6 +79,7 @@ public partial class ComponentCardViewModel : ObservableObject
         if (r.FanRpm is { } f) meta.Add($"{f:0} rpm");
         if (r.WearPercent is { } w) meta.Add($"wear {w:0.#}%");
         if (r.BatteryCycles is { } cyc) meta.Add($"{cyc:0} cycles");
+        if (r.MemUsedGb is { } used && r.MemTotalGb is { } total) meta.Add($"{used:0.0} / {total:0} GB");
         if (r.IsThrottling) meta.Add("THROTTLING");
         MetaText = string.Join("  ·  ", meta);
     }

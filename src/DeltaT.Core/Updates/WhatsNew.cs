@@ -20,6 +20,30 @@ public static class WhatsNewNotes
         // Style: this is a technical app, so cover EVERY new thing in real detail (see the
         // "What's-new content" rule in CLAUDE.md). One item per genuinely new capability, each
         // body explaining what it does, how it works, and why it matters. No "a few small changes".
+        new WhatsNewRelease(new Version(2, 3, 0),
+            "This release fixes calibration getting stuck at 80%, adds a RAM usage card, and adds an Intel power-budget reading that can tell a machine held back by heat from one that is simply set to run cooler.",
+            new WhatsNewItem[]
+            {
+                // --- Fixes ---
+                new("Fixed: calibration stuck at 80%",
+                    "Several people reported calibration sitting at 80% and never finishing, especially for the GPU. There were two causes and both are fixed. First, a load bucket the machine only visited once (say it briefly crossed into a different weather band) counted just as heavily as one backed by weeks of data, so a single thin reading could hold a well-learned baseline below the finish line forever. DeltaT now weights each reading by how much evidence actually backs it, so a rare one-off can no longer veto the rest. Second, the confidence check compared raw temperature readings, but a GPU pulls very different wattage from game to game, which made its readings look noisier than they are. It now compares them adjusted for power draw, the same way the score itself already did, so genuine consistency is finally recognised. Measured result: a stable machine now locks in about three sessions, and a scattered GPU that used to be stuck now calibrates reliably."),
+                new("New: calibration tells you exactly what it is waiting for",
+                    "While calibrating, DeltaT now names the specific load and weather it still needs more of, and how close that reading is to being tight enough, instead of a vague 'a few more sessions'. If your usage or a workout never fully loads a component, you can now see that is why it is waiting."),
+
+                // --- New features ---
+                new("New: RAM usage card",
+                    "The dashboard now shows a memory card beneath the battery: current RAM usage with a used and total gigabytes readout and its own icon, matching the other components. It is a live readout only. Memory has no thermal paste, so it is never scored or mixed into any thermal verdict."),
+                new("New: Intel power-budget reading tells heat apart from a power setting",
+                    "On Intel CPUs, DeltaT now reads the chip's own configured power budget (PL1 and PL2) and, crucially, which limit is holding it back at any moment. This answers a question raw temperature cannot: when a CPU is not reaching its full power, is that because cooling is the ceiling, or because it is deliberately set to run cooler (boost off, a battery or quiet power plan)? DeltaT only calls a machine 'thermally constrained' when the chip itself reports that heat, not a power setting, is the active limit while it draws below its budget. That reading sharpens the fan, airflow, and mount diagnoses when heat really is the cause, and it never counts a deliberately power-limited machine as a fault. You can see the budget on the Device page under Silicon limits, and a fingerprint test now gives a day-one verdict on whether cooling is your ceiling, no baseline required. This is Intel-only for now; AMD exposes its limits differently."),
+                new("New: the fingerprint test no longer locks up the app",
+                    "The fingerprint window used to hold the rest of DeltaT hostage for the two to four minutes it ran, so you could not check the dashboard or your history while the test was going. It is now an ordinary window: leave it open and keep using the app. Clicking the button again while a test is running brings that window back to the front instead of kicking off a second test on top of the first. The feedback window works the same way now."),
+                new("New: your contact details are remembered on feedback reports",
+                    "If you fill in an email or handle when you send a bug report or idea, DeltaT remembers it for the next one, so following up on a report does not mean typing it in again. It stays on your machine and is only ever sent with a report you choose to send."),
+
+                // --- Refinements ---
+                new("Fixed: the headline verdict is now colored, and stops naming one chip when both agree",
+                    "The big verdict line at the top of the dashboard was plain white text, which made 'Excellent' look exactly as urgent as 'Degraded'. It now carries the same color as the health dials, green when healthy through to red when it needs attention, so the state reads at a glance. It also used to name whichever of your CPU and GPU scored worse, so a perfectly healthy machine read 'GPU: Excellent' and left you wondering whether the CPU had even been checked. When both agree it now simply says the verdict once, and only names a specific component when that is the actual information, meaning that one needs attention and the other does not."),
+            }),
         new WhatsNewRelease(new Version(2, 2, 1),
             "This release brings fan speed readings to Lenovo Legion laptops, adds a 12-hour clock option and proper branded notifications, and fixes a GPU test crash, the auto-updater, and a clipped window.",
             new WhatsNewItem[]

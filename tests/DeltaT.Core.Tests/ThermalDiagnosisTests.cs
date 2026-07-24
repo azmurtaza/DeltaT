@@ -350,6 +350,76 @@ public class PowerCapSuiteTests
     }
 }
 
+/// <summary>Calibration confidence-gate fidelity: the "stuck at 80%" reports. The main
+/// benchmark bypasses the gate (BaselineReady:true), so these exercise the real
+/// BaselineBuilder.Assess and lock its three properties in CI: a stable machine locks in a
+/// handful of sessions; a lone thinly-sampled cell never vetoes a well-pinned baseline
+/// (evidence-mass weighting); and a GPU whose watts scatter game-to-game locks once its
+/// session means are power-normalized (as the gate now does), where raw ΔT leaves it stuck.</summary>
+public class CalibrationFidelityTests
+{
+    private static readonly DetectionBenchmark.CalibrationFidelityResult R =
+        DetectionBenchmark.RunCalibrationFidelity(seed: 424242, trials: 400);
+
+    [Fact]
+    public void StableMachine_LocksInAFewSessions()
+    {
+        Assert.True(R.StableLockRate >= 0.98,
+            $"a stable machine should reliably lock, got {R.StableLockRate * 100:0.0}%");
+        Assert.True(R.StableMedianSessionsToLock <= 4,
+            $"a stable machine should lock in a handful of sessions, median {R.StableMedianSessionsToLock:0}");
+    }
+
+    [Fact]
+    public void RareThinCell_NeverVetoesAWellPinnedBaseline()
+    {
+        // The core "stuck forever" mechanism: before evidence-mass weighting a single
+        // one-session cell dropped a fully-confident baseline below the lock bar every time.
+        Assert.True(R.RareCellVetoRate <= 0.02,
+            $"a lone thin cell vetoed a ready baseline in {R.RareCellVetoRate * 100:0.0}% of trials (want ~0)");
+    }
+
+    [Fact]
+    public void ScatteredGpu_LocksOnlyOncePowerNormalized()
+    {
+        // The gate must SEE the failure on raw ΔT (or this measurement has gone blind) and
+        // must clear it once the session means are power-normalized.
+        Assert.True(R.GpuRawLockRate <= 0.15,
+            $"raw-ΔT GPU scatter should mostly stay stuck, locked {R.GpuRawLockRate * 100:0.0}%");
+        Assert.True(R.GpuNormLockRate >= 0.90,
+            $"power-normalized GPU scatter should lock, got {R.GpuNormLockRate * 100:0.0}%");
+        Assert.True(R.GpuNormLockRate - R.GpuRawLockRate >= 0.60,
+            "power normalization must make a large, measurable difference to GPU calibration");
+    }
+}
+
+/// <summary>Intel PL2 thermal-constraint disambiguation (the absolute, day-one signal). A CPU
+/// held below its own configured PL2 by heat (MSR limiter asserting) must surface a thermal /
+/// headroom cause; a deliberately power-limited machine (boost off, low power plan, the
+/// maintainer's own dev-laptop config) draws just as far below PL2 for a reason that is NOT
+/// heat, and must never be pushed toward a fault by this signal. These lock both halves.</summary>
+public class Pl2DisambiguationTests
+{
+    private static readonly DetectionBenchmark.Pl2DisambiguationResult R =
+        DetectionBenchmark.RunPl2Disambiguation(seed: 20260724, trials: 400);
+
+    [Fact]
+    public void ThermallyPinnedCpu_SurfacesAThermalCause()
+    {
+        Assert.True(R.ConstrainedNamedThermal >= 0.95,
+            $"a CPU thermally pinned below PL2 should be named, got {R.ConstrainedNamedThermal * 100:0.0}%");
+    }
+
+    [Fact]
+    public void DeliberatelyPowerLimitedCpu_IsNeverFalseAlarmed()
+    {
+        Assert.True(R.ByDesignFalseFaults <= 0.02,
+            $"boost-off / power-limited false faults {R.ByDesignFalseFaults * 100:0.0}% (the dev-laptop config must stay clean)");
+        Assert.True(R.ByDesignMeanScore >= 95,
+            $"boost-off / power-limited mean score {R.ByDesignMeanScore:0.0} (deliberate power limits are healthy, not a fault)");
+    }
+}
+
 /// <summary>The rise/baseline comparison is AC-only end to end, but the soak/cooldown rates
 /// come from the events table, which had no AC awareness: a week with load edges on battery
 /// (a trip, a couch session) against a plugged-in baseline dragged the cooldown mean down and

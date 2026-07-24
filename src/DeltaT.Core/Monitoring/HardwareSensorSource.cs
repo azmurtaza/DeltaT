@@ -180,6 +180,7 @@ public sealed class HardwareSensorSource : ISensorSource
         IsMotherboardEnabled = true,
         IsStorageEnabled = true,
         IsBatteryEnabled = true,
+        IsMemoryEnabled = true,
     };
 
     public SensorSnapshot Read()
@@ -209,6 +210,7 @@ public sealed class HardwareSensorSource : ISensorSource
 
         _computer.Accept(_visitor);
         var components = new List<ComponentReading>();
+        ComponentReading? memory = null; // added last, so the RAM card lands after the battery
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         // Laptop EC fans are invisible to LHM; a supported vendor's gaming WMI answers.
@@ -245,9 +247,14 @@ public sealed class HardwareSensorSource : ISensorSource
             };
             if (reading is not null)
                 components.Add(reading);
+            else if (hw.HardwareType == HardwareType.Memory)
+                memory = MapMemory(hw); // held back so it is appended after the battery
         }
 
         RunWatchdog(components, now);
+
+        if (memory is not null)
+            components.Add(memory);
 
         return new SensorSnapshot(now, IsOnAcPower(), components);
     }
@@ -407,11 +414,13 @@ public sealed class HardwareSensorSource : ISensorSource
         // (Arrow/Lunar/Panther Lake, post-Zen-5), which expose no LHM sensors at all.
         bool msrThrottling = false;
         double? temp = null;
+        CpuPowerLimitInfo? powerLimit = null;
         if (_msrReader.TryRead(hw.Name) is { } msr)
         {
             temp = msr.TemperatureC;
             _cpuTjMax ??= msr.TjMaxC;
             msrThrottling = msr.Throttling;
+            powerLimit = msr.PowerLimits; // Intel-only; null on AMD / no driver
             _cpuServedByMsr = true;
         }
         else
@@ -517,7 +526,8 @@ public sealed class HardwareSensorSource : ISensorSource
             Watts(s.Power) ?? Watts(s.PowerCores),
             null,
             throttling,
-            _cpuTjMax);
+            _cpuTjMax,
+            PowerLimit: powerLimit);
     }
 
     private static readonly TimeSpan FanPollInterval = TimeSpan.FromSeconds(6);
@@ -742,6 +752,23 @@ public sealed class HardwareSensorSource : ISensorSource
         false, null,
         BatteryCycles: _batteryCycles.CurrentCycles);
 
+    /// <summary>System memory as a display-only usage card (no thermal paste, so it is never
+    /// scored: it flows through the same non-paste path Battery/SSD use). LHM's Memory node
+    /// exposes physical-RAM load as a percentage and used/available as data (GiB); the card
+    /// shows the percent as its load bar and "used / total GB" as its meta line.</summary>
+    private ComponentReading MapMemory(IHardware hw)
+    {
+        double? used = Data(Find(hw, SensorType.Data, "Memory Used"));
+        double? avail = Data(Find(hw, SensorType.Data, "Memory Available"));
+        double? total = used is { } u && avail is { } a ? Math.Round(u + a, 1) : null;
+        return new ComponentReading(
+            ComponentKind.Ram, "System Memory",
+            TemperatureC: null, HotspotC: null,
+            LoadPercent: Percent(Find(hw, SensorType.Load, "Memory")),
+            FanRpm: null, PowerW: null, WearPercent: null, IsThrottling: false, ThrottleLimitC: null,
+            MemUsedGb: used, MemTotalGb: total);
+    }
+
     private static ComponentReading? MapMotherboard(IHardware hw)
     {
         // Boards (and their SuperIO sub-hardware) only matter if they expose real
@@ -813,6 +840,10 @@ public sealed class HardwareSensorSource : ISensorSource
     private static double? Percent(ISensor? s) => s?.Value is { } v && v is >= 0 and <= 105 ? Math.Min(100, Math.Round(v, 1)) : null;
 
     private static double? Watts(ISensor? s) => s?.Value is { } v && v is >= 0 and < 500 ? Math.Round(v, 1) : null;
+
+    // Memory data sensors report gibibytes; 4 TiB comfortably covers any real machine and
+    // rejects a glitched reading.
+    private static double? Data(ISensor? s) => s?.Value is { } v && v is >= 0 and < 4096 ? Math.Round(v, 1) : null;
 
     private static bool ProcessIsElevated()
     {
@@ -893,6 +924,9 @@ public sealed class HardwareSensorSource : ISensorSource
             HardwareType.GpuAmd or HardwareType.GpuIntel => TimeSpan.FromSeconds(6),
             HardwareType.Storage => TimeSpan.FromSeconds(60),
             HardwareType.Battery => TimeSpan.FromSeconds(30),
+            // RAM usage moves fast but the read is trivially cheap; a few seconds keeps the
+            // card live without polling it on every single tick.
+            HardwareType.Memory => TimeSpan.FromSeconds(4),
             // Everything else (CPU, motherboard/SuperIO and its fan tachometers) measured
             // sub-millisecond, and carries the fast-moving signals. Poll it every tick.
             _ => TimeSpan.Zero,

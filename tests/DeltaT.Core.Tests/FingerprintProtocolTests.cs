@@ -128,3 +128,53 @@ public class FingerprintPlateauTests
         Assert.False(FingerprintTest.HasPlateaued(quantizedClimb));
     }
 }
+
+/// <summary>The day-one absolute "thermally constrained" verdict. The whole point of the
+/// AND-gate is that heat has to be the confirmed limiter, so a deliberately power-limited
+/// machine (boost off, low power plan) is never called out as a fault. These lock every gate.</summary>
+public class FingerprintThermalConstraintTests
+{
+    // TjMax 100 °C, PL2 60 W. A genuinely thermally-constrained run: peaked at TjMax, the
+    // thermal limiter fired, and it held ~45 W, well under the 60 W budget.
+    [Fact]
+    public void AllGatesMet_IsThermallyConstrained()
+    {
+        Assert.True(FingerprintTest.IsThermallyConstrained(
+            peakC: 99, tjMaxC: 100, thermalLimiterSeen: true, sustainedLoadW: 45, pl2W: 60));
+    }
+
+    [Fact]
+    public void DeliberatelyPowerLimited_IsNotConstrained()
+    {
+        // The dev-laptop config: boost off, drawing ~16 W of a 60 W budget, die cool at ~60 °C,
+        // so it never reached TjMax and the THERMAL limiter never fired. Must not trip.
+        Assert.False(FingerprintTest.IsThermallyConstrained(
+            peakC: 62, tjMaxC: 100, thermalLimiterSeen: false, sustainedLoadW: 16, pl2W: 60));
+    }
+
+    [Fact]
+    public void ReachingTheBudgetWithoutHeat_IsNotConstrained()
+    {
+        // Drawing the full PL2: it is using its whole budget, so a power deficit doesn't exist
+        // even if it happened to run warm. Not "held back by cooling".
+        Assert.False(FingerprintTest.IsThermallyConstrained(
+            peakC: 99, tjMaxC: 100, thermalLimiterSeen: true, sustainedLoadW: 58, pl2W: 60));
+    }
+
+    [Fact]
+    public void NoThermalLimiter_EvenWithADeficit_IsNotConstrained()
+    {
+        // Below PL2 AND near TjMax, but the CPU's own register says the thermal limiter is not
+        // the one asserting (a current/VRM or power limit is). Heat is not the confirmed cause.
+        Assert.False(FingerprintTest.IsThermallyConstrained(
+            peakC: 99, tjMaxC: 100, thermalLimiterSeen: false, sustainedLoadW: 40, pl2W: 60));
+    }
+
+    [Fact]
+    public void MissingRegisters_NeverConstrained()
+    {
+        // AMD / no driver: no PL2, no TjMax, no watts. Silent, never a fake verdict.
+        Assert.False(FingerprintTest.IsThermallyConstrained(99, null, true, 40, null));
+        Assert.False(FingerprintTest.IsThermallyConstrained(99, 100, true, null, 60));
+    }
+}

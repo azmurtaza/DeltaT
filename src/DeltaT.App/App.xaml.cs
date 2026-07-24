@@ -46,6 +46,8 @@ public partial class App : Application
     private bool _trayHintShown;
     private string? _uishotDir;
     private DeltaT.Core.Updates.WhatsNewRelease? _pendingWhatsNew;
+    private FingerprintWindow? _fingerprintWindow;
+    private FeedbackWindow? _feedbackWindow;
 
     public static bool IsSimulated { get; private set; }
 
@@ -670,6 +672,14 @@ public partial class App : Application
 
     public void OpenFingerprintWindow()
     {
+        if (_fingerprintWindow is not null)
+        {
+            // Already running/open: bring it forward instead of starting a second test.
+            if (_fingerprintWindow.WindowState == WindowState.Minimized)
+                _fingerprintWindow.WindowState = WindowState.Normal;
+            _fingerprintWindow.Activate();
+            return;
+        }
         if (_monitor is null || _ambient is null || _repo is null)
             return;
         // Run the GPU load out of process, so a graphics-driver fault can't crash DeltaT.
@@ -682,7 +692,9 @@ public partial class App : Application
             onBattery: _monitor.Latest is { OnAcPower: false },
             hasGpu: _monitor.Latest?.Find(ComponentKind.GpuDiscrete) is not null,
             boutProgress: BoutProgress);
-        new FingerprintWindow { DataContext = vm, Owner = _window }.ShowDialog();
+        _fingerprintWindow = new FingerprintWindow { DataContext = vm, Owner = _window };
+        _fingerprintWindow.Closed += (_, _) => _fingerprintWindow = null;
+        _fingerprintWindow.Show();
     }
 
     /// <summary>Independent loaded CPU bouts banked this epoch, and the target the baseline wants,
@@ -702,12 +714,21 @@ public partial class App : Application
 
     public void OpenFeedbackWindow(bool asIdea = false)
     {
-        if (_feedback is null)
+        if (_feedbackWindow is not null)
+        {
+            if (_feedbackWindow.WindowState == WindowState.Minimized)
+                _feedbackWindow.WindowState = WindowState.Normal;
+            _feedbackWindow.Activate();
             return;
-        var vm = new FeedbackViewModel(_feedback);
+        }
+        if (_feedback is null || _settings is null)
+            return;
+        var vm = new FeedbackViewModel(_feedback, _settings);
         if (asIdea)
             vm.IsIdea = true; // preselect the "idea" kind; the user can still switch to "bug"
-        new FeedbackWindow { DataContext = vm, Owner = _window }.ShowDialog();
+        _feedbackWindow = new FeedbackWindow { DataContext = vm, Owner = _window };
+        _feedbackWindow.Closed += (_, _) => _feedbackWindow = null;
+        _feedbackWindow.Show();
     }
 
     public void OpenDonateWindow() =>

@@ -30,7 +30,9 @@
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,28,0">
                         <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Thermal diagnosis"/>
                         <TextBlock Style="{StaticResource Text.Label}" Text="{Binding ScoringBasis}" Margin="0,5,0,0"/>
-                        <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,9,0,7"/>
+                        <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,9,0,7"
+                                   FontFamily="{StaticResource Font.DisplayCond}" FontWeight="Bold"
+                                   Foreground="{Binding VerdictColor}"/>
                         <TextBlock Text="{Binding VerdictDetail}" FontSize="12.5" LineHeight="19">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Dim}">

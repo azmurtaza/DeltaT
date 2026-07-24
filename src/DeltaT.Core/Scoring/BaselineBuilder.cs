@@ -152,16 +152,31 @@ public static class BaselineBuilder
             double wSum = 0, cSum = 0;
             foreach (CellConfidence c in cells)
             {
-                double w = ScoringEngine.Weight(c.Bucket);
+                // Weight a cell by its bucket importance AND by how much evidence actually
+                // backs it. A bucket the machine passed through once (an ambient-band edge, a
+                // brief Medium spike) carries almost no evidence, so it must not drag a
+                // baseline the loaded work already pinned below the lock bar — the "stuck at
+                // 80%" report. Flat bucket weighting counted that one-session cell in full and
+                // held a genuinely-confident machine short of a lock forever. Evidence mass
+                // only rebalances the cells' RELATIVE contributions, so a baseline made
+                // entirely of thin cells still averages to a low, honest confidence.
+                double w = ScoringEngine.Weight(c.Bucket) * EvidenceMass(c.Sessions);
                 wSum += w;
                 cSum += w * c.Score;
             }
             // Independence gate: too few distinct sessions and even tight-looking cells
             // aren't yet trustworthy (one session can't disprove a fluke).
             double sessionGate = Math.Min(1.0, totalLoadedSessions / (double)MinLoadedSessions);
-            dataConf = (cSum / wSum) * sessionGate;
+            dataConf = wSum > 0 ? (cSum / wSum) * sessionGate : 0;
 
-            CellConfidence binding = cells.OrderBy(c => c.Score).First();
+            // The binding cell is the one dragging the weighted average down the most, not
+            // merely the lowest-scoring one: with evidence-mass weighting a lone thin cell
+            // barely counts, so blaming it would send the user chasing a cell that isn't
+            // actually holding the lock. Drag = how much this cell subtracts from confidence.
+            CellConfidence binding = cells
+                .OrderByDescending(c => EvidenceMass(c.Sessions) * ScoringEngine.Weight(c.Bucket) * (1 - c.Score))
+                .ThenBy(c => c.Score)
+                .First();
             bindingSe = binding.SeC;
             dataConstraint = DescribeDataConstraint(binding, totalLoadedSessions);
         }
@@ -230,6 +245,15 @@ public static class BaselineBuilder
 
     private readonly record struct CellConfidence(LoadBucket Bucket, int Band, int Sessions, double? SeC, double Score);
 
+    /// <summary>How much a cell's confidence should count toward the overall average, by how
+    /// many independent sessions back it. Ramps linearly from near-zero at one session to full
+    /// weight once a cell has the sessions its variance estimate needs (<see cref="MinSessionsPerCell"/>).
+    /// This is deliberately the same threshold <see cref="CellScore"/> uses to start trusting a
+    /// cell's standard error: below it a cell is a hint, not evidence, so it should neither be
+    /// fully trusted nor allowed to fully veto.</summary>
+    private static double EvidenceMass(int sessions) =>
+        Math.Clamp(sessions / (double)MinSessionsPerCell, 0, 1);
+
     /// <summary>Confidence contributed by one loaded cell. No confidence until we have
     /// enough independent sessions to estimate variance; after that it's how far the
     /// cell's standard error sits below target.</summary>
@@ -288,13 +312,23 @@ public static class BaselineBuilder
             int more = MinLoadedSessions - totalSessions;
             return $"need {more} more separate load session{(more == 1 ? "" : "s")}: each game or heavy task, split by a cool-down, sharpens the baseline";
         }
+        string cell = $"{binding.Bucket.Label()} in {BandLabel(binding.Band)}";
         if (binding.Sessions < MinSessionsPerCell)
         {
+            // Name exactly which cell is thin, and how thin. This is what tells a user whose
+            // usage (or workout) never reaches full load why calibration sits short: the
+            // cell that defines their baseline simply has not been visited enough yet.
             int more = MinSessionsPerCell - binding.Sessions;
-            return $"{binding.Bucket.Label()} in {BandLabel(binding.Band)} needs {more} more session{(more == 1 ? "" : "s")} to pin down";
+            string had = binding.Sessions == 1 ? "1 session" : $"{binding.Sessions} sessions";
+            return $"{cell} has only {had} so far; {more} more will pin it down (aim for {MinSessionsPerCell} separate runs of this load)";
         }
-        string spread = binding.SeC is { } se ? $" (±{se:0.#} °C)" : "";
-        return $"{binding.Bucket.Label()} readings still vary a little{spread}, and a few more sessions will tighten it";
+        // Enough sessions, but they still disagree. The gate compares power-adjusted rise, so
+        // this spread is the genuine session-to-session residual, not wattage scatter. Give the
+        // user the actual number and the target so "a bit more" has a finish line.
+        string spread = binding.SeC is { } se
+            ? $" (±{se:0.#} °C now, aiming for ±{TargetBaselineSeC:0.#} °C)"
+            : "";
+        return $"{cell} readings still vary from session to session{spread}; a few more runs of this load will tighten it";
     }
 
     private static string BandLabel(int band) =>

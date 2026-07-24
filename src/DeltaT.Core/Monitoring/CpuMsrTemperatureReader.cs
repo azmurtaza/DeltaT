@@ -6,8 +6,10 @@ using LibreHardwareMonitor.PawnIo;
 
 namespace DeltaT.Core.Monitoring;
 
-/// <summary>One direct read of the CPU's own thermal registers.</summary>
-public readonly record struct CpuMsrReading(double TemperatureC, double? TjMaxC, bool Throttling);
+/// <summary>One direct read of the CPU's own thermal registers. <see cref="PowerLimits"/> is
+/// Intel-only and null on AMD (its power budget lives in a different register set).</summary>
+public readonly record struct CpuMsrReading(
+    double TemperatureC, double? TjMaxC, bool Throttling, CpuPowerLimitInfo? PowerLimits = null);
 
 /// <summary>Fast, precise CPU die temperature, read straight from the silicon. This is the
 /// primary CPU temperature path (LHM's own CPU update costs ~122 ms; this costs ~1 ms), and
@@ -42,6 +44,16 @@ public sealed class CpuMsrTemperatureReader : IDisposable
     private const uint Ia32PackageThermStatus = 0x1B1;
     private const uint MsrTemperatureTarget = 0x1A2;
     private const uint AmdThmTconCurTmp = 0x00059800;
+
+    // Intel RAPL / power-budget registers (architectural on every Sandy Bridge+ part).
+    private const uint MsrRaplPowerUnit = 0x606;      // power/energy/time unit scales
+    private const uint MsrPkgPowerLimit = 0x610;      // configured PL1/PL2 + Tau
+    private const uint MsrCorePerfLimitReasons = 0x64F; // which limiter is asserting now
+
+    // Cached RAPL scaling from MSR 0x606, resolved once per session.
+    private double? _powerUnitW;   // watts per PL tick   = 1 / 2^PowerUnitBits
+    private double? _timeUnitS;    // seconds per Tau tick = 1 / 2^TimeUnitBits
+    private bool _raplUnitResolved;
 
     private enum CpuVendor { Unknown, Intel, Amd }
 
@@ -128,7 +140,77 @@ public sealed class CpuMsrTemperatureReader : IDisposable
 
         if (hottest is not { } value || value is <= 1 or >= 119)
             return null;
-        return new CpuMsrReading(Math.Round(value, 1), tjMax, throttling);
+        return new CpuMsrReading(Math.Round(value, 1), tjMax, throttling, ReadIntelPowerLimitsSafe());
+    }
+
+    /// <summary>Configured PL1/PL2 (MSR 0x610) plus which limiter is asserting now (MSR 0x64F),
+    /// read live every time. A power-budget read must never cost us the temperature, so any
+    /// failure here degrades to null rather than throwing out of <see cref="ReadIntel"/>.</summary>
+    private CpuPowerLimitInfo? ReadIntelPowerLimitsSafe()
+    {
+        try { return ReadIntelPowerLimits(); }
+        catch { return null; }
+    }
+
+    private CpuPowerLimitInfo? ReadIntelPowerLimits()
+    {
+        GroupAffinity lp = Processors()[0];
+        ResolveRaplUnits(lp);
+
+        double? pl1 = null, pl2 = null, tau = null;
+        if (_powerUnitW is { } powerUnit && ReadMsr64(MsrPkgPowerLimit, lp, out uint lo, out uint hi))
+        {
+            uint pl1Raw = lo & 0x7FFF;          // PL1 power, bits [14:0]
+            uint pl2Raw = hi & 0x7FFF;          // PL2 power, bits [46:32]
+            if (pl1Raw > 0) pl1 = Math.Round(pl1Raw * powerUnit, 1);
+            if (pl2Raw > 0) pl2 = Math.Round(pl2Raw * powerUnit, 1);
+            // PL1 time window (Tau): mantissa Y = bits [21:17], exponent Z = bits [23:22];
+            // Tau = 2^Y × (1 + Z/4) × time_unit. Best-effort, display-only, never gates.
+            if (_timeUnitS is { } timeUnit)
+            {
+                uint y = (lo >> 17) & 0x1F;
+                uint z = (lo >> 22) & 0x3;
+                tau = Math.Round(Math.Pow(2, y) * (1 + z / 4.0) * timeUnit, 1);
+            }
+        }
+
+        bool thermal = false, powerLimited = false, current = false;
+        if (ReadMsr64(MsrCorePerfLimitReasons, lp, out uint reasons, out _))
+        {
+            // Status bits (asserting right now) are the low 16; the high bits are sticky log
+            // bits we deliberately ignore, so a limiter that fired an hour ago isn't read as live.
+            thermal      = Bit(reasons, 0)   // PROCHOT
+                        || Bit(reasons, 1)   // Thermal
+                        || Bit(reasons, 5)   // Running Average Thermal Limit
+                        || Bit(reasons, 6);  // VR thermal alert
+            powerLimited = Bit(reasons, 10)  // RAPL PL1
+                        || Bit(reasons, 11); // RAPL PL2
+            current      = Bit(reasons, 7)   // VR thermal design current (TDC)
+                        || Bit(reasons, 14); // electrical design point / current limit
+        }
+
+        if (pl1 is null && pl2 is null && !thermal && !powerLimited && !current)
+            return null; // nothing decoded: an older part, or the registers are unreadable here
+        return new CpuPowerLimitInfo(pl1, pl2, tau, thermal, powerLimited, current);
+
+        static bool Bit(uint v, int b) => (v & (1u << b)) != 0;
+    }
+
+    /// <summary>Resolve the RAPL unit scales from MSR 0x606, once. Power ticks are typically
+    /// 1/8 W on Intel; time ticks vary by part. A failed read leaves the units null, which
+    /// leaves PL1/PL2 unreadable (we never guess a scale).</summary>
+    private void ResolveRaplUnits(GroupAffinity lp)
+    {
+        if (_raplUnitResolved)
+            return;
+        _raplUnitResolved = true;
+        if (ReadMsr64(MsrRaplPowerUnit, lp, out uint eax, out _))
+        {
+            int powerBits = (int)(eax & 0xF);          // [3:0]
+            int timeBits = (int)((eax >> 16) & 0xF);   // [19:16]
+            _powerUnitW = 1.0 / (1u << powerBits);
+            _timeUnitS = 1.0 / (1u << timeBits);
+        }
     }
 
     private double ReadIntelTjMax()
@@ -245,6 +327,15 @@ public sealed class CpuMsrTemperatureReader : IDisposable
     {
         eax = 0;
         return _intelMsr is { } msr && msr.ReadMsr(index, out eax, out _, affinity);
+    }
+
+    /// <summary>Full 64-bit MSR read (both halves). PL2 and the RAPL time window live in the
+    /// high dword, so the temperature path's eax-only helper isn't enough for power limits.</summary>
+    private bool ReadMsr64(uint index, GroupAffinity affinity, out uint eax, out uint edx)
+    {
+        eax = 0;
+        edx = 0;
+        return _intelMsr is { } msr && msr.ReadMsr(index, out eax, out edx, affinity);
     }
 
     public void Dispose()

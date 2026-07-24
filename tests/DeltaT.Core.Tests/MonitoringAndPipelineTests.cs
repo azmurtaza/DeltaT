@@ -356,6 +356,60 @@ public class TelemetryPipelineTests : IDisposable
     }
 
     [Fact]
+    public void PowerNormalizedSessionMeans_TightenGpuWattageScatter_AndUnlockConfidence()
+    {
+        // A discrete GPU cell (Max, warm) learned across five game sessions at very different
+        // wattages. Raw ΔT scatters with the watts (ΔT ∝ P), so the readiness gate used to read
+        // it as un-lockable noise (the GPU "stuck at 80%" report). Normalizing each session to
+        // the cell's own mean power strips exactly that variance, leaving a tight lockable signal.
+        const int band = (int)AmbientBand.Warm;
+        long baseMinute = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+
+        (double Power, double Delta)[] sessions =
+        {
+            (40, 40), (60, 60), (50, 50), (45, 45), (55, 55), // identical resistance, watts vary
+        };
+        var rows = new List<MinuteAccum>();
+        for (int si = 0; si < sessions.Length; si++)
+        {
+            long sessionStart = baseMinute + si * 3600; // 1 h apart, far past the 10-min session gap
+            for (int m = 0; m < 10; m++)
+                rows.Add(new MinuteAccum
+                {
+                    Minute = sessionStart + m * 60, Kind = ComponentKind.GpuDiscrete, Name = "GPU",
+                    Bucket = LoadBucket.Max, Band = band, OnAc = true,
+                    N = 30, TempSum = 30 * (sessions[si].Delta + 30), TempMin = 60, TempMax = 95,
+                    LoadSum = 30 * 99, DeltaSum = sessions[si].Delta, DeltaN = 1,
+                    PowerSum = sessions[si].Power, PowerN = 1,
+                });
+        }
+        _repo.UpsertMinutes(rows);
+
+        long from = baseMinute - 60, to = baseMinute + 6 * 3600;
+        IReadOnlyList<double> raw = _repo.GetSessionMeanDeltas(
+            ComponentKind.GpuDiscrete, "GPU", LoadBucket.Max, band, true, from, to, BaselineBuilder.SessionGapSeconds);
+        IReadOnlyList<double> norm = _repo.GetSessionMeanDeltasPowerNormalized(
+            ComponentKind.GpuDiscrete, "GPU", LoadBucket.Max, band, true, from, to, BaselineBuilder.SessionGapSeconds);
+
+        Assert.Equal(5, raw.Count);
+        Assert.Equal(5, norm.Count);
+        Assert.True(raw.Max() - raw.Min() >= 15, "raw deltas should scatter with wattage");
+        Assert.True(norm.Max() - norm.Min() <= 0.5, "power-normalized deltas should collapse to the resistance");
+
+        // Feed both into the real readiness gate: raw scatter stays unlocked, normalized locks.
+        var stat = new[] { new BucketStat(LoadBucket.Max, band, true, 50, 1500, 80, 60, 95, 90, 50, null, 0, null, 50) };
+        var start = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        var cured = start.AddHours(120);
+        CalibrationState rawCal = BaselineBuilder.Assess(start, cured, stat,
+            (b, bd) => b == LoadBucket.Max && bd == band ? raw : Array.Empty<double>(), 5, pasteIsFresh: false);
+        CalibrationState normCal = BaselineBuilder.Assess(start, cured, stat,
+            (b, bd) => b == LoadBucket.Max && bd == band ? norm : Array.Empty<double>(), 5, pasteIsFresh: false);
+
+        Assert.False(rawCal.Ready, $"raw-ΔT scatter should stay unlocked, got {rawCal.Confidence}");
+        Assert.True(normCal.Ready, $"power-normalized signal should lock, got {normCal.Confidence}");
+    }
+
+    [Fact]
     public void RawSamples_FlushInBatches_AndSurviveFinalFlush()
     {
         var source = new ScriptedSource();

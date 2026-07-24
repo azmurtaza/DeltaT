@@ -201,6 +201,15 @@
                                        Text="{Binding LimitsText}" TextWrapping="Wrap"/>
                             <TextBlock Style="{StaticResource Text.Caption}" Margin="0,9,0,0" TextWrapping="Wrap"
                                        Text="throttle points come from the hardware, not the profile"/>
+                            <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="0,1,0,0"
+                                    Padding="0,10,0,0" Margin="0,12,0,0"
+                                    Visibility="{Binding HasPowerBudget, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource Text.Caption}" Text="POWER BUDGET (INTEL)" Margin="0,0,0,7"/>
+                                    <TextBlock Style="{StaticResource Text.Numeral}" FontSize="11.5" LineHeight="19"
+                                               Text="{Binding PowerBudgetText}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </HeaderedContentControl>
                 </Grid>

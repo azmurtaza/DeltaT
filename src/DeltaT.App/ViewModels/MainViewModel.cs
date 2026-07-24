@@ -59,6 +59,10 @@ public partial class MainViewModel : ObservableObject
     public bool IsFirstRun { get; }
 
     [ObservableProperty] private string _verdictTitle = "Learning your machine";
+    // Colors the headline verdict the same way the dial does (green = healthy, amber/red =
+    // watch/act), so "Excellent" reads as visibly excellent instead of plain white text.
+    // Neutral (Text) while there's no verdict yet to color (calibrating/waiting states).
+    [ObservableProperty] private Brush _verdictColor = new SolidColorBrush(ThermalPalette.Text);
     [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. The first verdict lands as soon as it has seen enough real load to be sure. Games and heavy work teach it fastest.";
     [ObservableProperty] private string _scoringBasis = "Normalized for weather · load";
     // While nothing is scored yet, the hero leads with the calibration confidence
@@ -300,6 +304,7 @@ public partial class MainViewModel : ObservableObject
                 HeroCalibrating = false;
                 BuildHeroStats(worstEstimate, calibrating: true);
                 VerdictTitle = $"{worstEstimate.Kind.Label()}: {worstEstimate.Verdict.Label()} (estimate)";
+                VerdictColor = new SolidColorBrush(ThermalPalette.VerdictColor(worstEstimate.Value));
                 VerdictDetail = string.IsNullOrWhiteSpace(worstEstimate.CalibrationConstraint)
                     ? "Still calibrating; the estimate sharpens as more comparable load lands."
                     : $"Still calibrating; {worstEstimate.CalibrationConstraint}.";
@@ -317,6 +322,7 @@ public partial class MainViewModel : ObservableObject
                 HeroCalibrating = false;
                 BuildHeroStats(first, calibrating: false);
                 VerdictTitle = "Waiting for a comparable load";
+                VerdictColor = new SolidColorBrush(ThermalPalette.Text);
                 VerdictDetail = "The baseline is locked, but nothing has run against it since. Play a game, run a render, or run the fingerprint test, and DeltaT will score it.";
                 UpdateDiagnosis(null);
                 return;
@@ -335,6 +341,7 @@ public partial class MainViewModel : ObservableObject
             CalibrationPercent = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
             CalibrationPercentValue = Math.Clamp(lead.CalibrationProgress, 0, 1) * 100;
             VerdictTitle = "Learning your machine";
+            VerdictColor = new SolidColorBrush(ThermalPalette.Text);
             // Name the component when several are learning: the number belongs to
             // whichever one is furthest behind, so the "what's next" must say which.
             string who = all.Count > 1 ? $" ({lead.Kind.Label()})" : "";
@@ -348,7 +355,17 @@ public partial class MainViewModel : ObservableObject
         ComponentScore worst = scored[0];
         HeroCalibrating = false;
         BuildHeroStats(worst, calibrating: false);
-        VerdictTitle = $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
+        // CPU and GPU each already carry their own verdict on their own dial, so naming
+        // just the worse of the two here ("GPU: Excellent") reads as if the other one
+        // wasn't checked. When both agree, say the shared verdict once with no component
+        // name; only diverge to naming a specific component when that's the information
+        // (this one, not the other, needs attention) or when the worst reading is neither
+        // CPU nor GPU (storage/battery have no dial duplicating the headline).
+        bool cpuGpuAgree = cpu is { Scored: true } && gpu is { Scored: true } && cpu.Verdict == gpu.Verdict;
+        VerdictTitle = cpuGpuAgree && worst.Kind is ComponentKind.Cpu or ComponentKind.GpuDiscrete
+            ? worst.Verdict.Label()
+            : $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
+        VerdictColor = new SolidColorBrush(ThermalPalette.VerdictColor(worst.Value));
         // The verdict's numbers now live in the stat readouts (tooltips carry the
         // sentences), so a locked verdict needs no paragraph under it. A sibling that is
         // STILL learning does need one: components lock independently, the calibration

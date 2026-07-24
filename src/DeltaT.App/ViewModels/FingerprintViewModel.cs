@@ -305,7 +305,8 @@ public partial class FingerprintViewModel : ObservableObject
         _repo.InsertEvent(now, "fingerprint", result.Target, null, 1,
             $"Fingerprint: {label} sustained {result.SustainedC:0.#}° (peak {result.PeakC:0.#}°), soak {result.SoakRatePerMin:0.#}°/min"
             + (result.SustainedDeltaC is { } d ? $", Δ+{d:0.#}° vs outside" : "")
-            + (result.ThrottleSamples > 0 ? $", throttled {result.ThrottleSamples} samples" : ", no throttling"),
+            + (result.ThrottleSamples > 0 ? $", throttled {result.ThrottleSamples} samples" : ", no throttling")
+            + (result.ThermallyConstrained ? ", thermally constrained below its power budget" : ""),
             JsonSerializer.Serialize(result));
 
         var cells = new List<StatCell>
@@ -322,6 +323,14 @@ public partial class FingerprintViewModel : ObservableObject
         };
         if (result.Target == "Cpu" && result.GpuWasLoaded && result.GpuPeakC is { } gp)
             cells.Add(new StatCell("GPU PEAK", $"{gp:0.#}°"));
+        if (result.ThermallyConstrained)
+            cells.Add(new StatCell("COOLING", "at the limit"));
+
+        // The day-one absolute signal (Intel): heat, not the power setting, is the ceiling.
+        // This is the headline whatever the comparison says, so it leads the verdict.
+        string constraintNote = result.ThermallyConstrained
+            ? $"This CPU hit its thermal limit while drawing below its {result.Pl2W:0} W power budget, so cooling, not the power configuration, is what's holding it back. "
+            : "";
 
         string verdict;
         FingerprintComparison? comparison = null;
@@ -364,7 +373,7 @@ public partial class FingerprintViewModel : ObservableObject
             verdict = $"First {label} fingerprint recorded. Rerun it monthly (plugged in, similar room) and DeltaT will chart the drift.";
         }
 
-        return new FingerprintSection($"{label} FINGERPRINT", cells, verdict, comparison);
+        return new FingerprintSection($"{label} FINGERPRINT", cells, constraintNote + verdict, comparison);
     }
 
     [RelayCommand]

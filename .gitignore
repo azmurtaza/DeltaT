@@ -33,3 +33,5 @@ AGENTS.md
 # Local dev scratch output (screenshots, spike dumps)
 scratchpad/
 uishot-recovery/
+*scratch-uishot/
+sensor-dump.txt

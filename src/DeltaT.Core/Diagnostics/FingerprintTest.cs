@@ -44,7 +44,17 @@ public sealed record FingerprintResult(
     /// climbing. False means it ran into the ceiling still rising, so this number is a
     /// floor, not the plateau. Recorded rather than hidden, because a run that never
     /// settled is not measuring the same thing as one that did.</summary>
-    bool Settled = true);
+    bool Settled = true,
+    /// <summary>Intel-only day-one verdict: under this held full load the CPU reached its
+    /// thermal limit AND its own MSRs confirmed HEAT (not a power/current limit) was the
+    /// active limiter AND it drew meaningfully below its configured PL2. All three together
+    /// mean the cooling is the ceiling from the very first run, with no baseline needed. A
+    /// deliberately power-limited machine fails the thermal-limiter gate, so it never trips
+    /// this. False on AMD and when the driver can't read the registers.</summary>
+    bool ThermallyConstrained = false,
+    /// <summary>The configured PL2 (short-term turbo watts) observed during the run, for the
+    /// day-one message. Null on AMD / when unreadable.</summary>
+    double? Pl2W = null);
 
 /// <summary>The on-demand thermal fingerprint: 12 s of calm, then full load on the chosen
 /// component held until it stops climbing (90 s floor, 240 s ceiling), while we watch how it
@@ -151,6 +161,15 @@ public sealed class FingerprintTest
 
     private static double Mean(IEnumerable<double> values) => values.Average();
 
+    private static double? Median(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0)
+            return null;
+        var sorted = values.OrderBy(v => v).ToList();
+        int mid = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+    }
+
     /// <summary>Mean with the outer 20% dropped at each end: keeps the sub-degree resolution
     /// of an average while ignoring turbo spikes and sensor dropouts.</summary>
     private static double TrimmedMean(IEnumerable<double> values)
@@ -164,6 +183,29 @@ public sealed class FingerprintTest
     /// <summary>Has the component settled? Only asked once past the floor.</summary>
     public static bool HasPlateaued(IReadOnlyList<(DateTimeOffset Ts, double Temp)> samples) =>
         SlopePerMinute(samples, PlateauWindow) is { } slope && Math.Abs(slope) <= PlateauSlopeCPerMin;
+
+    /// <summary>How close to TjMax the peak must land to count as "reached the thermal limit".</summary>
+    public const double ThermalLimitMarginC = 3.0;
+
+    /// <summary>Fraction of PL2 below which the sustained package power counts as "meaningfully
+    /// short of the budget", the same bar the live diagnosis uses.</summary>
+    public const double Pl2DeficitFraction = 0.85;
+
+    /// <summary>The day-one absolute verdict, gated so it can only ever fire when heat is
+    /// genuinely the ceiling. ALL must hold: the peak reached/approached TjMax; the CPU's own
+    /// limit-reason register confirmed the THERMAL limiter (not a power or current limiter) was
+    /// active during the held load; and the sustained package power sat meaningfully below the
+    /// configured PL2. Skipping any one of these is what would false-alarm a deliberately
+    /// power-limited machine, so none may be dropped. Pure and testable: no I/O, no clocks.</summary>
+    public static bool IsThermallyConstrained(
+        double peakC, double? tjMaxC, bool thermalLimiterSeen, double? sustainedLoadW, double? pl2W)
+    {
+        if (tjMaxC is not { } tj || pl2W is not { } pl2 || sustainedLoadW is not { } w || pl2 <= 0)
+            return false;
+        bool reachedLimit = peakC >= tj - ThermalLimitMarginC;
+        bool powerDeficit = w < pl2 * Pl2DeficitFraction;
+        return reachedLimit && thermalLimiterSeen && powerDeficit;
+    }
 
     private readonly MonitoringService _monitor;
     private readonly IAmbientProvider _ambient;
@@ -207,6 +249,10 @@ public sealed class FingerprintTest
 
         var samples = new List<(DateTimeOffset Ts, double Temp, bool Throttling)>();
         var gpuSamples = new List<(double Temp, double Load)>();
+        // Intel-only, CPU runs: the power budget observed each tick, for the day-one
+        // thermally-constrained verdict. Empty on AMD / when the driver can't read the MSRs.
+        var cpuBudget = new List<(DateTimeOffset Ts, double? W, bool ThermalActive, double? Pl2)>();
+        double? cpuTjMax = null; // TjMax of the loaded CPU, for the day-one thermal-limit gate
         bool onAc = true;
 
         // The active phase and when it ends, so a snapshot arriving mid-phase can report
@@ -223,6 +269,10 @@ public sealed class FingerprintTest
             if (snap.Find(kind) is { TemperatureC: { } t } reading)
             {
                 samples.Add((snap.TimestampUtc, t, reading.IsThrottling));
+                if (target == FingerprintTarget.Cpu && reading.PowerLimit is { } pl)
+                    cpuBudget.Add((snap.TimestampUtc, reading.PowerW, pl.ThermalActive, pl.Pl2W));
+                if (target == FingerprintTarget.Cpu && reading.ThrottleLimitC is { } tj)
+                    cpuTjMax = tj;
                 // Push the reading the instant it lands — the same snapshot the main
                 // window renders from — so the fingerprint gauge can't trail it by a tick.
                 if (phase.Length > 0)
@@ -270,6 +320,17 @@ public sealed class FingerprintTest
             double? ambient = _ambient.CurrentAmbientC;
             var gpuLoaded = gpuSamples.Skip(gpuLoadStartIndex).Where(g => g.Load >= 60).ToList();
 
+            // Day-one absolute verdict (Intel CPU runs only): did the CPU hit its thermal limit
+            // while drawing below its PL2, with its own MSRs naming HEAT as the limiter? The load
+            // phase pins every core (CpuBurner), so the "load pinned" gate is satisfied by
+            // construction; the remaining gates come from the registers observed during it.
+            var loadBudget = cpuBudget.Where(b => b.Ts >= loadStartTs).ToList();
+            bool thermalLimiterSeen = loadBudget.Any(b => b.ThermalActive);
+            double? sustainedLoadW = Median(loadBudget.Where(b => b.W is > 0).Select(b => b.W!.Value).ToList());
+            double? pl2W = loadBudget.Select(b => b.Pl2).LastOrDefault(p => p is > 0);
+            bool thermallyConstrained = target == FingerprintTarget.Cpu
+                && IsThermallyConstrained(peak, cpuTjMax, thermalLimiterSeen, sustainedLoadW, pl2W);
+
             var result = new FingerprintResult(
                 AtUtc: DateTimeOffset.UtcNow,
                 AmbientC: ambient,
@@ -287,7 +348,9 @@ public sealed class FingerprintTest
                 Target: target.ToString(),
                 Protocol: CurrentProtocol,
                 LoadSeconds: Math.Round(loadDuration.TotalSeconds, 1),
-                Settled: plateaued);
+                Settled: plateaued,
+                ThermallyConstrained: thermallyConstrained,
+                Pl2W: pl2W is { } p ? Math.Round(p, 0) : null);
 
             // Cooldown ticks like any other phase — the countdown counts down and the
             // gauge keeps tracking the component as it falls — but a Stop here just ends

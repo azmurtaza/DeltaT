@@ -1,5 +1,6 @@
 using DeltaT.Core.Knowledge;
 using DeltaT.Core.Monitoring;
+using DeltaT.Core.Storage;
 
 namespace DeltaT.Core.Scoring;
 
@@ -1053,6 +1054,184 @@ public static class DetectionBenchmark
                 break;
         }
         return new SensitivityCurve(name, aging, action, named);
+    }
+
+    // ===================== Calibration confidence-gate fidelity =====================
+    // The main Run() bypasses the calibration gate entirely (it hardcodes BaselineReady:true),
+    // so the "stuck at 80%" failure modes had no measured floor. This exercises the REAL gate
+    // (BaselineBuilder.Assess) and proves three properties in numbers: a stable machine locks
+    // in a bounded number of sessions; a lone thinly-sampled cell can never veto a well-pinned
+    // baseline (evidence-mass weighting); and a GPU whose watts scatter game-to-game locks once
+    // its session means are power-normalized (as the gate now does), where raw ΔT leaves it
+    // stuck. Seeded and deterministic. Floors are locked in DetectionBenchmarkTests.
+
+    public sealed record CalibrationFidelityResult(
+        int Trials,
+        double StableLockRate,               // stable CPU: fraction that reach a lock
+        double StableMedianSessionsToLock,   // how few sessions a clean machine needs
+        double RareCellVetoRate,             // fraction where one thin cell blocks a ready baseline (want ~0)
+        double GpuRawLockRate,               // scattered GPU judged on RAW ΔT (pre-A2): want low
+        double GpuNormLockRate);             // same judged power-normalized (A2): want high
+
+    public static CalibrationFidelityResult RunCalibrationFidelity(int seed = 20260724, int trials = 400)
+    {
+        var start = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        var cured = start.AddHours(120); // past the cure floor, so only data confidence is in play
+        const int band = 2;
+
+        static BucketStat HeavyStat() =>
+            new(LoadBucket.Heavy, band, true, 200, 6000, 80, 60, 95, 80, 50, null, 0, null, 50);
+
+        bool Ready(BucketStat[] stats, Func<LoadBucket, int, IReadOnlyList<double>> means, int sessions) =>
+            BaselineBuilder.Assess(start, cured, stats, means, sessions, pasteIsFresh: false).Ready;
+
+        var rng = new Random(seed);
+        int stableLocks = 0, rareVetoes = 0, gpuRawLocks = 0, gpuNormLocks = 0;
+        var sessionsToLock = new List<int>();
+
+        for (int t = 0; t < trials; t++)
+        {
+            // (1) Stable CPU: tight session means. Add sessions until it locks (cap 10).
+            var stable = new List<double>();
+            int locked = -1;
+            for (int s = 1; s <= 10; s++)
+            {
+                stable.Add(50 + Gauss(rng, 0.4));
+                if (s < BaselineBuilder.MinSessionsPerCell) continue;
+                double[] arr = stable.ToArray();
+                if (Ready(new[] { HeavyStat() },
+                        (b, bd) => b == LoadBucket.Heavy && bd == band ? arr : Array.Empty<double>(), s))
+                {
+                    locked = s;
+                    break;
+                }
+            }
+            if (locked > 0)
+            {
+                stableLocks++;
+                sessionsToLock.Add(locked);
+            }
+
+            // (2) Rare-cell poison: a well-pinned Heavy baseline plus one thin Medium/cold cell.
+            double[] heavyTight = { 50.0, 50.2, 49.8, 50.1, 49.9 };
+            double rareVal = 60 + Gauss(rng, 3);
+            var poison = new[]
+            {
+                HeavyStat(),
+                new BucketStat(LoadBucket.Medium, 0, true, 8, 240, 70, 55, 85, 55, 40, null, 0, null, 35),
+            };
+            bool poisonReady = Ready(poison,
+                (b, bd) => b == LoadBucket.Heavy && bd == band ? heavyTight
+                         : b == LoadBucket.Medium && bd == 0 ? new[] { rareVal }
+                         : Array.Empty<double>(), 6);
+            if (!poisonReady)
+                rareVetoes++;
+
+            // (3) Scattered GPU: healthy tight resistance, watts vary a lot. Raw ΔT scatters;
+            // power-normalized (to the cell's mean watts) collapses to the resistance.
+            const int gs = 6;
+            var powers = new double[gs];
+            var raw = new double[gs];
+            for (int s = 0; s < gs; s++)
+            {
+                double p = Math.Clamp(60 + Gauss(rng, 14), 25, 110);
+                double resistance = 0.9 + Gauss(rng, 0.015); // healthy, tight °C/W
+                powers[s] = p;
+                raw[s] = resistance * p;
+            }
+            double meanP = powers.Average();
+            var norm = new double[gs];
+            for (int s = 0; s < gs; s++)
+                norm[s] = raw[s] * Math.Clamp(meanP / powers[s], 0.5, 2.0);
+
+            var gpuStat = new[]
+            {
+                new BucketStat(LoadBucket.Max, band, true, 60, 1800, 80, 60, 95, 99, raw.Average(), null, 0, null, meanP),
+            };
+            if (Ready(gpuStat, (b, bd) => b == LoadBucket.Max && bd == band ? raw : Array.Empty<double>(), gs))
+                gpuRawLocks++;
+            if (Ready(gpuStat, (b, bd) => b == LoadBucket.Max && bd == band ? norm : Array.Empty<double>(), gs))
+                gpuNormLocks++;
+        }
+
+        sessionsToLock.Sort();
+        double median = sessionsToLock.Count == 0 ? 0 : sessionsToLock[sessionsToLock.Count / 2];
+        return new CalibrationFidelityResult(
+            trials,
+            stableLocks / (double)trials,
+            median,
+            rareVetoes / (double)trials,
+            gpuRawLocks / (double)trials,
+            gpuNormLocks / (double)trials);
+    }
+
+    // ===================== Intel PL2 thermal-constraint disambiguation =====================
+    // The absolute (day-one) signal: an Intel CPU can report, via MSR 0x64F + 0x610, that it is
+    // being held below its own configured PL2 by HEAT right now. That is direct corroboration
+    // that COOLING, not the power budget, is the ceiling. The hazard the feature must avoid is
+    // false-alarming a machine that is deliberately power-limited (boost off / low power plan),
+    // which draws far below PL2 for a reason that is NOT heat. This proves the disambiguation:
+    // a thermally-pinned machine surfaces a thermal/headroom cause; a deliberately power-limited
+    // one (the maintainer's own dev laptop, ~16 W where the baseline learned ~40 W, a cool die)
+    // never does. Locked in DetectionBenchmarkTests.
+
+    public sealed record Pl2DisambiguationResult(
+        int Trials,
+        double ConstrainedNamedThermal, // thermally-pinned CPU surfaces a thermal/headroom cause
+        double ByDesignFalseFaults,     // boost-off CPU wrongly shows a cooling fault (want ~0)
+        double ByDesignMeanScore);      // boost-off CPU must stay healthy
+
+    public static Pl2DisambiguationResult RunPl2Disambiguation(int seed = 20260724, int trials = 400)
+    {
+        var rng = new Random(seed);
+        List<BaselineBucket> baseRows = BuildBaselineRows(Acquisition.Perfect, 0, rng);
+
+        int constrainedNamed = 0, byDesignFaults = 0;
+        double byDesignScoreSum = 0;
+
+        for (int i = 0; i < trials; i++)
+        {
+            // (A) A machine behaving like its own baseline, but whose CPU is thermally pinned
+            // below PL2 RIGHT NOW (the MSR limiter says heat is the ceiling). The corroboration
+            // must turn a would-be "healthy" read into a named thermal / headroom cause.
+            var healthy = BuildRecent(Condition.Healthy, 0, rng, out double sR, out double cR, out double sB, out double cB);
+            ScoreCpu(healthy, sR, cR, sB, cB, baseRows, thermallyConstrained: true, out ThermalCause primA);
+            if (primA is ThermalCause.CoolingHeadroom or ThermalCause.FanFault or ThermalCause.Airflow or ThermalCause.Mount)
+                constrainedNamed++;
+
+            // (B) The dev-laptop config: deliberately boost-off / power-capped, drawing far
+            // below PL2 with a cool die, so the thermal limiter is NOT asserting (flag false).
+            // This must never read as a cooling fault.
+            var boostOff = BuildRecent(Condition.PowerCapDeep, 0.62, rng, out double sR2, out double cR2, out double sB2, out double cB2);
+            ComponentScore byDesign = ScoreCpu(boostOff, sR2, cR2, sB2, cB2, baseRows, thermallyConstrained: false, out ThermalCause primB);
+            byDesignScoreSum += byDesign.Value;
+            bool fault = byDesign.Value < 70 || primB is ThermalCause.Paste or ThermalCause.Airflow
+                or ThermalCause.FanFault or ThermalCause.Mount;
+            if (fault)
+                byDesignFaults++;
+        }
+
+        return new Pl2DisambiguationResult(
+            trials, constrainedNamed / (double)trials, byDesignFaults / (double)trials, byDesignScoreSum / trials);
+    }
+
+    /// <summary>Score a CPU-shaped scenario (no hotspot gap, so the mount aspect stays out) with
+    /// the Intel thermal-constraint flag set as given.</summary>
+    private static ComponentScore ScoreCpu(
+        List<RecentBucketObs> recent, double soakRecent, double coolRecent, double soakBase, double coolBase,
+        List<BaselineBucket> baseRows, bool thermallyConstrained, out ThermalCause primary)
+    {
+        var cpuRecent = recent.Select(r => r with { GapAvg = null }).ToList();
+        var input = new ScoreInput(
+            ComponentKind.Cpu, "Bench CPU", cpuRecent, baseRows,
+            RecentWindowHours: 7 * 24, ThrottleEvents: 0,
+            SoakRateRecent: soakRecent, SoakRateBaseline: soakBase,
+            CooldownRateRecent: coolRecent, CooldownRateBaseline: coolBase,
+            LimitC: LimitC, Profile: Profile, BaselineReady: true, CalibrationProgress: 1.0,
+            CpuThermallyPowerConstrained: thermallyConstrained);
+        ComponentScore score = ScoringEngine.Score(input, t => $"{t:0} °C");
+        primary = score.Diagnosis?.Primary.Cause ?? ThermalCause.Healthy;
+        return score;
     }
 
     private static double Gauss(Random rng, double sd)

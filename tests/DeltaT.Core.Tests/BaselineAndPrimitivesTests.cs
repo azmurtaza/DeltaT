@@ -290,6 +290,47 @@ public class BaselineBuilderTests
         Assert.Null(BaselineBuilder.Percentile(Array.Empty<double>(), 0.95));
         Assert.Equal(42, BaselineBuilder.Percentile(new[] { 42.0 }, 0.95));
     }
+
+    // ---- calibration-stuck regression coverage (the "stuck at 80%" reports) ----
+
+    /// <summary>Session-mean provider for a well-pinned Heavy/band-2 cell plus one
+    /// thinly-sampled cell (a bucket/band the machine passed through once).</summary>
+    private static Func<LoadBucket, int, IReadOnlyList<double>> WellPinnedPlusRare(
+        LoadBucket rareBucket, int rareBand, params double[] rareMeans) =>
+        (bucket, band) =>
+            bucket == LoadBucket.Heavy && band == 2 ? new[] { 60.0, 60.2, 59.8, 60.1, 59.9 }
+            : bucket == rareBucket && band == rareBand ? rareMeans
+            : Array.Empty<double>();
+
+    [Fact]
+    public void RareThinCell_DoesNotBlock_AWellPinnedBaseline()
+    {
+        // The "stuck at 80%" mechanism: a Heavy baseline that is tightly pinned over five
+        // sessions is dragged below the lock bar by a single cell the machine visited once
+        // (an ambient-band edge, a brief Medium spike). That thin cell can't be trusted yet,
+        // but it must not veto a baseline the loaded work already earned. Weighting each
+        // cell by its evidence mass keeps the rare cell's tiny sample from tanking the whole
+        // average. (Before evidence-mass weighting this asserted False at conf ~0.69.)
+        var stats = new[] { Stat(LoadBucket.Heavy, 200), Stat(LoadBucket.Medium, 8, band: 0) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
+            WellPinnedPlusRare(LoadBucket.Medium, 0, 70.0),
+            independentLoadedSessions: 6, pasteIsFresh: false);
+
+        Assert.True(cal.Ready, $"a lone thin cell must not veto a well-pinned baseline, got conf {cal.Confidence}");
+    }
+
+    [Fact]
+    public void GenuinelyNoisyBaseline_StillDoesNotLock_DespiteEvidenceMass()
+    {
+        // Guardrail against over-correcting A1: when the WELL-SAMPLED cells are themselves
+        // noisy (wide session-to-session spread), evidence-mass weighting must not fake a
+        // lock. Five scattered sessions on the dominant cell stay below the bar.
+        var stats = new[] { Stat(LoadBucket.Heavy, 200) };
+        CalibrationState cal = BaselineBuilder.Assess(Start, Cured, stats,
+            HeavyMeans(50, 60, 70, 55, 64), independentLoadedSessions: 5, pasteIsFresh: false);
+
+        Assert.False(cal.Ready, $"a truly noisy baseline must not lock, got conf {cal.Confidence}");
+    }
 }
 
 public class PrimitivesTests
@@ -328,5 +369,30 @@ public class PrimitivesTests
         Assert.False(ComponentKind.GpuIntegrated.HasPaste());
         Assert.False(ComponentKind.Storage.HasPaste());
         Assert.False(ComponentKind.Battery.HasPaste());
+    }
+
+    [Fact]
+    public void Ram_IsLabeled_AndNeverScored()
+    {
+        // The RAM card is display-only: it must never be a paste component, or it would be
+        // pulled into baseline learning and scoring.
+        Assert.Equal("RAM", ComponentKind.Ram.Label());
+        Assert.False(ComponentKind.Ram.HasPaste());
+    }
+
+    [Fact]
+    public void SimulatedSource_EmitsRamCard_AfterBattery_WithUsage()
+    {
+        var snap = new SimulatedSensorSource().Read();
+        int battery = snap.Components.ToList().FindIndex(c => c.Kind == ComponentKind.Battery);
+        int ram = snap.Components.ToList().FindIndex(c => c.Kind == ComponentKind.Ram);
+
+        Assert.True(ram > battery && battery >= 0, "the RAM card must come after the battery");
+        ComponentReading mem = snap.Components[ram];
+        Assert.Null(mem.TemperatureC);                 // usage only, no thermal
+        Assert.NotNull(mem.LoadPercent);               // usage drives the load bar
+        Assert.NotNull(mem.MemUsedGb);
+        Assert.NotNull(mem.MemTotalGb);
+        Assert.True(mem.MemUsedGb <= mem.MemTotalGb);
     }
 }

@@ -96,6 +96,7 @@ public static class SettingsKeys
     public const string AutoUpdate = "app.autoUpdate";             // check GitHub for newer releases and self-update
     public const string FirstRunDone = "app.firstRunDone";
     public const string WhatsNewShownVersion = "app.whatsNewShown"; // "M.m.b" of the last release whose what's-new popup was shown
+    public const string FeedbackContact = "feedback.lastContact";   // last contact info typed into a feedback report, remembered for next time
 
     // Overclocker-friendly warning limits. Concern override is the sustained-average
     // temperature past which DeltaT treats the machine as too hot; null = use the

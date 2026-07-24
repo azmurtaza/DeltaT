@@ -169,7 +169,15 @@ public sealed record ScoreInput(
     double? ConcernOverrideC = null,
     // Whether the "no headroom left" near-silicon-limit warning is active. Off for
     // rigs deliberately pinned near TjMax. Real throttle EVENTS are always counted.
-    bool HeadroomWarnings = true);
+    bool HeadroomWarnings = true,
+    // Intel-only (CPU): the chip is confirmed by its own MSRs to be held below the
+    // configured PL2 by HEAT right now (thermal/PROCHOT limiter active, package power short
+    // of PL2). Absolute corroboration that cooling, not the power budget, is the ceiling. It
+    // sharpens (never creates) the diagnosis's transport-fault findings and floors headroom.
+    // Left false whenever the deficit is by-design (a power/current limiter, boost off), so a
+    // deliberately power-limited machine is never nudged toward a fault. Null-safe: default
+    // false reproduces today's behaviour exactly on AMD and where the driver can't read it.
+    bool CpuThermallyPowerConstrained = false);
 
 public static class Verdicts
 {

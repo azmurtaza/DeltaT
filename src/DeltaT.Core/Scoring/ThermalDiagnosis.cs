@@ -121,7 +121,15 @@ public sealed record DiagnosisInputs(
     // Loaded readings were dropped because their watts sat too far from the baseline's
     // to correct fairly (frequency cap, deep power limit). Explains WHY an aspect
     // reads "--" so the tooltip can say the honest thing.
-    bool PowerLimitedComparisons = false);
+    bool PowerLimitedComparisons = false,
+    // Intel-only, from MSR 0x64F + 0x610: the CPU is confirmed to be held back by HEAT right
+    // now (thermal/PROCHOT asserting) while drawing meaningfully below its configured PL2.
+    // That is direct, absolute corroboration that the COOLER, not the power budget, is the
+    // limiter, so it sharpens (never creates) the transport-fault findings and floors the
+    // headroom read. It is deliberately left false whenever the deficit is by-design (a power
+    // limit / current limiter asserting instead of thermal, e.g. boost off), so a
+    // deliberately power-limited machine is never pushed toward a fault by this signal.
+    bool ThermallyPowerConstrained = false);
 
 /// <summary>Turns the gathered evidence into a ranked list of causes. Pure and
 /// deterministic: same inputs, same diagnosis, no clocks or I/O.</summary>
@@ -361,15 +369,21 @@ public static class ThermalDiagnostician
     private static double PowerConfidence(DiagnosisInputs e) =>
         Clamp01((Math.Abs(e.PowerCorrectionC) - 2.0) / 8.0);
 
+    /// <summary>Sharpen a transport-fault confidence when the CPU is confirmed to be
+    /// thermally pinned below its own PL2 (Intel MSR corroboration). Only ever multiplies a
+    /// signal that already exists, so it can never manufacture a finding from nothing.</summary>
+    private static double ThermalCorroboration(DiagnosisInputs e, double conf) =>
+        conf > 0 && e.ThermallyPowerConstrained ? Clamp01(conf * 1.25) : conf;
+
     private static double MountConfidence(DiagnosisInputs e)
     {
         if (e.GapC is not { } gap)
             return 0;
         double gapDrift = e.GapBaselineC is { } bg ? gap - bg : 0;
         if (e.GapBaselineC is not null && gapDrift > ScoringEngine.HotspotDriftDeadbandC)
-            return Clamp01((gapDrift - ScoringEngine.HotspotDriftDeadbandC) / 10.0);
+            return ThermalCorroboration(e, Clamp01((gapDrift - ScoringEngine.HotspotDriftDeadbandC) / 10.0));
         if (e.GapBaselineC is null && gap >= ScoringEngine.HotspotGapPenaltyC)
-            return Clamp01((gap - ScoringEngine.HotspotGapPenaltyC) / 12.0) * 0.8;
+            return ThermalCorroboration(e, Clamp01((gap - ScoringEngine.HotspotGapPenaltyC) / 12.0) * 0.8);
         return 0;
     }
 
@@ -422,10 +436,10 @@ public static class ThermalDiagnostician
             if (t.FansHarder) airflowConf += 0.25;
             if (t.IdleLifted) airflowConf += 0.15;
             if (t.NormalSoak) airflowConf += 0.10;
-            return Clamp01(airflowConf);
+            return ThermalCorroboration(e, Clamp01(airflowConf));
         }
         if (t.FansHarder && t.Excess > 1.5)
-            return 0.45; // fans clearly straining to hold temps: airflow is being lost
+            return ThermalCorroboration(e, 0.45); // fans clearly straining to hold temps: airflow is being lost
         return 0;
     }
 
@@ -440,7 +454,7 @@ public static class ThermalDiagnostician
     {
         if (!e.FanUndershoot)
             return 0;
-        return t.Excess > 3 ? 0.6 : 0.45; // slower fan AND hotter = it's costing real degrees
+        return ThermalCorroboration(e, t.Excess > 3 ? 0.6 : 0.45); // slower fan AND hotter = real degrees lost
     }
 
     private static string FanFaultEvidence() =>
@@ -453,13 +467,21 @@ public static class ThermalDiagnostician
             double perDay = e.ThrottleEvents / Math.Max(1.0, e.RecentWindowHours / 24.0);
             return Clamp01(0.4 + perDay * 0.15);
         }
+        // A CPU held below its own configured PL2 by heat is, by definition, out of headroom,
+        // even without a logged throttle event: the MSR limit-reason register says so directly.
+        if (e.ThermallyPowerConstrained)
+            return Math.Max(0.5, e.NearLimit ? 0.5 : 0);
         return e.NearLimit ? 0.35 : 0;
     }
 
-    private static string HeadroomEvidence(DiagnosisInputs e) =>
-        e.ThrottleEvents > 0
-            ? $"Hit the thermal limit {e.ThrottleEvents}× recently and pulled clocks back. Whatever the root cause, there's no headroom left."
-            : "Peaks are right at the silicon limit with no headroom to spare.";
+    private static string HeadroomEvidence(DiagnosisInputs e)
+    {
+        if (e.ThrottleEvents > 0)
+            return $"Hit the thermal limit {e.ThrottleEvents}× recently and pulled clocks back. Whatever the root cause, there's no headroom left.";
+        if (e.ThermallyPowerConstrained)
+            return "The CPU is holding below its own configured power limit because of heat (the chip's thermal limiter is active), so cooling, not the power budget, is the ceiling.";
+        return "Peaks are right at the silicon limit with no headroom to spare.";
+    }
 
     private static double Clamp01(double v) => Math.Clamp(v, 0, 1);
 
