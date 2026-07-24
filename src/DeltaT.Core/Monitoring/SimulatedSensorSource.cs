@@ -120,8 +120,6 @@ public sealed class SimulatedSensorSource : ISensorSource
             new(ComponentKind.Storage, "Simulated NVMe SSD",
                 Math.Round(_ssdTemp, 1), null, Math.Round(Math.Min(100, _cpuLoad * 0.3 + 1), 1), null, null,
                 5, false, null),
-            new(ComponentKind.Battery, "Simulated Battery",
-                null, null, null, null, null, 7.0, false, null, BatteryCycles: 214),
         };
 
         double ramUsed = Clamp(6.5 + _cpuLoad * 0.05 + Noise(0.2), 2, 15.5);
@@ -129,6 +127,8 @@ public sealed class SimulatedSensorSource : ISensorSource
             ComponentKind.Ram, "Simulated 16 GB DDR5",
             null, null, Math.Round(ramUsed / 16.0 * 100, 1), null, null, null, false, null,
             MemUsedGb: Math.Round(ramUsed, 1), MemTotalGb: 16));
+        components.Add(new ComponentReading(ComponentKind.Battery, "Simulated Battery",
+            null, null, null, null, null, 7.0, false, null, BatteryCycles: 214));
 
         return new SensorSnapshot(_now, true, components);
     }

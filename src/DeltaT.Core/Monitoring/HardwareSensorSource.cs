@@ -210,7 +210,7 @@ public sealed class HardwareSensorSource : ISensorSource
 
         _computer.Accept(_visitor);
         var components = new List<ComponentReading>();
-        ComponentReading? memory = null; // added last, so the RAM card lands after the battery
+        var memoryNodes = new List<IHardware>(2); // every LHM memory node; one of them is physical RAM
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         // Laptop EC fans are invisible to LHM; a supported vendor's gaming WMI answers.
@@ -247,13 +247,15 @@ public sealed class HardwareSensorSource : ISensorSource
             };
             if (reading is not null)
                 components.Add(reading);
-            else if (hw.HardwareType == HardwareType.Memory && !IsVirtualMemoryNode(hw.Name))
-                memory = MapMemory(hw); // physical RAM only; see IsVirtualMemoryNode
+            else if (hw.HardwareType == HardwareType.Memory)
+                memoryNodes.Add(hw);
         }
 
         RunWatchdog(components, now);
 
-        if (memory is not null)
+        // Built from whichever source can actually answer (see MapMemory). Snapshot position
+        // is irrelevant to the dashboard, which orders cards by MainViewModel.CardOrder.
+        if (MapMemory(memoryNodes) is { } memory)
             components.Add(memory);
 
         return new SensorSnapshot(now, IsOnAcPower(), components);
@@ -763,21 +765,89 @@ public sealed class HardwareSensorSource : ISensorSource
     public static bool IsVirtualMemoryNode(string name) =>
         name.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>System memory as a display-only usage card (no thermal paste, so it is never
-    /// scored: it flows through the same non-paste path Battery/SSD use). LHM's Memory node
-    /// exposes physical-RAM load as a percentage and used/available as data (GiB); the card
-    /// shows the percent as its load bar and "used / total GB" as its meta line.</summary>
-    private ComponentReading MapMemory(IHardware hw)
+    /// <summary>How far a memory node's total may sit from the OS's own physical total and
+    /// still be believed to BE physical RAM. Generous, because LHM rounds to 0.1 GiB and the
+    /// commit charge (the node this rejects) is normally far larger, not marginally so.</summary>
+    private const double PhysicalMemoryTolerance = 0.15;
+
+    /// <summary>Which of LHM's memory nodes is physical RAM, given what Windows says the machine
+    /// actually has. Returns the index into <paramref name="nodes"/>, or -1 for "none of these".
+    ///
+    /// <para>Name matching alone was too brittle to ship: LHM's node names are not API, they
+    /// differ between builds, and a machine whose physical node is not called what this build
+    /// expects ended up with no RAM card at all. Measuring instead is decisive, since the
+    /// pagefile-backed commit charge and physical RAM are different sizes by definition
+    /// (measured on the dev machine: 15.7 GiB physical against 30.7 GiB commit). The name is
+    /// kept only as a tie-break for the case where the OS total is unknown.</para></summary>
+    public static int SelectPhysicalMemoryNode(IReadOnlyList<MemoryNodeCandidate> nodes, double? osTotalGb)
     {
-        double? used = Data(Find(hw, SensorType.Data, "Memory Used"));
-        double? avail = Data(Find(hw, SensorType.Data, "Memory Available"));
-        double? total = used is { } u && avail is { } a ? Math.Round(u + a, 1) : null;
+        int best = -1;
+        if (osTotalGb is { } osTotal && osTotal > 0)
+        {
+            double bestError = double.MaxValue;
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                if (nodes[i].TotalGb is not { } total || total <= 0)
+                    continue;
+                double error = Math.Abs(total - osTotal) / osTotal;
+                if (error <= PhysicalMemoryTolerance && error < bestError)
+                {
+                    bestError = error;
+                    best = i;
+                }
+            }
+            if (best >= 0)
+                return best;
+        }
+
+        // No OS figure to measure against (or nothing matched it): fall back to the name.
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            if (nodes[i].TotalGb is > 0 && !IsVirtualMemoryNode(nodes[i].Name))
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>System memory as a display-only usage card (no thermal paste, so it is never
+    /// scored: it flows through the same non-paste path Battery/SSD use). The card shows usage
+    /// percent as its load bar and "used / total GB" as its meta line.
+    ///
+    /// <para>Two sources, so the card is never simply missing. LHM's memory node is preferred
+    /// when one of its nodes measurably IS physical RAM; otherwise the reading comes straight
+    /// from Windows (<see cref="SystemMemoryReader"/>), which needs no driver, no elevation and
+    /// no LHM support, and therefore answers on every machine. Only if both fail does the card
+    /// stay away.</para></summary>
+    private static ComponentReading? MapMemory(IReadOnlyList<IHardware> nodes)
+    {
+        SystemMemoryReading? os = SystemMemoryReader.TryRead();
+
+        var candidates = new List<MemoryNodeCandidate>(nodes.Count);
+        foreach (IHardware hw in nodes)
+        {
+            double? used = Data(Find(hw, SensorType.Data, "Memory Used"));
+            double? avail = Data(Find(hw, SensorType.Data, "Memory Available"));
+            candidates.Add(new MemoryNodeCandidate(
+                hw.Name, used,
+                used is { } u && avail is { } a ? Math.Round(u + a, 1) : null,
+                Percent(Find(hw, SensorType.Load, "Memory"))));
+        }
+
+        int pick = SelectPhysicalMemoryNode(candidates, os?.TotalGb);
+        MemoryNodeCandidate? node = pick >= 0 ? candidates[pick] : null;
+
+        double? usedGb = node?.UsedGb ?? os?.UsedGb;
+        double? totalGb = node?.TotalGb ?? os?.TotalGb;
+        double? load = node?.LoadPercent ?? os?.LoadPercent;
+        if (usedGb is null || totalGb is null)
+            return null;
+
         return new ComponentReading(
             ComponentKind.Ram, "System Memory",
             TemperatureC: null, HotspotC: null,
-            LoadPercent: Percent(Find(hw, SensorType.Load, "Memory")),
+            LoadPercent: load,
             FanRpm: null, PowerW: null, WearPercent: null, IsThrottling: false, ThrottleLimitC: null,
-            MemUsedGb: used, MemTotalGb: total);
+            MemUsedGb: usedGb, MemTotalGb: totalGb);
     }
 
     private static ComponentReading? MapMotherboard(IHardware hw)
@@ -983,3 +1053,8 @@ public sealed class HardwareSensorSource : ISensorSource
         public void VisitParameter(IParameter parameter) { }
     }
 }
+
+/// <summary>One of LibreHardwareMonitor's memory nodes, reduced to the numbers that decide
+/// whether it is physical RAM or the pagefile-backed commit charge. Keeps
+/// <see cref="HardwareSensorSource.SelectPhysicalMemoryNode"/> pure and unit-testable.</summary>
+public readonly record struct MemoryNodeCandidate(string Name, double? UsedGb, double? TotalGb, double? LoadPercent);

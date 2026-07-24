@@ -391,14 +391,53 @@ public class PrimitivesTests
     public void OnlyPhysicalMemory_BecomesTheRamCard(string nodeName, bool skipped) =>
         Assert.Equal(skipped, HardwareSensorSource.IsVirtualMemoryNode(nodeName));
 
+    private static MemoryNodeCandidate Node(string name, double? totalGb) =>
+        new(name, totalGb is { } t ? t * 0.6 : null, totalGb, null);
+
     [Fact]
-    public void SimulatedSource_EmitsRamCard_AfterBattery_WithUsage()
+    public void PhysicalMemoryNode_IsPickedByMeasuredSize_NotByName()
+    {
+        // The commit charge is a different size from physical RAM by definition, so the OS
+        // total identifies the right node even when the names are unfamiliar.
+        var nodes = new[] { Node("Commit Charge", 30.7), Node("Installed DIMMs", 15.7) };
+        Assert.Equal(1, HardwareSensorSource.SelectPhysicalMemoryNode(nodes, osTotalGb: 15.7));
+    }
+
+    [Fact]
+    public void PhysicalMemoryNode_FallsBackToTheName_WhenTheOsTotalIsUnknown()
+    {
+        var nodes = new[] { Node("Virtual Memory", 30.7), Node("Total Memory", 15.7) };
+        Assert.Equal(1, HardwareSensorSource.SelectPhysicalMemoryNode(nodes, osTotalGb: null));
+    }
+
+    [Fact]
+    public void PhysicalMemoryNode_IsRejected_WhenNothingMeasuresLikeRam()
+    {
+        // Nothing plausible and nothing named physical: the caller falls back to the OS
+        // reading rather than showing the pagefile as RAM.
+        var nodes = new[] { Node("Virtual Memory", 30.7), Node("Virtual Memory", null) };
+        Assert.Equal(-1, HardwareSensorSource.SelectPhysicalMemoryNode(nodes, osTotalGb: 15.7));
+    }
+
+    [Fact]
+    public void WindowsReportsPhysicalMemory_WithoutAnyDriver()
+    {
+        // The fallback that guarantees a RAM card on machines LHM has no memory node for.
+        SystemMemoryReading reading = SystemMemoryReader.TryRead()
+            ?? throw new InvalidOperationException("GlobalMemoryStatusEx returned nothing");
+        Assert.True(reading.TotalGb > 0.5);
+        Assert.InRange(reading.UsedGb, 0, reading.TotalGb);
+        Assert.InRange(reading.LoadPercent, 0, 100);
+    }
+
+    [Fact]
+    public void SimulatedSource_EmitsRamCard_BeforeBattery_WithUsage()
     {
         var snap = new SimulatedSensorSource().Read();
         int battery = snap.Components.ToList().FindIndex(c => c.Kind == ComponentKind.Battery);
         int ram = snap.Components.ToList().FindIndex(c => c.Kind == ComponentKind.Ram);
 
-        Assert.True(ram > battery && battery >= 0, "the RAM card must come after the battery");
+        Assert.True(ram >= 0 && battery > ram, "the RAM card must come before the battery");
         ComponentReading mem = snap.Components[ram];
         Assert.Null(mem.TemperatureC);                 // usage only, no thermal
         Assert.NotNull(mem.LoadPercent);               // usage drives the load bar

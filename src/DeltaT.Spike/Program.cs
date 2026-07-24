@@ -274,6 +274,72 @@ if (args.Contains("--msr", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+// `--ram`: why is the RAM card blank on this machine? Prints every LHM memory node with the
+// exact sensor names it exposes, says which node DeltaT picks as physical RAM, then runs the
+// REAL sensor source a few times and prints the ComponentReading the dashboard would draw.
+// Memory needs no kernel driver, so this works fine non-elevated.
+if (args.Contains("--ram", StringComparer.OrdinalIgnoreCase))
+{
+    DeltaT.Core.Monitoring.SystemMemoryReading? osMem = DeltaT.Core.Monitoring.SystemMemoryReader.TryRead();
+    Line(osMem is { } m
+        ? $"Windows reports {m.UsedGb:0.0} GB used of {m.TotalGb:0.0} GB physical ({m.LoadPercent:0.0} %)."
+        : "Windows would not report physical memory (the driver-free fallback is unavailable here).");
+    Line();
+
+    var ramComputer = new Computer { IsMemoryEnabled = true };
+    ramComputer.Open();
+    ramComputer.Accept(new UpdateVisitor());
+    Line("LibreHardwareMonitor memory nodes:");
+    var ramNodes = new List<IHardware>();
+    foreach (IHardware hw in ramComputer.Hardware)
+    {
+        if (hw.HardwareType != HardwareType.Memory)
+            continue;
+        ramNodes.Add(hw);
+        Line($"  [{hw.Name}]");
+        foreach (ISensor s in hw.Sensors)
+            Line($"      {s.SensorType,-10} \"{s.Name}\" = {Fmt(s.Value)}");
+    }
+    if (ramNodes.Count == 0)
+        Line("  (none: DeltaT falls back to the Windows reading above)");
+
+    var ramCandidates = new List<DeltaT.Core.Monitoring.MemoryNodeCandidate>();
+    foreach (IHardware hw in ramNodes)
+    {
+        float? used = null, avail = null;
+        foreach (ISensor s in hw.Sensors)
+        {
+            if (s.SensorType != SensorType.Data) continue;
+            if (s.Name == "Memory Used") used = s.Value;
+            else if (s.Name == "Memory Available") avail = s.Value;
+        }
+        ramCandidates.Add(new DeltaT.Core.Monitoring.MemoryNodeCandidate(
+            hw.Name, used, used is { } u && avail is { } a ? Math.Round(u + a, 1) : null, null));
+    }
+    int ramPick = DeltaT.Core.Monitoring.HardwareSensorSource.SelectPhysicalMemoryNode(ramCandidates, osMem?.TotalGb);
+    Line();
+    Line(ramPick >= 0
+        ? $"Physical-RAM node picked: \"{ramCandidates[ramPick].Name}\" ({ramCandidates[ramPick].TotalGb:0.0} GB total)"
+        : "No LHM node measures as physical RAM; the Windows reading is used instead.");
+    ramComputer.Close();
+
+    Line();
+    Line("What DeltaT's own sensor source reports:");
+    using (var ramSource = new DeltaT.Core.Monitoring.HardwareSensorSource())
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            DeltaT.Core.Monitoring.SensorSnapshot snap = ramSource.Read();
+            DeltaT.Core.Monitoring.ComponentReading? ram = snap.Find(DeltaT.Core.Monitoring.ComponentKind.Ram);
+            Line(ram is null
+                ? $"  [{i}] no RAM reading in the snapshot"
+                : $"  [{i}] {ram.Name}: load {ram.LoadPercent?.ToString("0.0") ?? "--"} %, used {ram.MemUsedGb?.ToString("0.0") ?? "--"} GB, total {ram.MemTotalGb?.ToString("0.0") ?? "--"} GB");
+            Thread.Sleep(1200);
+        }
+    }
+    return;
+}
+
 // `--cost`: what does one sensor pass actually cost? DeltaT's whole polling design rests on
 // these numbers (fast readers every tick, LHM's expensive per-hardware Update() on a slow
 // clock), and they were previously measured by hand, which is how they went stale when the

@@ -21,8 +21,8 @@ public partial class MainViewModel : ObservableObject
     // doubles as an allowlist: a component kind missing here never gets a card at all.
     private static readonly ComponentKind[] CardOrder =
     {
-        ComponentKind.Cpu, ComponentKind.GpuDiscrete, ComponentKind.Storage, ComponentKind.Battery,
-        ComponentKind.Ram,
+        ComponentKind.Cpu, ComponentKind.GpuDiscrete, ComponentKind.Storage, ComponentKind.Ram,
+        ComponentKind.Battery,
     };
 
     private readonly Dispatcher _dispatcher;
