@@ -220,6 +220,92 @@ public class ScoreCoordinatorTests : IDisposable
         Assert.Null(relaunched.ConsumeRepasteReport());
     }
 
+    // -------------------------------------------------------- scoped resets
+
+    /// <summary>Both components locked in epoch 0, which is the state a scoped reset starts from.</summary>
+    private ScoreCoordinator LockBothComponents()
+    {
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2));
+        WriteLockworthyLoad(ComponentKind.GpuDiscrete, GpuName, T0.AddHours(2), baseDelta: 45.0);
+        UseSnapshot(T0.AddDays(2), withGpu: true);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(T0.AddDays(2));
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.GpuDiscrete}"));
+        return coordinator;
+    }
+
+    [Fact]
+    public void CpuOnlyRepaste_LeavesTheGpuBaselineLockedAndIntact()
+    {
+        ScoreCoordinator coordinator = LockBothComponents();
+        IReadOnlyList<BaselineRow> gpuBefore = _repo.GetBaseline(0).Where(r => r.Kind == ComponentKind.GpuDiscrete).ToList();
+        Assert.NotEmpty(gpuBefore);
+
+        coordinator.RegisterRepaste(T0.AddDays(3), kinds: new[] { ComponentKind.Cpu });
+
+        // The CPU relearns...
+        Assert.Null(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+        // ...while the GPU keeps its lock AND its rows, which had to move into the new epoch
+        // (scoring only ever reads the current one).
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.GpuDiscrete}"));
+        IReadOnlyList<BaselineRow> gpuAfter = _repo.GetBaseline(coordinator.Epoch)
+            .Where(r => r.Kind == ComponentKind.GpuDiscrete).ToList();
+        Assert.Equal(gpuBefore.Count, gpuAfter.Count);
+        Assert.Equal(gpuBefore.Select(r => r.DeltaAvg).OrderBy(d => d), gpuAfter.Select(r => r.DeltaAvg).OrderBy(d => d));
+    }
+
+    [Fact]
+    public void ScopedRepaste_KeepsTheUntouchedComponentScoring()
+    {
+        ScoreCoordinator coordinator = LockBothComponents();
+        coordinator.RegisterRepaste(T0.AddDays(3), kinds: new[] { ComponentKind.Cpu });
+
+        DateTimeOffset now = T0.AddDays(3).AddHours(1);
+        UseSnapshot(now, withGpu: true);
+        var scores = coordinator.Compute(now);
+
+        // The GPU never left its locked epoch-0 window, so it is not knocked back into
+        // calibration by its neighbour's repaste. The CPU is, which is the whole point.
+        Assert.False(scores[ComponentKind.GpuDiscrete].Calibrating);
+        Assert.True(scores[ComponentKind.Cpu].Calibrating);
+    }
+
+    [Fact]
+    public void ScopedRepaste_VerdictCoversOnlyWhatWasRepasted()
+    {
+        ScoreCoordinator coordinator = LockBothComponents();
+        DateTimeOffset repaste = T0.AddDays(3);
+        coordinator.RegisterRepaste(repaste, kinds: new[] { ComponentKind.GpuDiscrete });
+
+        // The GPU now runs 6° cooler on fresh paste; the CPU is untouched and carried forward.
+        WriteLockworthyLoad(ComponentKind.GpuDiscrete, GpuName, repaste.AddHours(2), baseDelta: 39.0);
+        DateTimeOffset now = repaste.AddDays(6); // past the cure ramp
+        UseSnapshot(now, withGpu: true);
+        coordinator.Compute(now);
+
+        RepasteReport? report = coordinator.ConsumeRepasteReport();
+        Assert.NotNull(report);
+        Assert.Equal(RepasteVerdict.Improved, report!.Verdict);
+        // The CPU was carried through unchanged, so quoting it here would be meaningless.
+        Assert.DoesNotContain("CPU", report.Text);
+        Assert.Contains("GPU", report.Text);
+    }
+
+    [Fact]
+    public void UnscopedRepaste_StillResetsEverything()
+    {
+        // The default path (and every epoch written before scoping existed) must behave
+        // exactly as it always did.
+        ScoreCoordinator coordinator = LockBothComponents();
+        coordinator.RegisterRepaste(T0.AddDays(3));
+
+        Assert.Null(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+        Assert.Null(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.GpuDiscrete}"));
+        Assert.Equal(new[] { ComponentKind.Cpu, ComponentKind.GpuDiscrete }, coordinator.EpochKinds);
+    }
+
     // ------------------------------------------------------- smart recalibrate
 
     [Fact]

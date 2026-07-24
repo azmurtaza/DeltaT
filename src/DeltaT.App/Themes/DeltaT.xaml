@@ -507,6 +507,43 @@
         </Setter>
     </Style>
 
+    <!-- A pick-one option plate: square selector, ember when chosen. Used where the choice
+         needs room to explain itself (the repaste/recalibrate scope), which the compact
+         "Seg" tab strip has no space for. -->
+    <Style x:Key="Choice" TargetType="RadioButton">
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="plate" Background="{StaticResource Brush.Rail}"
+                            BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1"
+                            Padding="12,10">
+                        <DockPanel>
+                            <Border x:Name="box" DockPanel.Dock="Left" Width="12" Height="12"
+                                    VerticalAlignment="Top" Margin="0,2,12,0"
+                                    BorderBrush="{StaticResource Brush.Stroke}" BorderThickness="1">
+                                <Rectangle x:Name="fill" Fill="{StaticResource Brush.Accent}"
+                                           Margin="2" Opacity="0"/>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="plate" Property="BorderBrush" Value="{StaticResource Brush.Stroke}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="plate" Property="BorderBrush" Value="{StaticResource Brush.Accent}"/>
+                            <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource Brush.Accent}"/>
+                            <Setter TargetName="fill" Property="Opacity" Value="1"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============================== scrollbars (thin, quiet) -->
 
     <Style TargetType="ScrollBar">

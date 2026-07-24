@@ -5,6 +5,7 @@ using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeltaT.App.Services;
+using DeltaT.App.Views;
 using DeltaT.Core.Knowledge;
 using DeltaT.Core.Machine;
 using DeltaT.Core.Monitoring;
@@ -415,32 +416,53 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void RegisterRepaste()
     {
-        MessageBoxResult answer = MessageBox.Show(
-            "Tell DeltaT you just replaced the thermal paste?\n\n"
-            + "The learned baseline resets and relearning starts (fresh paste needs a few days "
-            + "to settle, so the lock waits for that). Once the new baseline locks, DeltaT "
-            + "reports exactly what the repaste bought you. History and trends stay put.",
-            "Log a repaste", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return;
-        _scores.RegisterRepaste(DateTimeOffset.UtcNow);
-        StatusText = "Repaste logged. New baseline learning started. The verdict lands once the fresh paste settles and enough load is seen.";
+        if (AskScope(repaste: true,
+                "Tell DeltaT you just replaced the thermal paste?\n\n"
+                + "The learned baseline resets and relearning starts (fresh paste needs a few days "
+                + "to settle, so the lock waits for that). Once the new baseline locks, DeltaT "
+                + "reports exactly what the repaste bought you. History and trends stay put.",
+                "Log a repaste") is not { } scope)
+            return;
+
+        _scores.RegisterRepaste(DateTimeOffset.UtcNow, kinds: scope);
+        StatusText = $"Repaste logged for {ScopeLabel(scope)}. New baseline learning started. The verdict lands once the fresh paste settles and enough load is seen.";
     }
 
     [RelayCommand]
     private void Recalibrate()
     {
-        MessageBoxResult answer = MessageBox.Show(
-            "Recalibrate the learned baseline?\n\n"
-            + "Use this when the cooling changed but the paste didn't (new fans, a clean-out, "
-            + "a moved rig), or after DeltaT has been off for a long stretch. DeltaT re-checks "
-            + "the machine against its old baseline under real load: if nothing actually changed, "
-            + "the old reference is kept and scoring resumes within the hour; only genuine change "
-            + "is relearned. History and trends are never touched.",
-            "Recalibrate", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return;
-        _scores.Recalibrate(DateTimeOffset.UtcNow);
-        StatusText = "Recalibration started. DeltaT verifies against the old baseline under load and relearns only what changed.";
+        if (AskScope(repaste: false,
+                "Recalibrate the learned baseline?\n\n"
+                + "Use this when the cooling changed but the paste didn't (new fans, a clean-out, "
+                + "a moved rig), or after DeltaT has been off for a long stretch. DeltaT re-checks "
+                + "the machine against its old baseline under real load: if nothing actually changed, "
+                + "the old reference is kept and scoring resumes within the hour; only genuine change "
+                + "is relearned. History and trends are never touched.",
+                "Recalibrate") is not { } scope)
+            return;
+
+        _scores.Recalibrate(DateTimeOffset.UtcNow, kinds: scope);
+        StatusText = $"Recalibration started for {ScopeLabel(scope)}. DeltaT verifies against the old baseline under load and relearns only what changed.";
     }
+
+    /// <summary>Which components the reset applies to, or null if the user backed out. A machine
+    /// with both a CPU and a discrete GPU gets the scope picker, because the two baselines are
+    /// independent and resetting the untouched one costs days of relearning for nothing. A
+    /// machine with only one pasted component has no choice to offer, so it gets the plain
+    /// confirmation it always got.</summary>
+    private IReadOnlyList<ComponentKind>? AskScope(bool repaste, string confirmText, string caption)
+    {
+        IReadOnlyList<ComponentKind> available = _scores.ScorableKinds;
+        if (available.Count > 1)
+            return BaselineScopeWindow.Ask(Application.Current?.MainWindow, repaste);
+
+        return MessageBox.Show(confirmText, caption, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
+            ? available
+            : null;
+    }
+
+    private static string ScopeLabel(IReadOnlyList<ComponentKind> scope) =>
+        scope.Count > 1 ? "CPU and GPU" : scope[0].Label();
 
     [RelayCommand]
     private async Task ExportCsvAsync()

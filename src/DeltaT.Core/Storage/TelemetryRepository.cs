@@ -896,6 +896,33 @@ public sealed class TelemetryRepository
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Copies one component's learned rows (blended cells and power-tagged sub-cells,
+    /// every ambient-source mode) from one epoch into another, leaving the originals in place.
+    ///
+    /// <para>This is what lets a repaste or recalibration apply to the CPU alone, or the GPU
+    /// alone. The epoch counter is machine-wide, and scoring reads the CURRENT epoch's rows, so
+    /// a component that was not part of the reset would lose its reference the moment the epoch
+    /// bumped. Carrying its rows forward keeps its baseline (and its lock) exactly as it was,
+    /// while the component that WAS reset starts learning from nothing.</para></summary>
+    public void CarryBaselineForward(int fromEpoch, int toEpoch, ComponentKind kind)
+    {
+        if (fromEpoch == toEpoch) return;
+        using var conn = _db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT OR REPLACE INTO baseline(epoch,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg,power_avg,mode)
+                SELECT $to,kind,name,band,bucket,delta_avg,delta_p95,soak_rate,fan_avg,minutes,updated,delta_se,temp_avg,gap_avg,power_avg,mode
+                FROM baseline WHERE epoch=$from AND kind=$kind;
+            INSERT OR REPLACE INTO baseline_power(epoch,kind,name,band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated,mode)
+                SELECT $to,kind,name,band,bucket,pband,delta_avg,fan_avg,temp_avg,gap_avg,power_avg,minutes,updated,mode
+                FROM baseline_power WHERE epoch=$from AND kind=$kind;
+            """;
+        cmd.Parameters.AddWithValue("$from", fromEpoch);
+        cmd.Parameters.AddWithValue("$to", toEpoch);
+        cmd.Parameters.AddWithValue("$kind", kind.ToString());
+        cmd.ExecuteNonQuery();
+    }
+
     public IReadOnlyList<BaselineRow> GetBaseline(int epoch, int mode = 0)
     {
         using var conn = _db.Open();

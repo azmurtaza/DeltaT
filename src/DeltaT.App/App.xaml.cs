@@ -340,6 +340,13 @@ public partial class App : Application
             await Shot(donate, "donate");
             donate.Close();
 
+            // Repaste/recalibrate scope picker (modal in the app): same offscreen render.
+            var scope = new Views.BaselineScopeWindow(repaste: true)
+            { WindowStartupLocation = WindowStartupLocation.Manual, Left = -4000, Top = -4000 };
+            scope.Show();
+            await Shot(scope, "repaste_scope");
+            scope.Close();
+
             // What's-new popup: same offscreen render, seeded with the newest curated release.
             if (Core.Updates.WhatsNewNotes.Releases.Count > 0)
             {

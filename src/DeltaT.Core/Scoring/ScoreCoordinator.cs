@@ -24,6 +24,7 @@ public sealed class ScoreCoordinator
 
     private Dictionary<ComponentKind, ComponentScore> _latest = new();
     private bool _wasReady;
+    private bool _scopeWasReady;
     private RepasteReport? _pendingRepasteReport;
     private readonly HashSet<(ComponentKind Kind, int Mode)> _unfreezeLogged = new();
 
@@ -39,7 +40,9 @@ public sealed class ScoreCoordinator
 
     public event Action<IReadOnlyDictionary<ComponentKind, ComponentScore>>? ScoresUpdated;
 
-    /// <summary>Set when a Compute() pass sees the baseline turn ready for the first time.</summary>
+    /// <summary>Set when a Compute() pass sees this epoch's own components turn ready for the
+    /// first time. Scoped to <see cref="EpochKinds"/>: after a CPU-only repaste the GPU is still
+    /// locked and ready, and that must not read as the new CPU baseline having landed.</summary>
     public bool BaselineJustBecameReady { get; private set; }
 
     /// <summary>True once any pasted component has a locked baseline.</summary>
@@ -128,6 +131,34 @@ public sealed class ScoreCoordinator
 
     private string EpochReason => _settings.Get(SettingsKeys.BaselineEpochReason) ?? "initial";
 
+    /// <summary>The components the current epoch actually reset. CPU and GPU learn, lock and
+    /// score independently, so a repaste or recalibration can name just one of them; the other
+    /// keeps the baseline it already earned (its rows are carried into the new epoch by
+    /// <see cref="StartNewEpoch"/>). An empty or missing marker means "all of them", which is
+    /// what every epoch written before this build was.</summary>
+    public IReadOnlyList<ComponentKind> EpochKinds
+    {
+        get
+        {
+            string? raw = _settings.Get(SettingsKeys.BaselineEpochKinds);
+            if (string.IsNullOrWhiteSpace(raw))
+                return PastedKinds;
+            var kinds = new List<ComponentKind>(PastedKinds.Length);
+            foreach (string part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (Enum.TryParse(part, out ComponentKind kind) && PastedKinds.Contains(kind))
+                    kinds.Add(kind);
+            }
+            return kinds.Count > 0 ? kinds : PastedKinds;
+        }
+    }
+
+    /// <summary>When this component's current learning window began. A component left out of a
+    /// scoped repaste/recalibration keeps the start of the epoch it was last reset in, so
+    /// bumping the epoch for its neighbour cannot restart its calibration.</summary>
+    private DateTimeOffset EpochStartFor(ComponentKind kind) =>
+        _settings.GetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}") ?? EpochStart;
+
     /// <summary>The ambient-source mode DeltaT is currently scoring against: 0 = outside
     /// weather (the default), 1 = a user-set fixed indoor temperature. Everything scored,
     /// learned and locked is keyed by this, so the two regimes keep entirely separate
@@ -142,15 +173,32 @@ public sealed class ScoreCoordinator
 
     /// <summary>The window floor for a mode: the epoch start, except fixed mode also floors at the
     /// moment its current indoor reference began, whichever is later. Weather mode is unaffected.</summary>
-    public DateTimeOffset EffectiveEpochStart(int mode)
-    {
-        DateTimeOffset epochStart = EpochStart;
-        return mode == 1 && FixedSince is { } fs && fs > epochStart ? fs : epochStart;
-    }
+    public DateTimeOffset EffectiveEpochStart(int mode) => FloorForMode(EpochStart, mode);
+
+    /// <summary>The window floor for one component: its own epoch start (which a scoped
+    /// repaste/recalibration may have left behind at an earlier epoch), floored as above.</summary>
+    public DateTimeOffset EffectiveEpochStart(ComponentKind kind, int mode) => FloorForMode(EpochStartFor(kind), mode);
+
+    private DateTimeOffset FloorForMode(DateTimeOffset epochStart, int mode) =>
+        mode == 1 && FixedSince is { } fs && fs > epochStart ? fs : epochStart;
 
     /// <summary>Whether a mode has any locked baseline yet (any component). Used by Settings to
     /// decide when the first-time "this mode needs to calibrate" warning is warranted.</summary>
     public bool HasBaseline(int mode) => PastedKinds.Any(k => LockFor(k, mode) is not null);
+
+    /// <summary>The pasted components this machine actually has sensors for, in dashboard order.
+    /// Settings uses it to offer a repaste/recalibrate scope: a desktop with no readable GPU, or a
+    /// machine whose only GPU is integrated, should never be asked to choose.</summary>
+    public IReadOnlyList<ComponentKind> ScorableKinds
+    {
+        get
+        {
+            if (_latestSnapshot() is not { } snap)
+                return PastedKinds;
+            var present = PastedKinds.Where(k => snap.Components.Any(c => c.Kind == k)).ToList();
+            return present.Count > 0 ? present : PastedKinds;
+        }
+    }
 
     /// <summary>Fixed mode has begun learning at least once (a reference timestamp exists).</summary>
     public bool FixedModeStarted => FixedSince is not null;
@@ -179,6 +227,7 @@ public sealed class ScoreCoordinator
         }
         _repo.DeleteBaselineForMode(Epoch, 1);
         _wasReady = false;
+        _scopeWasReady = false;
     }
 
     // ------------------------------------------------------------- lock plumbing
@@ -262,17 +311,20 @@ public sealed class ScoreCoordinator
             return results;
 
         int mode = ActiveMode;
-        DateTimeOffset epochStart = EffectiveEpochStart(mode);
-        bool anyReady = false;
+        bool anyReady = false, scopeReady = false;
+        IReadOnlyList<ComponentKind> scope = EpochKinds;
 
         foreach (ComponentReading c in snap.Components.Where(c => c.Kind.HasPaste()))
         {
-            ComponentScore score = ScoreComponent(c, epochStart, nowUtc, mode, out bool ready);
+            // Per component: a CPU-only repaste must not restart the GPU's learning window.
+            ComponentScore score = ScoreComponent(c, EffectiveEpochStart(c.Kind, mode), nowUtc, mode, out bool ready);
             results[c.Kind] = score;
             anyReady |= ready;
+            scopeReady |= ready && scope.Contains(c.Kind);
         }
 
-        BaselineJustBecameReady = anyReady && !_wasReady;
+        BaselineJustBecameReady = scopeReady && !_scopeWasReady;
+        _scopeWasReady = scopeReady;
         _wasReady = anyReady;
 
         // Announce the epoch's outcome exactly once, ever — not once per launch.
@@ -327,7 +379,9 @@ public sealed class ScoreCoordinator
         IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch, mode);
 
         var perComponent = new List<(ComponentKind Kind, BaselineComparison Cmp)>();
-        foreach (ComponentKind kind in PastedKinds)
+        // Only what this epoch actually reset: a component carried through unchanged would
+        // otherwise compare against a copy of itself and report a meaningless "unchanged".
+        foreach (ComponentKind kind in EpochKinds)
         {
             BaselineComparison cmp = BaselineComparer.Compare(before, after, kind);
             if (cmp.Verdict != RepasteVerdict.Inconclusive)
@@ -380,7 +434,7 @@ public sealed class ScoreCoordinator
         var changes = new List<string>();
         IReadOnlyList<BaselineRow> before = _repo.GetBaseline(Epoch - 1, mode);
         IReadOnlyList<BaselineRow> after = _repo.GetBaseline(Epoch, mode);
-        foreach (ComponentKind kind in PastedKinds)
+        foreach (ComponentKind kind in EpochKinds)
         {
             BaselineComparison cmp = BaselineComparer.Compare(before, after, kind);
             if (cmp.Verdict == RepasteVerdict.Improved)
@@ -392,7 +446,7 @@ public sealed class ScoreCoordinator
             ? $" Versus the old baseline (weather- and fan-corrected): {string.Join(", ", changes)}."
             : "";
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "remark", null, null, 1,
-            $"Recalibration complete. A fresh baseline is locked in and scoring is back on solid ground.{comparison}", null, mode);
+            $"Recalibration complete for {DescribeScope(EpochKinds)}. A fresh baseline is locked in and scoring is back on solid ground.{comparison}", null, mode);
     }
 
     private ComponentScore ScoreComponent(
@@ -734,47 +788,92 @@ public sealed class ScoreCoordinator
         stats.Where(s => s.OnAc && s.Band >= 0).ToList();
 
     /// <summary>User repasted: bump the epoch, restart learning, log the event.
-    /// A few days later the before/after comparison lives in the events + baselines.</summary>
-    public void RegisterRepaste(DateTimeOffset nowUtc, string? note = null)
+    /// A few days later the before/after comparison lives in the events + baselines.
+    ///
+    /// <para><paramref name="kinds"/> names what was actually repasted (null = everything).
+    /// Repasting a laptop CPU without touching the GPU is the common case, and the two
+    /// baselines are independent, so only the named ones relearn.</para></summary>
+    public void RegisterRepaste(DateTimeOffset nowUtc, string? note = null, IReadOnlyList<ComponentKind>? kinds = null)
     {
-        StartNewEpoch(nowUtc, "repaste");
+        IReadOnlyList<ComponentKind> scope = NormalizeScope(kinds);
+        StartNewEpoch(nowUtc, "repaste", scope);
+        string what = DescribeScope(scope);
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "repaste", null, null, 1,
-            string.IsNullOrWhiteSpace(note) ? "Thermal paste replaced. New baseline learning started." : $"Thermal paste replaced: {note}",
+            string.IsNullOrWhiteSpace(note)
+                ? $"Thermal paste replaced ({what}). New baseline learning started."
+                : $"Thermal paste replaced ({what}): {note}",
             null, ActiveMode);
         Compute(nowUtc);
     }
+
+    /// <summary>Falls back to every pasted component, and never returns something empty or
+    /// containing a component this machine does not score.</summary>
+    private static IReadOnlyList<ComponentKind> NormalizeScope(IReadOnlyList<ComponentKind>? kinds)
+    {
+        if (kinds is null)
+            return PastedKinds;
+        var scoped = kinds.Where(k => PastedKinds.Contains(k)).Distinct().ToList();
+        return scoped.Count > 0 ? scoped : PastedKinds;
+    }
+
+    private static string DescribeScope(IReadOnlyList<ComponentKind> kinds) =>
+        kinds.Count >= PastedKinds.Length ? "CPU and GPU" : string.Join(" and ", kinds.Select(k => k.Label()));
 
     /// <summary>User accepted DeltaT's "your baseline is stale" prompt (or hit the
     /// button out of doubt): start a verification epoch. History and trends are never
     /// touched. The new data is checked against the old baseline as it arrives — if
     /// the machine still behaves identically, the old reference is adopted back
     /// (see <see cref="TryAdoptPreviousBaseline"/>); only genuine change relearns.</summary>
-    public void Recalibrate(DateTimeOffset nowUtc, string? note = null)
+    public void Recalibrate(DateTimeOffset nowUtc, string? note = null, IReadOnlyList<ComponentKind>? kinds = null)
     {
-        StartNewEpoch(nowUtc, "recalibrate");
+        IReadOnlyList<ComponentKind> scope = NormalizeScope(kinds);
+        StartNewEpoch(nowUtc, "recalibrate", scope);
+        string what = DescribeScope(scope);
         _repo.InsertEvent(nowUtc.ToUnixTimeSeconds(), "recalibrate", null, null, 1,
             string.IsNullOrWhiteSpace(note)
-                ? "Baseline recalibration started. DeltaT will verify the machine against its old baseline under real load, keep it if nothing changed, and relearn only what did. History and trends stay put."
-                : $"Baseline recalibration started: {note}",
+                ? $"Baseline recalibration started for {what}. DeltaT will verify the machine against its old baseline under real load, keep it if nothing changed, and relearn only what did. History and trends stay put."
+                : $"Baseline recalibration started for {what}: {note}",
             null, ActiveMode);
         Compute(nowUtc);
     }
 
-    private void StartNewEpoch(DateTimeOffset nowUtc, string reason)
+    /// <summary>Starts a new epoch for <paramref name="kinds"/> only. Components outside that
+    /// set keep their lock, their learned rows (carried into the new epoch) and their own
+    /// earlier window start, so scoping a repaste to the CPU leaves the GPU's score untouched
+    /// and running rather than knocking it back into calibration.</summary>
+    private void StartNewEpoch(DateTimeOffset nowUtc, string reason, IReadOnlyList<ComponentKind> kinds)
     {
-        _settings.SetInt(SettingsKeys.BaselineEpoch, Epoch + 1);
+        int previousEpoch = Epoch;
+        int newEpoch = previousEpoch + 1;
+        _settings.SetInt(SettingsKeys.BaselineEpoch, newEpoch);
         _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
         _settings.Set(SettingsKeys.BaselineEpochReason, reason);
-        _settings.Set(SettingsKeys.BaselineLockedUtc, ""); // fresh epoch: windows grow again until they re-lock
-        // A repaste or recalibrate is a physical change to the machine that both ambient-source
-        // modes must relearn against, so clear the locks for every mode, not just the active one.
-        foreach (int mode in AllModes)
-            foreach (ComponentKind kind in PastedKinds)
+        _settings.Set(SettingsKeys.BaselineEpochKinds, string.Join(",", kinds));
+
+        foreach (ComponentKind kind in PastedKinds)
+        {
+            if (kinds.Contains(kind))
             {
-                _settings.Set(LockKey(kind, mode), "");
-                _settings.Set(EarnedKey(kind, mode), "");
+                // A repaste or recalibrate is a physical change to the machine that BOTH
+                // ambient-source modes must relearn against, so clear every mode's lock, not
+                // just the active one. ClearLock also hands the legacy shared lock down to the
+                // components that are keeping theirs, so scoping can't silently unlock them.
+                foreach (int mode in AllModes)
+                    ClearLock(kind, mode);
+                _settings.SetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}", nowUtc);
             }
+            else
+            {
+                // Untouched: its reference must survive the epoch bump, since scoring only ever
+                // reads the current epoch's rows.
+                _repo.CarryBaselineForward(previousEpoch, newEpoch, kind);
+                if (_settings.GetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}") is null)
+                    _settings.SetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}", EpochStartFor(kind));
+            }
+        }
+
         _wasReady = false;
+        _scopeWasReady = false;
         BaselineStale = false; // a fresh learning window supersedes the stale one
         DormantDays = 0;
     }

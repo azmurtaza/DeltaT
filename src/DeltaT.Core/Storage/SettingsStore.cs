@@ -78,6 +78,7 @@ public static class SettingsKeys
     public const string BaselineEpoch = "baseline.epoch";          // increments on repaste
     public const string BaselineEpochStart = "baseline.epochStart";
     public const string BaselineEpochReason = "baseline.epochReason"; // initial | repaste | recalibrate
+    public const string BaselineEpochKinds = "baseline.epochKinds";   // which components this epoch actually reset (comma-joined); empty = all of them
     public const string BaselineLockedUtc = "baseline.lockedUtc";   // legacy shared lock; per-component locks live at "baseline.lockedUtc.{Kind}"
     public const string BaselineLockEarned = "baseline.lockEarned"; // "…{Kind}" = the lock came from a real confidence pass (never self-healed away)
     public const string BaselineOutcomeReportedEpoch = "baseline.outcomeReported"; // epoch whose repaste/recalibrate verdict was already announced
