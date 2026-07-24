@@ -17,9 +17,12 @@ namespace DeltaT.App.ViewModels;
 
 public partial class MainViewModel : ObservableObject
 {
+    // The dashboard's telemetry list is ordered by THIS array, not by snapshot order, and it
+    // doubles as an allowlist: a component kind missing here never gets a card at all.
     private static readonly ComponentKind[] CardOrder =
     {
         ComponentKind.Cpu, ComponentKind.GpuDiscrete, ComponentKind.Storage, ComponentKind.Battery,
+        ComponentKind.Ram,
     };
 
     private readonly Dispatcher _dispatcher;

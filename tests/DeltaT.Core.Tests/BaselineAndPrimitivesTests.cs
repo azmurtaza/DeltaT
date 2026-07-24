@@ -380,6 +380,17 @@ public class PrimitivesTests
         Assert.False(ComponentKind.Ram.HasPaste());
     }
 
+    [Theory]
+    // LHM exposes both nodes with identical sensor names, so only the name tells them apart.
+    // Measured on the dev machine: "Total Memory" = 9.4/15.7 GB physical, "Virtual Memory" =
+    // 12.0/30.7 GB commit charge. Showing the pagefile as "RAM" would be simply wrong.
+    [InlineData("Total Memory", false)]
+    [InlineData("Generic Memory", false)]
+    [InlineData("Virtual Memory", true)]
+    [InlineData("virtual memory", true)]
+    public void OnlyPhysicalMemory_BecomesTheRamCard(string nodeName, bool skipped) =>
+        Assert.Equal(skipped, HardwareSensorSource.IsVirtualMemoryNode(nodeName));
+
     [Fact]
     public void SimulatedSource_EmitsRamCard_AfterBattery_WithUsage()
     {

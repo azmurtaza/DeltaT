@@ -247,8 +247,8 @@ public sealed class HardwareSensorSource : ISensorSource
             };
             if (reading is not null)
                 components.Add(reading);
-            else if (hw.HardwareType == HardwareType.Memory)
-                memory = MapMemory(hw); // held back so it is appended after the battery
+            else if (hw.HardwareType == HardwareType.Memory && !IsVirtualMemoryNode(hw.Name))
+                memory = MapMemory(hw); // physical RAM only; see IsVirtualMemoryNode
         }
 
         RunWatchdog(components, now);
@@ -751,6 +751,17 @@ public sealed class HardwareSensorSource : ISensorSource
         Percent(Find(hw, SensorType.Level, "Degradation Level")),
         false, null,
         BatteryCycles: _batteryCycles.CurrentCycles);
+
+    /// <summary>True for LHM's VIRTUAL memory node. LHM reports two <c>HardwareType.Memory</c>
+    /// nodes with byte-identical sensor names ("Memory" load, "Memory Used"/"Memory Available"
+    /// data): one for physical RAM ("Total Memory") and one for the pagefile-backed commit
+    /// charge ("Virtual Memory"). Verified on the dev machine: the physical node read 9.4 GB
+    /// used of 15.7 GB total, the virtual node 12.0 GB of 30.7 GB. A user asking about RAM means
+    /// the physical one, so the virtual node is skipped. Excluding by name (rather than picking a
+    /// name) is the safe direction: a future LHM rename of the physical node still shows a card,
+    /// while the pagefile can never be mislabelled as RAM. Pure, so it is unit-tested.</summary>
+    public static bool IsVirtualMemoryNode(string name) =>
+        name.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>System memory as a display-only usage card (no thermal paste, so it is never
     /// scored: it flows through the same non-paste path Battery/SSD use). LHM's Memory node
