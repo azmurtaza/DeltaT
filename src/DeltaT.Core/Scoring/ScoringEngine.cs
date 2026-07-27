@@ -345,8 +345,20 @@ public static class ScoringEngine
             reasons, hint,
             locked ? "" : input.CalibrationConstraint,
             Provisional: !locked)
-        { Fan = fanNorm, Power = powerNorm, Diagnosis = diagnosis, Aspects = aspects, ExcessC = weightedExcess };
+        {
+            Fan = fanNorm, Power = powerNorm, Diagnosis = diagnosis, Aspects = aspects,
+            ExcessC = weightedExcess, Basis = BuildBasis(input, ex),
+        };
     }
+
+    /// <summary>The evidence line behind the number: what was measured, what was learned, what
+    /// was corrected, and how much data it rests on. Null when nothing was comparable.</summary>
+    private static ScoreBasis? BuildBasis(ScoreInput input, ExcessResult ex) =>
+        ex.Weighted is null ? null : new ScoreBasis(
+            ex.MeasuredRise, ex.BaselineRise, ex.PowerCorrection, ex.FanCorrection,
+            ex.MatchedMinutes, ex.LoadedMinutes, ex.CellsCompared, ex.TopBucket, ex.TopBand, ex.Adjacent,
+            input.RecentWindowHours, input.ThrottleEvents,
+            ex.PowerRecentMean, ex.PowerBaselineMean, ex.FanRecentMean, ex.FanBaselineMean);
 
     /// <summary>Gather the evidence the scoring pass already computed for the diagnosis
     /// and the per-aspect health readout, so both judge from the same facts.</summary>
@@ -435,6 +447,11 @@ public static class ScoringEngine
         bool usedAdjacent = false;
         double fanCorrWeighted = 0, fanRecentWeighted = 0, fanBaseWeighted = 0, fanWeights = 0;
         double powerCorrWeighted = 0, powerRecentWeighted = 0, powerBaseWeighted = 0, powerWeights = 0;
+        // Basis: the raw pair behind the excess (rise measured, rise learned) plus how much
+        // data took part. Read-only book-keeping for the UI; nothing here feeds the score.
+        double riseRecentWeighted = 0, riseBaseWeighted = 0, topBandWeight = 0;
+        int matchedMinutes = 0, loadedMinutes = 0, topBand = -1;
+        LoadBucket topBucket = LoadBucket.Idle;
 
         foreach (LoadBucket bucket in new[] { LoadBucket.Max, LoadBucket.Heavy, LoadBucket.Medium, LoadBucket.Light, LoadBucket.Idle })
         {
@@ -570,6 +587,19 @@ public static class ScoringEngine
                 fanCorrWeighted += fanCorrection * w;
                 powerCorrWeighted += powerCorrection * w;
 
+                riseRecentWeighted += delta * w;
+                riseBaseWeighted += baseline.DeltaAvg * w;
+                matchedMinutes += r.Minutes;
+                if (bucket != LoadBucket.Idle)
+                    loadedMinutes += r.Minutes;
+                if (bucketsCompared == 0 || bucket > topBucket)
+                    topBucket = bucket;
+                if (w > topBandWeight)
+                {
+                    topBandWeight = w;
+                    topBand = r.Band;
+                }
+
                 sumWeighted += excess * w;
                 sumWeights += w;
                 bucketsCompared++;
@@ -606,7 +636,9 @@ public static class ScoringEngine
         bool broad = bucketsCompared >= 3 && bucketsInExcess >= 3;
         return new ExcessResult(sumWeighted / sumWeights, heavyExcess, idleExcess, broad, usedAdjacent, fan, power,
             fanRecentMeanAll, fanBaseMeanAll, powerRecentMeanAll, powerBaseMeanAll,
-            loadedCompared, powerExcludedCells);
+            loadedCompared, powerExcludedCells,
+            riseRecentWeighted / sumWeights, riseBaseWeighted / sumWeights,
+            pcorr, corr, matchedMinutes, loadedMinutes, bucketsCompared, topBucket, topBand);
     }
 
     private readonly record struct ExcessResult(
@@ -614,7 +646,13 @@ public static class ScoringEngine
         FanNormalization? Fan, PowerNormalization? Power,
         double? FanRecentMean, double? FanBaselineMean,
         double? PowerRecentMean, double? PowerBaselineMean,
-        int LoadedCompared, int PowerExcludedCells)
+        int LoadedCompared, int PowerExcludedCells,
+        // Basis book-keeping (UI only): the weighted rise measured and the weighted rise
+        // learned, the corrections between them, and how much data took part.
+        double MeasuredRise = 0, double BaselineRise = 0,
+        double PowerCorrection = 0, double FanCorrection = 0,
+        int MatchedMinutes = 0, int LoadedMinutes = 0, int CellsCompared = 0,
+        LoadBucket TopBucket = LoadBucket.Idle, int TopBand = -1)
     {
         /// <summary>The fan is turning well below where this machine used to run it at the
         /// same load — a hint at cause (failing/seizing fan, clogged intake, or a quieter

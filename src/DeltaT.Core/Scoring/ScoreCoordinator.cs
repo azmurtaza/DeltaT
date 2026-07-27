@@ -845,6 +845,16 @@ public sealed class ScoreCoordinator
     {
         int previousEpoch = Epoch;
         int newEpoch = previousEpoch + 1;
+        // Read every untouched component's window floor BEFORE the machine-wide epoch start
+        // moves to now. EpochStartFor falls back to the machine-wide value when a component
+        // has no floor of its own (the usual case: nothing has ever been scoped on this
+        // machine), so resolving it afterwards handed the untouched component a floor of
+        // "now": its learning window and its recent window both emptied, and a CPU sitting on
+        // a locked 100 dropped to WAITING the moment its neighbour's GPU was recalibrated.
+        var carriedStart = PastedKinds
+            .Where(k => !kinds.Contains(k))
+            .ToDictionary(k => k, EpochStartFor);
+
         _settings.SetInt(SettingsKeys.BaselineEpoch, newEpoch);
         _settings.SetTimestamp(SettingsKeys.BaselineEpochStart, nowUtc);
         _settings.Set(SettingsKeys.BaselineEpochReason, reason);
@@ -867,8 +877,7 @@ public sealed class ScoreCoordinator
                 // Untouched: its reference must survive the epoch bump, since scoring only ever
                 // reads the current epoch's rows.
                 _repo.CarryBaselineForward(previousEpoch, newEpoch, kind);
-                if (_settings.GetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}") is null)
-                    _settings.SetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}", EpochStartFor(kind));
+                _settings.SetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}", carriedStart[kind]);
             }
         }
 

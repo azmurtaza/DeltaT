@@ -272,6 +272,36 @@ public class ScoreCoordinatorTests : IDisposable
         Assert.True(scores[ComponentKind.Cpu].Calibrating);
     }
 
+    [Theory]
+    [InlineData(ComponentKind.GpuDiscrete, true)]
+    [InlineData(ComponentKind.GpuDiscrete, false)]
+    [InlineData(ComponentKind.Cpu, true)]
+    [InlineData(ComponentKind.Cpu, false)]
+    public void ScopedReset_LeavesTheUntouchedComponentScoring_NotWaiting(ComponentKind scoped, bool repaste)
+    {
+        // Reported: recalibrating the GPU alone dropped a CPU sitting on a locked 100 to
+        // WAITING. Its lock and its rows survived, but StartNewEpoch resolved its window
+        // floor AFTER moving the machine-wide epoch start to now, so it inherited "now" and
+        // both its learning window and its recent window emptied. "Not calibrating" was not
+        // enough to catch that: AwaitingData is not calibrating either.
+        ComponentKind untouched = scoped == ComponentKind.Cpu ? ComponentKind.GpuDiscrete : ComponentKind.Cpu;
+        ScoreCoordinator coordinator = LockBothComponents();
+        DateTimeOffset at = T0.AddDays(3);
+        if (repaste)
+            coordinator.RegisterRepaste(at, kinds: new[] { scoped });
+        else
+            coordinator.Recalibrate(at, kinds: new[] { scoped });
+
+        DateTimeOffset now = at.AddHours(1);
+        UseSnapshot(now, withGpu: true);
+        var scores = coordinator.Compute(now);
+
+        Assert.True(scores[untouched].Scored, $"{untouched} stopped scoring");
+        Assert.False(scores[untouched].AwaitingData);
+        // Its window floor is still where its own epoch began, not the neighbour's reset.
+        Assert.Equal(T0, _settings.GetTimestamp($"{SettingsKeys.BaselineEpochStart}.{untouched}"));
+    }
+
     [Fact]
     public void ScopedRepaste_VerdictCoversOnlyWhatWasRepasted()
     {

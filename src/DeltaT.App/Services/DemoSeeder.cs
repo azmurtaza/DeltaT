@@ -75,6 +75,10 @@ public static class DemoSeeder
 
         settings.SetBool(SettingsKeys.FirstRunDone, true);
         settings.SetInt(SettingsKeys.BaselineEpoch, 0);
+        // Every seeded row is weather-mode (mode 0). Settings survive a reseed, so a dev
+        // box left in fixed-indoor mode would score the seed against an empty mode-1 pool
+        // and every demo screenshot would read "waiting for a comparable load".
+        settings.SetBool(SettingsKeys.IndoorFixedMode, false);
         if (provisional)
         {
             // Young epoch, not yet cured: still calibrating, but with real load to estimate from.

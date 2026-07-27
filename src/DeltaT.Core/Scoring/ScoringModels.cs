@@ -63,6 +63,11 @@ public sealed record ComponentScore(
     /// instrument readout instead of prose. Null when nothing was comparable.</summary>
     public double? ExcessC { get; init; }
 
+    /// <summary>The evidence behind <see cref="ExcessC"/>: the measured and learned rises,
+    /// the corrections that made them comparable, and how much data took part. Lets the UI
+    /// say what the verdict was measured from. Null when nothing was comparable.</summary>
+    public ScoreBasis? Basis { get; init; }
+
     /// <summary>Why the component runs the way it does, ranked by confidence. The number
     /// says how healthy; this says what to do about it (and stops DeltaT reflexively
     /// blaming the paste). Null while calibrating, or when there's simply nothing to say.</summary>
@@ -83,6 +88,40 @@ public sealed record ComponentScore(
         ComponentKind kind, string name, IReadOnlyList<ScoreReason> reasons, IReadOnlyList<AspectHealth> aspects) =>
         new(kind, name, 0, Verdict.AwaitingData, false, 1.0, reasons, PatternHint.None) { Aspects = aspects };
 }
+
+/// <summary>What the number was actually measured from, so the UI can state the evidence
+/// instead of asserting a method. Every field is a by-product of the comparison the engine
+/// already ran (<see cref="ScoringEngine"/>'s weighted excess pass); nothing here feeds back
+/// into the score. Null when no like-for-like comparison happened at all.</summary>
+public sealed record ScoreBasis(
+    // Weighted mean rise over ambient measured in the recent window, and the weighted mean
+    // rise this machine learned for the same cells. The pair behind "running N° hotter".
+    double MeasuredRiseC,
+    double BaselineRiseC,
+    // The corrections applied to make the two comparable (°C, signed, unrounded).
+    double PowerCorrectionC,
+    double FanCorrectionC,
+    // How much recent data took part, and across how many (bucket, band) cells. Loaded
+    // minutes are called out separately because an idle-dominated total flatters the
+    // evidence: a week is mostly idle, and idle is the least diagnostic bucket there is.
+    int MatchedMinutes,
+    int LoadedMinutes,
+    int CellsCompared,
+    // The heaviest load bucket and the dominant ambient band the comparison drew on.
+    LoadBucket TopBucket,
+    int Band,
+    // A cell had no same-band reference, so the nearest weather band was used.
+    bool UsedAdjacentBand,
+    // The recent window this was drawn from, and the thermal-limit hits inside it.
+    double WindowHours,
+    int ThrottleEvents,
+    // Weighted package watts and fan rpm on both sides of the comparison. Present whenever
+    // the sensors exist, correction or not, so the readout can show "matched" with its
+    // evidence instead of going quiet on a machine that simply needed no correction.
+    double? RecentW = null,
+    double? BaselineW = null,
+    double? RecentRpm = null,
+    double? BaselineRpm = null);
 
 /// <summary>Recent behaviour of one (bucket, ambient band) cell.</summary>
 public sealed record RecentBucketObs(

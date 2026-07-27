@@ -67,7 +67,15 @@ public partial class MainViewModel : ObservableObject
     // Neutral (Text) while there's no verdict yet to color (calibrating/waiting states).
     [ObservableProperty] private Brush _verdictColor = new SolidColorBrush(ThermalPalette.Text);
     [ObservableProperty] private string _verdictDetail = "DeltaT watches temperature rise over the weather outside and compares this machine against itself. The first verdict lands as soon as it has seen enough real load to be sure. Games and heavy work teach it fastest.";
-    [ObservableProperty] private string _scoringBasis = "Normalized for weather · load";
+    // The line under the overline states what the verdict was MEASURED FROM (how much load,
+    // which weather, over what window), not what method was applied. A method claim is the
+    // same on every machine every day; the evidence is the part a user can act on. Falls
+    // back to naming the corrections while there is nothing measured yet.
+    [ObservableProperty] private string _scoringBasis = DefaultBasis;
+    [ObservableProperty] private string _scoringBasisTooltip = DefaultBasisTip;
+
+    private const string DefaultBasis = "Normalized for weather · load";
+    private const string DefaultBasisTip = "DeltaT compares temperature rise over the outside temperature, load bucket by load bucket, against what this machine itself has learned. Nothing here is a spec-sheet number.";
     // While nothing is scored yet, the hero leads with the calibration confidence
     // itself: a big numeral and a fill bar, not a percentage buried in a sentence.
     [ObservableProperty] private bool _heroCalibrating = true;
@@ -78,6 +86,17 @@ public partial class MainViewModel : ObservableObject
     /// correction, confidence): the numbers that used to live inside prose, drawn as
     /// numerals with the sentence demoted to the tooltip.</summary>
     public ObservableCollection<HeroStatViewModel> HeroStats { get; } = new();
+
+    // A component that hasn't locked yet while a sibling already has. Components lock
+    // independently, so the dashboard has to report the split state without burying it in
+    // the verdict's prose: its own strip, with the confidence as a meter rather than a
+    // number in a sentence.
+    [ObservableProperty] private bool _hasCalibratingSibling;
+    [ObservableProperty] private string _siblingTitle = "";
+    [ObservableProperty] private string _siblingPercent = "";
+    [ObservableProperty] private double _siblingProgressValue;
+    [ObservableProperty] private string _siblingDetail = "";
+
     // The leading likely cause and its evidence, so the dashboard says WHAT is wrong
     // (airflow, a fan, the paste, a power change), not just how healthy. Empty when
     // there's nothing worth diagnosing.
@@ -229,7 +248,8 @@ public partial class MainViewModel : ObservableObject
     private void OnFanSensorFound()
     {
         _hasFanSensor = true;
-        ScoringBasis = "Normalized for weather · load · fan speed";
+        if (ScoringBasis == DefaultBasis)
+            ScoringBasis = "Normalized for weather · load · fan speed";
     }
 
     /// <summary>Runs every 5 s while the window is visible; never while hidden.</summary>
@@ -311,6 +331,7 @@ public partial class MainViewModel : ObservableObject
                 VerdictDetail = string.IsNullOrWhiteSpace(worstEstimate.CalibrationConstraint)
                     ? "Still calibrating; the estimate sharpens as more comparable load lands."
                     : $"Still calibrating; {worstEstimate.CalibrationConstraint}.";
+                UpdateSiblingHint(all, exclude: worstEstimate.Kind);
                 UpdateDiagnosis(worstEstimate);
                 return;
             }
@@ -327,6 +348,7 @@ public partial class MainViewModel : ObservableObject
                 VerdictTitle = "Waiting for a comparable load";
                 VerdictColor = new SolidColorBrush(ThermalPalette.Text);
                 VerdictDetail = "The baseline is locked, but nothing has run against it since. Play a game, run a render, or run the fingerprint test, and DeltaT will score it.";
+                UpdateSiblingHint(all);
                 UpdateDiagnosis(null);
                 return;
             }
@@ -338,6 +360,9 @@ public partial class MainViewModel : ObservableObject
             // component locks, so a confident CPU must not paper over a raw GPU.
             ComponentScore lead = all.Where(s => s.Calibrating).OrderBy(s => s.CalibrationProgress).First();
             HeroStats.Clear();
+            HasCalibratingSibling = false;
+            ScoringBasis = _hasFanSensor ? "Normalized for weather · load · fan speed" : DefaultBasis;
+            ScoringBasisTooltip = DefaultBasisTip;
             string constraint = lead.CalibrationConstraint;
             HeroCalibrating = true;
             // Caps at 99 like the dials: "100% confident" while still calibrating reads broken.
@@ -369,89 +394,182 @@ public partial class MainViewModel : ObservableObject
             ? worst.Verdict.Label()
             : $"{worst.Kind.Label()}: {worst.Verdict.Label()}";
         VerdictColor = new SolidColorBrush(ThermalPalette.VerdictColor(worst.Value));
-        // The verdict's numbers now live in the stat readouts (tooltips carry the
-        // sentences), so a locked verdict needs no paragraph under it. A sibling that is
-        // STILL learning does need one: components lock independently, the calibration
-        // branch above stops running the moment ANY component scores, and that component's
-        // dial then reads CALIBRATING with nothing anywhere saying what it is waiting for.
-        // So a GPU that locked first silently took the CPU's "what's next" off the
-        // dashboard until the CPU locked too.
-        VerdictDetail = CalibrationHint(all);
+        // The verdict's numbers live in the stat readouts and the evidence line above them,
+        // so a locked verdict needs no paragraph under it.
+        VerdictDetail = "";
+        // A sibling that is STILL learning does need saying: components lock independently,
+        // the calibration branch above stops running the moment ANY component scores, and
+        // that component's dial then reads CALIBRATING with nothing anywhere saying what it
+        // is waiting for. So a GPU that locked first used to silently take the CPU's
+        // "what's next" off the dashboard until the CPU locked too.
+        UpdateSiblingHint(all);
         UpdateDiagnosis(worst);
     }
 
-    /// <summary>"What's next" for the least confident component still learning, to sit
-    /// under a sibling's already-locked verdict. Empty once everything has locked, which
-    /// collapses the line. Mirrors the wording of the all-calibrating headline, since it
-    /// answers the same question for whichever component is still behind.</summary>
-    private static string CalibrationHint(List<ComponentScore> all)
+    /// <summary>The calibration strip for the least confident component still learning, to
+    /// sit under a sibling's already-locked verdict: which component, how confident, and the
+    /// one thing still holding it back. Collapses once everything has locked.</summary>
+    /// <param name="exclude">A component already described by the headline itself (the
+    /// provisional estimate names its own constraint), so the strip doesn't repeat it.</param>
+    private void UpdateSiblingHint(List<ComponentScore> all, ComponentKind? exclude = null)
     {
         ComponentScore? lead = all
-            .Where(s => s.Calibrating)
+            .Where(s => s.Calibrating && s.Kind != exclude)
             .OrderBy(s => s.CalibrationProgress)
             .FirstOrDefault();
         if (lead is null)
-            return "";
+        {
+            HasCalibratingSibling = false;
+            return;
+        }
+        HasCalibratingSibling = true;
+        SiblingTitle = $"{lead.Kind.Label()} STILL CALIBRATING";
         // Caps at 99 like the dials: "100% confident" while still calibrating reads broken.
-        string pct = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
-        return string.IsNullOrWhiteSpace(lead.CalibrationConstraint)
-            ? $"{lead.Kind.Label()} is still calibrating ({pct}). Use the machine normally; games and heavy work teach DeltaT fastest."
-            : $"{lead.Kind.Label()} is still calibrating ({pct}). What's next: {lead.CalibrationConstraint}.";
+        SiblingPercent = $"{Math.Min(lead.CalibrationProgress * 100, 99):0}%";
+        SiblingProgressValue = Math.Clamp(lead.CalibrationProgress, 0, 1) * 100;
+        SiblingDetail = string.IsNullOrWhiteSpace(lead.CalibrationConstraint)
+            ? "Use the machine normally; games and heavy work teach DeltaT fastest."
+            : $"What's next: {lead.CalibrationConstraint}.";
     }
 
     /// <summary>The instrument readouts under the verdict title, built from the same
-    /// component the verdict describes. Every value keeps its full sentence as tooltip.</summary>
+    /// component the verdict describes. Each carries the raw pair it was derived from on a
+    /// second line, and its full sentence as tooltip.</summary>
     private void BuildHeroStats(ComponentScore score, bool calibrating)
     {
-        HeroStats.Clear();
+        ScoreBasis? basis = score.Basis;
+        UpdateScoringBasis(score);
+        var stats = new List<HeroStatViewModel>();
 
-        // Δ vs baseline: the headline number, colored by severity.
+        // Δ vs baseline: the headline number, colored by severity, over the pair it came
+        // from. The rise measured and the rise learned are the whole comparison; showing
+        // only their difference asks the user to trust arithmetic they can't see.
         string deltaTip = score.Reasons.FirstOrDefault(r => r.Code.StartsWith("delta"))?.Text
                           ?? "Not enough recent comparable load to compare against baseline.";
-        HeroStats.Add(new HeroStatViewModel(
+        stats.Add(new HeroStatViewModel(
             score.ExcessC is { } e ? $"{e:+0.0;-0.0;0.0}°" : "--",
-            "Δ VS BASELINE", new SolidColorBrush(ExcessColor(score.ExcessC)), deltaTip));
+            "Δ VS BASELINE", new SolidColorBrush(ExcessColor(score.ExcessC)), deltaTip,
+            basis is { } b ? $"{b.MeasuredRiseC:0.#}° vs {b.BaselineRiseC:0.#}°" : "no comparison yet"));
 
-        // Fans: the correction applied, or the honest reason there isn't one.
-        if (score.Fan is { } fan)
-        {
-            HeroStats.Add(new HeroStatViewModel(
-                $"{fan.CorrectionC:+0.#;-0.#}°", "FAN CORRECTION",
-                new SolidColorBrush(ThermalPalette.TextDim), ScoreViewModel.DescribeFan(score).Note));
-        }
-        else if (_hasFanSensor)
-        {
-            HeroStats.Add(new HeroStatViewModel(
-                "MATCHED", "FANS", new SolidColorBrush(ThermalPalette.TextDim),
-                "Fans are running at this machine's baseline speed for the load, so no airflow correction was needed."));
-        }
-        else
-        {
-            HeroStats.Add(new HeroStatViewModel(
-                "--", "FANS", new SolidColorBrush(ThermalPalette.TextFaint),
-                "Fan speed isn't exposed on this machine (often locked behind vendor software), so airflow can't be corrected for; the verdict rests on weather-corrected rise."));
-        }
+        // Power (source side of the normalization: watts in).
+        stats.Add(BuildPowerStat(score, basis));
 
-        // Power: only when a correction was actually applied (stock rigs stay quiet).
-        if (score.Power is { } pw)
+        // Fans (sink side: heat out).
+        stats.Add(BuildFanStat(score, basis));
+
+        // Thermal-limit hits: the one piece of evidence that isn't a comparison at all, so
+        // it appears only when it happened, and it is never quiet when it did.
+        if (basis is { ThrottleEvents: > 0 } tb)
         {
-            string tip = score.Reasons.FirstOrDefault(r => r.Code == "power-normalized")?.Text
-                         ?? $"Corrected {pw.CorrectionC:+0.#;-0.#}° for drawing {pw.RecentW:0} W against a {pw.BaselineW:0} W baseline.";
-            HeroStats.Add(new HeroStatViewModel(
-                $"{pw.CorrectionC:+0.#;-0.#}°", "POWER CORRECTION",
-                new SolidColorBrush(ThermalPalette.TextDim), tip));
+            stats.Add(new HeroStatViewModel(
+                $"{tb.ThrottleEvents}×", "LIMIT HITS", new SolidColorBrush(ThermalPalette.Hot),
+                score.Reasons.FirstOrDefault(r => r.Code == "throttle")?.Text
+                    ?? "The component reached its thermal limit and pulled clocks back to stay under it.",
+                $"in the last {DescribeWindow(tb.WindowHours)}"));
         }
 
         if (calibrating)
         {
-            HeroStats.Add(new HeroStatViewModel(
+            stats.Add(new HeroStatViewModel(
                 $"{Math.Min(score.CalibrationProgress * 100, 99):0}%", "CONFIDENCE",
                 new SolidColorBrush(ThermalPalette.Accent),
                 string.IsNullOrWhiteSpace(score.CalibrationConstraint)
                     ? "How sure DeltaT is of this machine's baseline so far."
-                    : $"How sure DeltaT is of this machine's baseline so far. What's next: {score.CalibrationConstraint}."));
+                    : $"How sure DeltaT is of this machine's baseline so far. What's next: {score.CalibrationConstraint}.",
+                "baseline not locked"));
         }
+
+        // Separators sit between instruments, never before the first one.
+        stats[0].ShowSeparator = false;
+        HeroStats.Clear();
+        foreach (HeroStatViewModel stat in stats)
+            HeroStats.Add(stat);
     }
+
+    /// <summary>Watts in: the correction applied to judge the reading at baseline power, or
+    /// MATCHED when the machine drew what it learned at. Either way the two wattages show,
+    /// so a power change is visible before it is big enough to correct for.</summary>
+    private static HeroStatViewModel BuildPowerStat(ComponentScore score, ScoreBasis? basis)
+    {
+        string pair = basis is { RecentW: { } rw, BaselineW: { } bw }
+            ? $"{rw:0} vs {bw:0} W"
+            : "";
+        if (score.Power is { } pw)
+        {
+            string tip = score.Reasons.FirstOrDefault(r => r.Code == "power-normalized")?.Text
+                         ?? $"Corrected {pw.CorrectionC:+0.#;-0.#}° for drawing {pw.RecentW:0} W against a {pw.BaselineW:0} W baseline.";
+            return new HeroStatViewModel($"{pw.CorrectionC:+0.#;-0.#}°", "POWER",
+                new SolidColorBrush(ThermalPalette.TextDim), tip,
+                pair.Length > 0 ? pair : $"{pw.RecentW:0} vs {pw.BaselineW:0} W");
+        }
+        if (basis is { RecentW: not null })
+        {
+            return new HeroStatViewModel("MATCHED", "POWER",
+                new SolidColorBrush(ThermalPalette.TextDim),
+                "The component drew about the wattage its baseline was learned at, so the comparison needed no power correction. Thermal resistance is being judged at equal watts.",
+                pair);
+        }
+        return new HeroStatViewModel("--", "POWER", new SolidColorBrush(ThermalPalette.TextFaint),
+            "This sensor exposes no package power, so the comparison rests on raw temperature rise instead of thermal resistance. A power-limit or overclock change can't be corrected for.",
+            "no power sensor");
+    }
+
+    /// <summary>Heat out: the airflow correction, or MATCHED, with the rpm pair behind it.</summary>
+    private HeroStatViewModel BuildFanStat(ComponentScore score, ScoreBasis? basis)
+    {
+        string pair = basis is { RecentRpm: { } rr, BaselineRpm: { } br }
+            ? $"{rr:0} vs {br:0} rpm"
+            : "";
+        if (score.Fan is { } fan)
+        {
+            return new HeroStatViewModel($"{fan.CorrectionC:+0.#;-0.#}°", "FANS",
+                new SolidColorBrush(ThermalPalette.TextDim), ScoreViewModel.DescribeFan(score).Note,
+                pair.Length > 0 ? pair : $"{fan.RecentRpm:0} vs {fan.BaselineRpm:0} rpm");
+        }
+        if (_hasFanSensor)
+        {
+            return new HeroStatViewModel("MATCHED", "FANS", new SolidColorBrush(ThermalPalette.TextDim),
+                "Fans are running at this machine's baseline speed for the load, so no airflow correction was needed.",
+                pair);
+        }
+        return new HeroStatViewModel("--", "FANS", new SolidColorBrush(ThermalPalette.TextFaint),
+            "Fan speed isn't exposed on this machine (often locked behind vendor software), so airflow can't be corrected for; the verdict rests on weather-corrected rise.",
+            "not exposed");
+    }
+
+    /// <summary>The line under the overline: what this verdict was measured from. Real
+    /// evidence when there is a comparison, the method claim only while there isn't.</summary>
+    private void UpdateScoringBasis(ComponentScore score)
+    {
+        if (score.Basis is not { } b)
+        {
+            ScoringBasis = _hasFanSensor ? "Normalized for weather · load · fan speed" : DefaultBasis;
+            ScoringBasisTooltip = DefaultBasisTip;
+            return;
+        }
+        string band = b.Band is >= 0 and <= 3 ? ((AmbientBand)b.Band).Label() : "unknown weather";
+        // Loaded minutes, not total: a week is mostly idle, and quoting the idle-inflated
+        // figure would overstate how much diagnostic evidence the number actually rests on.
+        string load = b.LoadedMinutes > 0
+            ? $"{DescribeMinutes(b.LoadedMinutes)} under load, up to {b.TopBucket.Label()}"
+            : "idle only so far";
+        ScoringBasis = $"{load} · {band} · last {DescribeWindow(b.WindowHours)}"
+                       + (b.UsedAdjacentBand ? " · nearest band" : "");
+        ScoringBasisTooltip =
+            $"{score.Kind.Label()} judged on {DescribeMinutes(b.MatchedMinutes)} of matched data ({DescribeMinutes(b.LoadedMinutes)} of it under load) across {b.CellsCompared} load and weather cell{(b.CellsCompared == 1 ? "" : "s")}, "
+            + "every one of them compared against what this machine itself learned in the same cell. "
+            + (b.UsedAdjacentBand ? "One cell had no same-weather reference, so the nearest band was used and weighted down. " : "")
+            + "Rise is corrected for power draw first, then for fan speed, so a boost mode or a fan profile can't read as cooling health.";
+    }
+
+    private static string DescribeMinutes(int minutes) =>
+        minutes < 180 ? $"{minutes} min" : $"{minutes / 60.0:0} h";
+
+    private static string DescribeWindow(double hours) => hours switch
+    {
+        < 36 => $"{hours:0} h",
+        _ => $"{hours / 24:0} days",
+    };
 
     /// <summary>Severity color for the Δ-vs-baseline readout: green when cooler than
     /// baseline, steel on it, then the thermal ramp as the excess grows.</summary>

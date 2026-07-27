@@ -4,6 +4,37 @@
              xmlns:controls="clr-namespace:DeltaT.App.Controls"
              xmlns:ui="clr-namespace:DeltaT.App.Ui">
 
+    <UserControl.Resources>
+        <!-- Hero readout pager: a small square plate with an ember chevron, in the
+             instrument dialect (square corners, hairline stroke, no fill until hover).
+             Only ever visible when the readout strip is wider than the column. -->
+        <Style x:Key="HeroPagerButton" TargetType="Button">
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="plate" Background="Transparent"
+                                BorderBrush="{StaticResource Brush.Stroke}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="plate" Property="Background" Value="{StaticResource Brush.AccentDim}"/>
+                                <Setter TargetName="plate" Property="BorderBrush" Value="{StaticResource Brush.AccentEdge}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.25"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Margin="22,18,22,14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -29,7 +60,10 @@
 
                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,28,0">
                         <TextBlock Style="{StaticResource Text.Overline}" ui:Tracking.Text="Thermal diagnosis"/>
-                        <TextBlock Style="{StaticResource Text.Label}" Text="{Binding ScoringBasis}" Margin="0,5,0,0"/>
+                        <!-- what the verdict was measured FROM (load, weather, window), not
+                             what method was applied to it -->
+                        <TextBlock Style="{StaticResource Text.Label}" Text="{Binding ScoringBasis}" Margin="0,5,0,0"
+                                   ToolTip="{Binding ScoringBasisTooltip}" ToolTipService.ShowDuration="20000"/>
                         <TextBlock Style="{StaticResource Text.H1}" Text="{Binding VerdictTitle}" Margin="0,9,0,7"
                                    FontFamily="{StaticResource Font.DisplayCond}" FontWeight="Bold"
                                    Foreground="{Binding VerdictColor}"/>
@@ -46,9 +80,31 @@
                         </TextBlock>
 
                         <!-- the verdict's numbers as instrument readouts; each keeps its
-                             full sentence as the tooltip -->
-                        <ItemsControl ItemsSource="{Binding HeroStats}" Focusable="False" Margin="0,10,0,0"
-                                      Visibility="{Binding HeroCalibrating, Converter={StaticResource InvBoolToVis}}">
+                             full sentence as the tooltip.
+
+                             One row, always. The strip grows a readout when the machine hits
+                             its thermal limit or is still calibrating, so on a narrow window
+                             it can outrun the column: rather than wrap (which pushes the
+                             cause chip down and breaks the row's read) it pages sideways one
+                             instrument at a time. At full screen everything fits and the
+                             pager hides itself entirely. -->
+                        <Grid Margin="0,10,0,0"
+                              Visibility="{Binding HeroCalibrating, Converter={StaticResource InvBoolToVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <ScrollViewer x:Name="HeroStatScroller" Grid.Column="0"
+                                          HorizontalScrollBarVisibility="Hidden"
+                                          VerticalScrollBarVisibility="Disabled"
+                                          PanningMode="HorizontalOnly"
+                                          ScrollChanged="OnHeroStatsScrollChanged">
+                                <!-- the pager owns the strip's position: a readout asking to be
+                                     brought into view (focus, a tooltip, layout) must not scroll
+                                     it out from under the reading -->
+                                <ItemsControl ItemsSource="{Binding HeroStats}" Focusable="False"
+                                              RequestBringIntoView="OnHeroStatsBringIntoView">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal"/>
@@ -56,19 +112,72 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border BorderBrush="{StaticResource Brush.StrokeSoft}" BorderThickness="1,0,0,0"
-                                            Padding="14,1,0,0" Margin="0,0,22,0" Background="Transparent"
+                                    <Border Padding="14,1,0,0" Margin="0,0,20,0" Background="Transparent"
+                                            BorderBrush="{StaticResource Brush.StrokeSoft}"
                                             ToolTip="{Binding Detail}" ToolTipService.ShowDuration="20000">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderThickness" Value="1,0,0,0"/>
+                                                <Style.Triggers>
+                                                    <!-- separators sit between instruments, never before the strip -->
+                                                    <DataTrigger Binding="{Binding ShowSeparator}" Value="False">
+                                                        <Setter Property="BorderThickness" Value="0"/>
+                                                        <Setter Property="Padding" Value="0,1,0,0"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <StackPanel>
                                             <TextBlock FontFamily="{StaticResource Font.DisplayCond}" FontSize="23" FontWeight="Bold"
                                                        Foreground="{Binding Brush}" Text="{Binding Value}"/>
                                             <TextBlock Style="{StaticResource Text.Caption}" Margin="0,3,0,0"
                                                        ui:Tracking.Text="{Binding Caption}"/>
+                                            <!-- the raw pair the readout came from: evidence under the claim -->
+                                            <TextBlock Margin="0,4,0,0" Text="{Binding Sub}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Caption}">
+                                                        <Setter Property="Foreground" Value="{StaticResource Brush.TextDim}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Sub}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                                </ItemsControl>
+                            </ScrollViewer>
+
+                            <!-- fade at the cut edge: the honest "there is more here" signal,
+                                 so a paged-off readout never looks like a missing one -->
+                            <Rectangle x:Name="HeroStatFade" Grid.Column="0" Width="46" IsHitTestVisible="False"
+                                       HorizontalAlignment="Right" Visibility="Collapsed">
+                                <Rectangle.Fill>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#0017100A" Offset="0"/>
+                                        <GradientStop Color="#17100A" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Rectangle.Fill>
+                            </Rectangle>
+
+                            <StackPanel x:Name="HeroStatPager" Grid.Column="1" Orientation="Horizontal"
+                                        VerticalAlignment="Center" Margin="6,0,0,0" Visibility="Collapsed">
+                                <Button x:Name="HeroStatPrev" Style="{StaticResource HeroPagerButton}"
+                                        Click="OnHeroStatsPrev" Margin="0,0,4,0"
+                                        ToolTip="Previous reading">
+                                    <Path Data="M 5,0 L 0,4.5 L 5,9 Z" Fill="{StaticResource Brush.Accent}"/>
+                                </Button>
+                                <Button x:Name="HeroStatNext" Style="{StaticResource HeroPagerButton}"
+                                        Click="OnHeroStatsNext"
+                                        ToolTip="Next reading">
+                                    <Path Data="M 0,0 L 5,4.5 L 0,9 Z" Fill="{StaticResource Brush.Accent}"/>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
 
                         <!-- while nothing is scored, the calibration confidence IS the reading:
                              a big numeral and a fill bar, not a percentage buried in prose -->
@@ -84,6 +193,34 @@
                                                      Value="{Binding CalibrationPercentValue, Mode=OneWay}"/>
                             </StackPanel>
                         </StackPanel>
+
+                        <!-- a component that hasn't locked yet while its sibling already has.
+                             Its own strip, so the split state is stated as an instrument
+                             reading instead of a sentence tacked under someone else's verdict -->
+                        <Border Margin="0,14,0,0" Padding="12,9,12,10" Background="{StaticResource Brush.PanelHigh}"
+                                BorderBrush="{StaticResource Brush.AccentEdge}" BorderThickness="2,0,0,0"
+                                Visibility="{Binding HasCalibratingSibling, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="10.5"
+                                               FontWeight="SemiBold" VerticalAlignment="Center"
+                                               Foreground="{StaticResource Brush.Accent}" Text="{Binding SiblingTitle}"/>
+                                    <controls:SegmentBar Grid.Column="1" Height="7" Margin="14,0,14,0" VerticalAlignment="Center"
+                                                         Tint="{StaticResource Brush.Accent}"
+                                                         Value="{Binding SiblingProgressValue, Mode=OneWay}"/>
+                                    <TextBlock Grid.Column="2" FontFamily="{StaticResource Font.DisplayCond}" FontSize="17"
+                                               FontWeight="Bold" VerticalAlignment="Center"
+                                               Foreground="{StaticResource Brush.Accent}" Text="{Binding SiblingPercent}"/>
+                                </Grid>
+                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" LineHeight="18"
+                                           Margin="0,6,0,0" TextWrapping="Wrap" Text="{Binding SiblingDetail}"/>
+                            </StackPanel>
+                        </Border>
 
                         <!-- likely-cause chip: what's actually driving the temperature, not just how healthy -->
                         <Border Margin="0,12,0,0" Padding="12,8,12,9" Background="{StaticResource Brush.PanelHigh}"

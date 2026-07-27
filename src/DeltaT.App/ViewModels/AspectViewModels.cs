@@ -65,8 +65,10 @@ public sealed partial class AspectCellViewModel : ObservableObject
 }
 
 /// <summary>One instrument readout in the dashboard hero's stat strip: a numeral, a
-/// tracked caption under it, and the full sentence as tooltip. Rebuilt wholesale on
-/// every score pass, so it carries no change notification of its own.</summary>
+/// tracked caption under it, the raw measurement it came from on a third line, and the
+/// full sentence as tooltip. The third line is what makes the strip evidence rather than
+/// assertion: "+14.0°" alone is a claim, "70.7° now, 56.7° learned" is a reading. Rebuilt
+/// wholesale on every score pass, so it carries no change notification of its own.</summary>
 public sealed class HeroStatViewModel
 {
     public string Value { get; }
@@ -74,13 +76,22 @@ public sealed class HeroStatViewModel
     public Brush Brush { get; }
     public string Detail { get; }
 
-    public HeroStatViewModel(string value, string caption, Brush brush, string detail)
+    /// <summary>The raw numbers behind <see cref="Value"/> (rpm pair, watt pair, the
+    /// measured and learned rise). Empty collapses the line.</summary>
+    public string Sub { get; }
+
+    /// <summary>Whether this readout draws the hairline on its left edge. Every readout but
+    /// the first: separators sit BETWEEN instruments, never before the strip.</summary>
+    public bool ShowSeparator { get; set; } = true;
+
+    public HeroStatViewModel(string value, string caption, Brush brush, string detail, string sub = "")
     {
         Value = value;
         Caption = caption;
         if (brush.CanFreeze) brush.Freeze();
         Brush = brush;
         Detail = detail;
+        Sub = sub;
     }
 }
 

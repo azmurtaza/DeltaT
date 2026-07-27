@@ -350,7 +350,9 @@ public partial class App : Application
             // What's-new popup: same offscreen render, seeded with the newest curated release.
             if (Core.Updates.WhatsNewNotes.Releases.Count > 0)
             {
-                var whatsNew = new Views.WhatsNewWindow(Core.Updates.WhatsNewNotes.Releases[^1])
+                // Releases is newest-first, so the newest curated notes are [0]; [^1] rendered
+                // the oldest entry in the file and never showed the release being shipped.
+                var whatsNew = new Views.WhatsNewWindow(Core.Updates.WhatsNewNotes.Releases[0])
                 { WindowStartupLocation = WindowStartupLocation.Manual, Left = -4000, Top = -4000 };
                 whatsNew.Show();
                 // Capture the real window exactly as a user sees it, at each scroll page from

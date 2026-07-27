@@ -21,10 +21,16 @@ public static class WhatsNewNotes
         // "What's-new content" rule in CLAUDE.md). One item per genuinely new capability, each
         // body explaining what it does, how it works, and why it matters. No "a few small changes".
         new WhatsNewRelease(new Version(2, 3, 0),
-            "This release fixes calibration getting stuck at 80%, lets a repaste reset just the CPU or just the GPU, adds a RAM usage card, and adds an Intel power-budget reading that tells a machine held back by heat from one simply set to run cooler.",
+            "This release rebuilds the thermal diagnosis panel to show the readings behind its verdict, fixes calibration getting stuck at 80%, lets a repaste reset just the CPU or just the GPU, adds a RAM usage card, and adds an Intel power-budget reading that tells a machine held back by heat from one simply set to run cooler.",
             new WhatsNewItem[]
             {
                 // --- New features ---
+                new("New: the thermal diagnosis panel now shows its working",
+                    "The top of the dashboard used to assert a verdict and keep the evidence in tooltips. It now leads with what the verdict was actually measured from: how many hours of load, up to which load level, in which weather band, over which window. Each readout underneath carries the raw pair it came from, so the temperature difference reads '43.4° vs 36.9°' rather than a bare '+10.8°' you have to take on trust, the power correction shows the two wattages, and the fan correction shows the two fan speeds. A power readout is now always present, saying MATCHED with its watts when the machine drew what its baseline was learned at, instead of going silent. And when a component has been hitting its thermal limit, the count of those hits appears as its own reading rather than only inside a tooltip."),
+                new("New: the readout row pages sideways instead of being cut off",
+                    "The row of readings grows when the machine throttles or is still calibrating, so on a smaller window it can run past the edge. It now stays on one line and pages one reading at a time with a pair of arrows, with a fade at the cut edge so a paged-off reading never looks like a missing one. Maximize the window and everything fits, with the arrows hidden."),
+                new("New: a component still calibrating gets its own readout",
+                    "The CPU and GPU lock their baselines independently, so one can be scoring while the other is still learning. That used to be a sentence tucked under the other component's verdict. It is now its own strip with the component named, a confidence meter, the percentage, and the specific load and weather it still needs."),
                 new("New: repaste or recalibrate one component, not both",
                     "Repasting a laptop CPU without touching the GPU is the normal case, but DeltaT used to reset both baselines, throwing away days of learning for no reason. Both buttons now ask whether it was the CPU, the GPU, or both. Whatever you leave out keeps its baseline, its score and its verdict untouched."),
                 new("New: Intel power-budget reading tells heat apart from a power setting",
@@ -39,6 +45,8 @@ public static class WhatsNewNotes
                     "Fill in an email or handle on a bug report or idea and DeltaT keeps it for the next one. It stays on your machine and is only sent with a report you choose to send."),
 
                 // --- Fixes ---
+                new("Fixed: recalibrating one component stopped the other from scoring",
+                    "Recalibrating just the GPU (or just the CPU) dropped the other one to 'waiting for a comparable load', even when it had been sitting on a locked, healthy score. Its baseline was never actually lost: the reset moved the start of its measuring window forward to that moment, so it had nothing on either side of the comparison to work with and had to wait for a fresh session. The untouched component now keeps the window start it already had, and carries on scoring without a pause. This applies to both buttons, scoped either way."),
                 new("Fixed: calibration stuck at 80%",
                     "Two causes, both fixed. A load bucket the machine visited only once counted as heavily as one backed by weeks of data, so a single thin reading could hold a well-learned baseline below the finish line forever; readings are now weighted by how much evidence backs them. And the confidence check compared raw temperatures, which made a GPU's game-to-game wattage swings look like noise; it now compares them adjusted for power draw, the same way the score already did. A stable machine now locks in about three sessions."),
                 new("Fixed: the RAM card was missing or blank on some machines",
