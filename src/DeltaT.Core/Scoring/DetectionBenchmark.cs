@@ -259,8 +259,8 @@ public static class DetectionBenchmark
                 // Both couplings must be modelled, or the benchmark can't see the engine
                 // blaming a power knob on the mount or on a failing fan.
                 case Condition.Overclock:
-                    power *= 1 + severity;                       // more watts → proportionally hotter
-                    delta *= 1 + severity;
+                    power *= 1 + severity;
+                    delta = TrueDelta(c, power);                 // more watts → hotter, above the offset
                     fan *= 1 + FanCurveCoupling * severity;
                     gap *= 1 + severity;
                     sRec = soakBase * (1 + severity);
@@ -268,7 +268,7 @@ public static class DetectionBenchmark
                     break;
                 case Condition.Undervolt:
                     power *= 1 - severity;
-                    delta *= 1 - severity;
+                    delta = TrueDelta(c, power);
                     fan *= 1 - FanCurveCoupling * severity;
                     gap *= 1 - severity;
                     sRec = soakBase * (1 - severity);
@@ -279,7 +279,7 @@ public static class DetectionBenchmark
                     if (c.Bucket != LoadBucket.Idle)
                     {
                         power *= 1 - severity;
-                        delta *= 1 - severity;
+                        delta = TrueDelta(c, power);
                         fan *= 1 - FanCurveCoupling * severity;
                         gap *= 1 - severity;
                         sRec = soakBase * (1 - severity);
@@ -355,13 +355,30 @@ public static class DetectionBenchmark
     // power-normalizer can't absorb shows up as fidelity error. Without this the test is a gimme.
     private const double LeakageK = 0.06;
 
-    /// <summary>True die-to-ambient rise for a bucket at a given package power, with a mild
-    /// leakage nonlinearity so °C/W is not perfectly constant across the operating range.</summary>
+    /// <summary>The part of a die-to-ambient rise that is NOT this component's package watts,
+    /// and therefore does not move when those watts do: DeltaT scores rise over the OUTDOOR
+    /// temperature, so every reading carries the indoor-over-outdoor gap, plus board and VRM
+    /// heat the package sensor never reports.
+    ///
+    /// <para>This used to be zero, which made the suite assert that halving a component's watts
+    /// halves its rise over the weather. Real hardware does not do that: fitted over 18,948
+    /// minutes of the dev laptop's own history, the zero-intercept model scores R² = -1.14,
+    /// worse than predicting the mean, against R² = 0.27 once an intercept is allowed
+    /// (18.3 °C there, scaled here to this suite's larger desktop-class rises). Leaving it at
+    /// zero meant the confounder suites agreed with the scoring engine by construction, and the
+    /// clear-rate they reported was measuring an assumption rather than an accuracy.</para></summary>
+    public const double AmbientOffsetC = 13.5;
+
+    /// <summary>True die-to-ambient rise for a bucket at a given package power: a fixed offset
+    /// plus a per-cell slope on the watts, with a mild leakage nonlinearity so °C/W is not
+    /// perfectly constant across the operating range. At the cell's own canonical power this
+    /// returns <see cref="Cell.Delta"/> exactly, so every baseline table and every learned cell
+    /// value in this file is unchanged; only the RESPONSE to a power change becomes physical.</summary>
     private static double TrueDelta(Cell c, double powerW)
     {
-        double r0 = c.Delta / c.PowerW;                                  // canonical resistance °C/W
+        double r0 = (c.Delta - AmbientOffsetC) / c.PowerW;               // °C/W on the powered part
         double r = r0 * (1 + LeakageK * (powerW - c.PowerW) / c.PowerW); // drifts with operating point
-        return r * powerW;
+        return AmbientOffsetC + r * powerW;
     }
 
     /// <summary>Simulate acquiring a baseline the given way and return the cells scoring will
@@ -1020,6 +1037,228 @@ public static class DetectionBenchmark
 
         return new PowerCapResult(trials, healthyFault, healthyBelow85, healthyAspect,
             healthyScoreSum / trials, fanNamed, pumpNamed);
+    }
+
+    // ================== Phase 6: thermal-response realism (shared cooling) ==================
+    // Every suite above generates its rise as TrueDelta = R × W_self: strictly proportional to
+    // one component's package watts, zero intercept, one heat source, and a fan that answers
+    // those same watts. That is precisely the assumption the scoring engine was built on, so
+    // the suites above cannot see it fail — they agree with the engine by construction.
+    //
+    // On real hardware it does not hold. Fitted by weighted least squares over 18,948 minutes
+    // of the dev laptop's own history (i5-13420H + RTX 3050, ANV15-51, warm band, on AC,
+    // read out of deltat.db on 2026-07-31):
+    //
+    //   ΔT = R × W_cpu                       R² = -1.14   (worse than predicting the mean)
+    //   ΔT = a + b × W_cpu                   R² =  0.27   a = 18.3 °C, b = 0.62 °C/W
+    //   ΔT = a + b × W_cpu + c × W_gpu       R² =  0.47   a = 17.6 °C, b = 0.41, c = 0.19
+    //
+    // Two things the proportional model has no room for. First a large CONSTANT offset: DeltaT
+    // scores rise over the OUTDOOR temperature, and the room sits well above it, on top of
+    // board and VRM heat the package sensor never sees. Second the NEIGHBOUR: a laptop shares
+    // one heatpipe stack between CPU and GPU, and at a fixed 13.5 W of CPU the measured CPU
+    // rise still moves 22.1 → 30.6 °C as the GPU goes 5 → 35 W. The same +9 °C appears at
+    // 17 W and at 31 W of CPU power.
+    //
+    // The fan is mis-attributed the same way: rpm against total module heat fits R² = 0.57,
+    // against this component's watts alone only 0.35.
+    //
+    // Multiplying a rise by the watt ratio multiplies that offset and that neighbour heat
+    // along with the signal. On the fitted model, a HEALTHY machine whose baseline was learned
+    // at 26 W and now runs at 13 W is truly 5.2 °C COOLER than its reference, and the
+    // proportional correction reports it as +17.8 °C hotter. Degraded paste crosses "act" at
+    // +3.5 °C, so the modelling error is five times the fault being looked for.
+
+    /// <summary>Die-to-outdoor-ambient rise and fan speed as real hardware produces them.
+    /// <see cref="Proportional"/> reproduces the assumption every earlier suite is built on,
+    /// so passing it leaves those suites byte-identical.</summary>
+    public sealed record ThermalPhysics(
+        double InterceptC, double SelfSlope, double CoSlope, double FanBaseRpm, double FanPerWatt)
+    {
+        /// <summary>The dev laptop, measured. Numbers and provenance in the block above.</summary>
+        public static readonly ThermalPhysics SharedCoolingLaptop = new(17.64, 0.405, 0.192, 2826, 21.4);
+
+        public double Rise(double selfW, double coW) => InterceptC + SelfSlope * selfW + CoSlope * coW;
+
+        /// <summary>Fan speed answers TOTAL module heat: on a shared heatpipe stack the curve
+        /// tracks whichever die is hotter, not this component's share of the watts.</summary>
+        public double Rpm(double selfW, double coW) => FanBaseRpm + FanPerWatt * (selfW + coW);
+    }
+
+    /// <summary>One load bucket's operating point in a given power regime: this component's
+    /// watts, the neighbour's watts at the same moment, and how many minutes were observed.</summary>
+    private readonly record struct OpPoint(LoadBucket Bucket, double SelfW, double CoW, int Minutes);
+
+    // The dev laptop's two real regimes, straight out of its database. The baseline was learned
+    // with CPU boost ON while the GPU sat quiet (calibration bursts are CPU work); the machine
+    // is now used with boost OFF while the GPU games. Cell minutes are the real ones, thin
+    // Heavy/Max cells included: a full-load reference resting on 8 minutes is part of the
+    // failure, not an idealisation away from it.
+    private static readonly OpPoint[] BoostOnGpuQuiet =
+    {
+        new(LoadBucket.Idle,    7.66,  5, 79),
+        new(LoadBucket.Light,   9.68,  5, 76),
+        new(LoadBucket.Medium, 13.53,  6, 10),
+        new(LoadBucket.Heavy,  21.24,  6,  8),
+        new(LoadBucket.Max,    26.22,  6,  8),
+    };
+
+    private static readonly OpPoint[] BoostOffGpuGaming =
+    {
+        new(LoadBucket.Idle,    8.41,  5, 517),
+        new(LoadBucket.Light,  10.40,  6, 784),
+        new(LoadBucket.Medium, 13.66, 12, 356),
+        new(LoadBucket.Heavy,  16.18, 36,  97),
+        new(LoadBucket.Max,    13.44, 19,  18),
+    };
+
+    private static double LoadFraction(LoadBucket b) => b switch
+    {
+        LoadBucket.Idle => 0.0, LoadBucket.Light => 0.25, LoadBucket.Medium => 0.5,
+        LoadBucket.Heavy => 0.8, _ => 1.0,
+    };
+
+    /// <summary><paramref name="recordCoPower"/> false models a machine whose rows predate
+    /// schema v9, so the neighbour's watts were never recorded and the response has to be fitted
+    /// on this component's power alone.</summary>
+    private static List<BaselineBucket> BuildPhysicsBaseline(
+        OpPoint[] regime, ThermalPhysics phys, Random rng, bool recordCoPower = true)
+    {
+        var rows = new List<BaselineBucket>();
+        foreach (OpPoint p in regime)
+        {
+            // A learned cell is the mean of its minutes, so its noise falls with the count —
+            // which is exactly why a thin 8-minute Max cell is a shakier reference.
+            double n = Math.Max(1, p.Minutes);
+            double rise = phys.Rise(p.SelfW, p.CoW) + Gauss(rng, 0.6 / Math.Sqrt(n));
+            double fan = phys.Rpm(p.SelfW, p.CoW) + Gauss(rng, 60 / Math.Sqrt(n));
+            rows.Add(new BaselineBucket(p.Bucket, Warm, rise, rise + 3, fan, p.Minutes,
+                TempAvg: AmbientC + rise, GapAvg: null, PowerAvg: p.SelfW,
+                CoPowerAvg: recordCoPower ? p.CoW : null));
+        }
+        return rows;
+    }
+
+    private static List<RecentBucketObs> BuildPhysicsRecent(
+        OpPoint[] regime, ThermalPhysics phys, Random rng, double pasteSeverity = 0,
+        bool recordCoPower = true)
+    {
+        var rows = new List<RecentBucketObs>();
+        foreach (OpPoint p in regime)
+        {
+            double n = Math.Max(1, p.Minutes);
+            // Degraded paste raises the rise in proportion to the heat actually crossing the
+            // joint, so it scales with load and is invisible at idle.
+            double rise = phys.Rise(p.SelfW, p.CoW) + pasteSeverity * LoadFraction(p.Bucket)
+                        + Gauss(rng, 0.6 / Math.Sqrt(n));
+            double fan = phys.Rpm(p.SelfW, p.CoW) + Gauss(rng, 60 / Math.Sqrt(n));
+            double temp = AmbientC + rise;
+            rows.Add(new RecentBucketObs(p.Bucket, Warm, p.Minutes, rise, temp, temp + 4, fan, 0,
+                GapAvg: null, PowerAvg: p.SelfW + Gauss(rng, p.SelfW * 0.03),
+                CoPowerAvg: recordCoPower ? p.CoW + Gauss(rng, p.CoW * 0.03) : null));
+        }
+        return rows;
+    }
+
+    /// <summary>Score a shared-cooling scenario. Rates are left null on purpose: the real
+    /// 72 h window this replays logged no soak or cooldown edge, so the rise and the fan are
+    /// the only evidence, which is what isolates the response model under test. Rate handling
+    /// under a power change is already covered by <see cref="RunBoostToggle"/>.</summary>
+    private static ComponentScore ScoreShared(
+        List<RecentBucketObs> recent, List<BaselineBucket> baseRows, out ThermalCause primary)
+    {
+        var input = new ScoreInput(
+            ComponentKind.Cpu, "Bench CPU", recent, baseRows,
+            RecentWindowHours: 72, ThrottleEvents: 0,
+            SoakRateRecent: null, SoakRateBaseline: null,
+            CooldownRateRecent: null, CooldownRateBaseline: null,
+            LimitC: LimitC, Profile: Profile, BaselineReady: true, CalibrationProgress: 1.0);
+        ComponentScore score = ScoringEngine.Score(input, t => $"{t:0} °C");
+        primary = score.Diagnosis?.Primary.Cause ?? ThermalCause.Healthy;
+        return score;
+    }
+
+    private static double PasteAspect(ComponentScore s) =>
+        s.Aspects.FirstOrDefault(a => a.Aspect == HealthAspect.Paste)?.Score ?? 100;
+
+    public sealed record SharedCoolingResult(
+        int Trials,
+        // (A) Healthy machine: boost off with the GPU gaming, judged against a boost-on,
+        // GPU-quiet baseline. Nothing may read as a fault anywhere.
+        int HealthyFaultFindings, int HealthyBelow85, int HealthyAspectNotClear,
+        double HealthyMeanScore, double HealthyMeanPaste,
+        // (B) The mirror, so a fix cannot be one-directional: boost on with the GPU quiet,
+        // judged against a boost-off, GPU-gaming baseline.
+        int MirrorFaultFindings, double MirrorMeanScore,
+        // (C) Same regime both sides: the noise floor this suite could ever reach.
+        int ReferenceFaultFindings, double ReferenceMeanScore,
+        // (D) Anti-blinding: genuinely degraded paste (+6..12 °C of load rise) under the SAME
+        // regime change must still be named, or the fix has simply gone blind.
+        int DegradedPasteNamed, double DegradedMeanScore,
+        // (E) The masking direction. Scaling a rise that carries a big constant offset inflates
+        // it when watts DROP and deflates it when watts RISE, so the same defect that invents
+        // faults in (A) hides real ones here: degraded paste measured on a boost-on, GPU-quiet
+        // week against a boost-off, GPU-gaming baseline. Must still be named.
+        int MaskedPasteNamed, double MaskedMeanScore);
+
+    public static SharedCoolingResult RunSharedCooling(int seed = 20260731, int trials = 400)
+    {
+        var rng = new Random(seed);
+        ThermalPhysics phys = ThermalPhysics.SharedCoolingLaptop;
+        int healthyFault = 0, healthyBelow85 = 0, healthyAspect = 0;
+        int mirrorFault = 0, referenceFault = 0, degradedNamed = 0, maskedNamed = 0;
+        double healthySum = 0, healthyPasteSum = 0, mirrorSum = 0, referenceSum = 0;
+        double degradedSum = 0, maskedSum = 0;
+
+        for (int i = 0; i < trials; i++)
+        {
+            // (A) Healthy, boost off + GPU gaming, against a boost-on + GPU-quiet baseline.
+            List<BaselineBucket> onBase = BuildPhysicsBaseline(BoostOnGpuQuiet, phys, rng);
+            ComponentScore healthy = ScoreShared(BuildPhysicsRecent(BoostOffGpuGaming, phys, rng), onBase, out _);
+            healthySum += healthy.Value;
+            healthyPasteSum += PasteAspect(healthy);
+            if (AnyFaultFinding(healthy)) healthyFault++;
+            if (healthy.Scored && healthy.Value < 85) healthyBelow85++;
+            if (AnyFaultAspectBelowClear(healthy)) healthyAspect++;
+
+            // (B) The mirror.
+            List<BaselineBucket> offBase = BuildPhysicsBaseline(BoostOffGpuGaming, phys, rng);
+            ComponentScore mirror = ScoreShared(BuildPhysicsRecent(BoostOnGpuQuiet, phys, rng), offBase, out _);
+            mirrorSum += mirror.Value;
+            if (AnyFaultFinding(mirror)) mirrorFault++;
+
+            // (C) Reference: no regime change at all.
+            ComponentScore reference = ScoreShared(BuildPhysicsRecent(BoostOnGpuQuiet, phys, rng),
+                BuildPhysicsBaseline(BoostOnGpuQuiet, phys, rng), out _);
+            referenceSum += reference.Value;
+            if (AnyFaultFinding(reference)) referenceFault++;
+
+            // (D) Genuinely degraded paste under the same regime change.
+            double severity = Severity(Condition.PasteDegraded, rng);
+            ComponentScore degraded = ScoreShared(
+                BuildPhysicsRecent(BoostOffGpuGaming, phys, rng, severity),
+                BuildPhysicsBaseline(BoostOnGpuQuiet, phys, rng), out _);
+            degradedSum += degraded.Value;
+            if (degraded.Diagnosis is { } dd && dd.Findings.Any(f => f.Cause == ThermalCause.Paste))
+                degradedNamed++;
+
+            // (E) The masking direction: the same degradation seen on a boost-on, GPU-quiet
+            // week against a boost-off, GPU-gaming baseline.
+            severity = Severity(Condition.PasteDegraded, rng);
+            ComponentScore masked = ScoreShared(
+                BuildPhysicsRecent(BoostOnGpuQuiet, phys, rng, severity),
+                BuildPhysicsBaseline(BoostOffGpuGaming, phys, rng), out _);
+            maskedSum += masked.Value;
+            if (masked.Diagnosis is { } md && md.Findings.Any(f => f.Cause == ThermalCause.Paste))
+                maskedNamed++;
+        }
+
+        return new SharedCoolingResult(trials,
+            healthyFault, healthyBelow85, healthyAspect, healthySum / trials, healthyPasteSum / trials,
+            mirrorFault, mirrorSum / trials,
+            referenceFault, referenceSum / trials,
+            degradedNamed, degradedSum / trials,
+            maskedNamed, maskedSum / trials);
     }
 
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----

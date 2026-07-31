@@ -474,8 +474,8 @@ public class ScoringEngineTests
         // score; thermal-resistance normalization sees the rise is exactly what 130 W should
         // produce and keeps it Fresh.
         ComponentScore score = ScoringEngine.Score(Input(
-            recent: new[] { Heavy(delta: 78, power: 130) },
-            baseline: new[] { HeavyBase(delta: 60, power: 100) }), Fmt);
+            recent: new[] { Heavy(delta: PhysHealthy(60, 100, 130), power: 130) },
+            baseline: PhysBaseline(heavyDelta: 60, heavyPower: 100)), Fmt);
 
         Assert.Contains(score.Reasons, r => r.Code == "power-normalized");
         Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
@@ -489,8 +489,8 @@ public class ScoringEngineTests
         // FELL (Δ 60 → 50) even though the paste got worse. Raw ΔT reads "cooler = healthy";
         // resistance normalization (50/70 W vs 60/100 W) exposes the hidden degradation.
         ComponentScore score = ScoringEngine.Score(Input(
-            recent: new[] { Heavy(delta: 50, power: 70) },
-            baseline: new[] { HeavyBase(delta: 60, power: 100) }), Fmt);
+            recent: new[] { Heavy(delta: PhysHealthy(60, 100, 70) + 6, power: 70) },
+            baseline: PhysBaseline(heavyDelta: 60, heavyPower: 100)), Fmt);
 
         Assert.Contains(score.Reasons, r => r.Code == "delta-excess");
         Assert.True(score.Value < 85, $"undervolt-masked degradation must still drop the score, got {score.Value}");
@@ -650,6 +650,40 @@ public class ScoringEngineTests
 
     // Absolute temps stay well under the chassis norms (ambient 25 + modest deltas) so
     // these tests read ONLY the power-comparison behaviour, never the absolute warnings.
+    // A physically-shaped machine: rise = intercept + slope x watts. The intercept is the part
+    // of a rise that is NOT this component's package watts (the room sitting above the outdoor
+    // temperature DeltaT scores against, plus board and VRM heat), measured at 18 C on real
+    // hardware. Without it a fixture asserts that halving the watts halves the rise, which no
+    // machine does. Multi-bucket because the engine fits the machine's own rise-vs-power
+    // response from its own cells, and one cell cannot pin a slope.
+    private const double PhysIntercept = 14;
+
+    private static double PhysSlope(double heavyDelta, double heavyPower) =>
+        (heavyDelta - PhysIntercept) / heavyPower;
+
+    /// <summary>The healthy rise this machine produces at a given wattage.</summary>
+    private static double PhysHealthy(double heavyDelta, double heavyPower, double power) =>
+        PhysIntercept + PhysSlope(heavyDelta, heavyPower) * power;
+
+    /// <summary>A full baseline on that response, anchored so Heavy lands on the given pair.</summary>
+    private static BaselineBucket[] PhysBaseline(
+        double heavyDelta, double heavyPower, double? fan = null, double? gap = null)
+    {
+        BaselineBucket Cell(LoadBucket b, double w)
+        {
+            double d = PhysHealthy(heavyDelta, heavyPower, w);
+            return new BaselineBucket(b, Warm, d, d + 3, fan, 200, null,
+                GapAvg: b == LoadBucket.Idle ? null : gap, PowerAvg: w);
+        }
+        return new[]
+        {
+            Cell(LoadBucket.Idle, heavyPower * 0.10),
+            Cell(LoadBucket.Medium, heavyPower * 0.50),
+            Cell(LoadBucket.Heavy, heavyPower),
+            Cell(LoadBucket.Max, heavyPower * 1.15),
+        };
+    }
+
     private static RecentBucketObs HeavyPower(double delta, double power, double? fan = null, double? gap = null) =>
         new(LoadBucket.Heavy, Warm, 60, delta, 25 + delta, 29 + delta, fan, 0, GapAvg: gap, PowerAvg: power);
 
@@ -728,8 +762,8 @@ public class ScoringEngineTests
         // healthy card's gap from 10 to 13.5. Judged raw that reads as mount drift;
         // judged at equal power it is nothing.
         ComponentScore score = ScoringEngine.Score(Input(
-            recent: new[] { HeavyPower(delta: 54, power: 94.5, gap: 13.5) },
-            baseline: new[] { HeavyBasePower(delta: 40, power: 70, gap: 10) }), Fmt);
+            recent: new[] { HeavyPower(delta: PhysHealthy(40, 70, 94.5), power: 94.5, gap: 13.5) },
+            baseline: PhysBaseline(heavyDelta: 40, heavyPower: 70, gap: 10)), Fmt);
 
         Assert.DoesNotContain(score.Reasons, r => r.Code == "hotspot-gap");
         Assert.DoesNotContain(score.Diagnosis!.Findings, f => f.Cause == ThermalCause.Mount);
@@ -757,8 +791,8 @@ public class ScoringEngineTests
         // "extra airflow flattering the reading" double-counted the power change into
         // 3-4 degrees of fake excess.
         ComponentScore score = ScoringEngine.Score(Input(
-            recent: new[] { HeavyPower(delta: 54, power: 94.5, fan: 4560) },
-            baseline: new[] { HeavyBasePower(delta: 40, power: 70, fan: 4000) }), Fmt);
+            recent: new[] { HeavyPower(delta: PhysHealthy(40, 70, 94.5), power: 94.5, fan: 4560) },
+            baseline: PhysBaseline(heavyDelta: 40, heavyPower: 70, fan: 4000)), Fmt);
 
         Assert.DoesNotContain(score.Reasons, r => r.Code == "delta-excess");
         Assert.True(score.Value >= 95, $"healthy overclocked machine read {score.Value}");
@@ -767,7 +801,7 @@ public class ScoringEngineTests
         // or a straining curve, and normalization must still correct for it.
         ComponentScore profile = ScoringEngine.Score(Input(
             recent: new[] { HeavyPower(delta: 38, power: 70, fan: 4560) },
-            baseline: new[] { HeavyBasePower(delta: 40, power: 70, fan: 4000) }), Fmt);
+            baseline: PhysBaseline(heavyDelta: 40, heavyPower: 70, fan: 4000)), Fmt);
         Assert.NotNull(profile.Fan);
     }
 }

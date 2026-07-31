@@ -97,6 +97,24 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  pump-out under undervolt named:    {cap.PumpoutUnderUndervoltNamed,4}/{cap.Trials}");
     Console.WriteLine();
 
+    // Shared cooling / thermal-response realism: a rise carrying a constant offset (the room
+    // above the outdoor temperature, board and VRM heat) and a neighbour's heat through a
+    // shared heatpipe stack. Every suite above generates its rise strictly proportional to one
+    // component's watts, which is the assumption the old engine made, so none of them could
+    // see it fail. Scenario A used to surface a fault in 400/400 trials at mean score 55.7.
+    var shared = DeltaT.Core.Scoring.DetectionBenchmark.RunSharedCooling();
+    Console.WriteLine("Shared cooling (offset + neighbour heat; boost-off gaming vs a boost-on baseline)");
+    Console.WriteLine($"  healthy under a regime change:    mean score {shared.HealthyMeanScore,5:0.0}");
+    Console.WriteLine($"    false fault findings (any rank): {shared.HealthyFaultFindings,4}/{shared.Trials}");
+    Console.WriteLine($"    verdict left Excellent (<85):    {shared.HealthyBelow85,4}/{shared.Trials}");
+    Console.WriteLine($"    fault aspect cell below Clear:   {shared.HealthyAspectNotClear,4}/{shared.Trials}");
+    Console.WriteLine($"    mean PASTE cell:                {shared.HealthyMeanPaste,5:0.0}");
+    Console.WriteLine($"  mirrored regime change:           {shared.MirrorFaultFindings,4}/{shared.Trials}  mean {shared.MirrorMeanScore,5:0.0}");
+    Console.WriteLine($"  same regime both sides (floor):   {shared.ReferenceFaultFindings,4}/{shared.Trials}  mean {shared.ReferenceMeanScore,5:0.0}");
+    Console.WriteLine($"  degraded paste still named:       {shared.DegradedPasteNamed,4}/{shared.Trials}  mean {shared.DegradedMeanScore,5:0.0}");
+    Console.WriteLine($"  masked degradation still named:   {shared.MaskedPasteNamed,4}/{shared.Trials}  mean {shared.MaskedMeanScore,5:0.0}");
+    Console.WriteLine();
+
     // Battery-contaminated rate events: the rise comparison is AC-only end to end, but the
     // soak/cooldown rates come from the events table. A week of battery load edges against a
     // plugged-in baseline drags the cooldown mean down and reads "sheds heat slower" (a paste

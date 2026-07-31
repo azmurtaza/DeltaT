@@ -137,7 +137,15 @@ public sealed record RecentBucketObs(
     double? GapAvg = null,
     // Mean package power (watts) over the cell; null when the sensor exposes no power.
     // Lets scoring compare thermal resistance (ΔT/P) instead of raw rise.
-    double? PowerAvg = null);
+    double? PowerAvg = null,
+    // Mean package power (watts) drawn by the OTHER paste component over the same minutes
+    // (the discrete GPU's watts on a CPU cell, the CPU's on a GPU cell). A laptop shares one
+    // heatpipe stack between the two, so the neighbour's heat lands in this component's rise:
+    // measured on the dev laptop, holding CPU power at 13.5 W, CPU rise still moves 22.1 to
+    // 30.6 °C as the GPU goes 5 to 35 W. Null on machines with one paste component, and on
+    // legacy rows recorded before schema v9, in which case the response is fitted on this
+    // component's watts alone exactly as before.
+    double? CoPowerAvg = null);
 
 public sealed record BaselineBucket(
     LoadBucket Bucket,
@@ -164,7 +172,13 @@ public sealed record BaselineBucket(
     // the rise/power like-for-like match; it is excluded from every aggregate that assumes
     // one cell per (bucket, band) — the fan/gap means and the cross-band nearest-ambient pick —
     // so it can never double-count. The blended cell (never a sub-cell) remains the fallback.
-    bool IsPowerSubcell = false);
+    bool IsPowerSubcell = false,
+    // Mean package power (watts) the OTHER paste component drew while this cell was learned.
+    // See RecentBucketObs.CoPowerAvg: on a shared-heatpipe laptop the neighbour's watts are
+    // part of what set this rise, so a baseline learned while the GPU sat idle is not
+    // comparable to a gaming week until that difference is accounted for. Null on legacy
+    // rows and single-component machines.
+    double? CoPowerAvg = null);
 
 /// <summary>Everything the engine needs. Assembled by ScoreCoordinator from the
 /// database; the engine itself never touches clocks, sensors or storage.</summary>

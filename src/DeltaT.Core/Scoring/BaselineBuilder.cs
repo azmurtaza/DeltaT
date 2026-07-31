@@ -360,7 +360,7 @@ public static class BaselineBuilder
             rows.Add(new BaselineRow(
                 epoch, kind, name, s.Band, s.Bucket,
                 deltaAvg, p95, soakRateAvg, s.FanAvg, s.Minutes,
-                now.ToUnixTimeSeconds(), se, s.TempAvg, s.GapAvg, s.PowerAvg));
+                now.ToUnixTimeSeconds(), se, s.TempAvg, s.GapAvg, s.PowerAvg, CoPowerAvg: s.CoPowerAvg));
         }
         return rows;
     }
@@ -407,7 +407,7 @@ public static class BaselineBuilder
                 rows.Add(new BaselinePowerRow(
                     epoch, kind, name, s.Band, s.Bucket, s.Pband,
                     s.DeltaAvg!.Value, s.FanAvg, s.TempAvg, s.GapAvg, s.PowerAvg,
-                    s.Minutes, now.ToUnixTimeSeconds()));
+                    s.Minutes, now.ToUnixTimeSeconds(), CoPowerAvg: s.CoPowerAvg));
         }
         return rows;
     }

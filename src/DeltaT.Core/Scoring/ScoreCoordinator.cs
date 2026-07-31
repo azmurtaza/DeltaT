@@ -542,7 +542,7 @@ public sealed class ScoreCoordinator
         var input = new ScoreInput(
             c.Kind, c.Name,
             Recent: recentStats.Select(s => new RecentBucketObs(
-                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg, s.PowerAvg)).ToList(),
+                s.Bucket, s.Band, s.Minutes, s.DeltaAvg, s.TempAvg, s.TempMax, s.FanAvg, s.ThrottleCount, s.GapAvg, s.PowerAvg, s.CoPowerAvg)).ToList(),
             Baseline: BuildBaseline(c, epochStartTs, learningEndTs, nowTs, locked is not null && !justLocked, baselineStats, soakBaseline, nowUtc, mode),
             RecentWindowHours: recentHours,
             ThrottleEvents: _repo.CountEvents("throttle", c.Kind, recentFromTs, nowTs, mode),
@@ -758,7 +758,7 @@ public sealed class ScoreCoordinator
             }
         }
         var cells = rows.Select(r => new BaselineBucket(
-            r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg, r.PowerAvg)).ToList();
+            r.Bucket, r.Band, r.DeltaAvg, r.DeltaP95, r.FanAvg, r.Minutes, r.TempAvg, r.GapAvg, r.PowerAvg, CoPowerAvg: r.CoPowerAvg)).ToList();
 
         // Append the power-tagged sub-cells (multi-modal loaded buckets only) so scoring can match
         // a reading to its own power regime. They sit beside the blended cells; the scoring
@@ -766,7 +766,7 @@ public sealed class ScoreCoordinator
         // (IsPowerSubcell). A bucket with no sub-cells is unchanged.
         foreach (BaselinePowerRow s in _repo.GetBaselinePower(Epoch, c.Kind, c.Name, mode))
             cells.Add(new BaselineBucket(s.Bucket, s.Band, s.DeltaAvg, null, s.FanAvg, s.Minutes,
-                s.TempAvg, s.GapAvg, s.PowerAvg, IsPowerSubcell: true));
+                s.TempAvg, s.GapAvg, s.PowerAvg, IsPowerSubcell: true, CoPowerAvg: s.CoPowerAvg));
         return cells;
     }
 

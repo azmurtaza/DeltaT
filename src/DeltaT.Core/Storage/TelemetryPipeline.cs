@@ -74,13 +74,39 @@ public sealed class TelemetryPipeline : IDisposable
                     chassisFan = f;
             }
 
+            // Total package watts across the paste components, so each one can record what
+            // its NEIGHBOUR was drawing at the same instant (its own share subtracted below).
+            // A laptop moves CPU and GPU heat through one heatpipe stack, so the neighbour's
+            // watts are part of what set this component's rise and none of it is its paste:
+            // measured on the dev laptop, holding CPU power at 13.5 W, the CPU's rise still
+            // moves 22.1 to 30.6 °C as the GPU goes 5 to 35 W.
+            double pasteWatts = 0;
+            int pasteWithPower = 0;
+            foreach (ComponentReading c in snap.Components)
+            {
+                if (c.Kind.HasPaste() && c.PowerW is { } w && w > 0)
+                {
+                    pasteWatts += w;
+                    pasteWithPower++;
+                }
+            }
+
             foreach (ComponentReading c in snap.Components)
             {
                 // Raw rows stay honest per-sensor (null = hardware doesn't expose it).
                 _rawBatch.Add(new RawSampleRow(
                     ts, c.Kind, c.Name, c.TemperatureC, c.HotspotC, c.LoadPercent,
                     c.FanRpm, c.PowerW, c.IsThrottling, ambient, snap.OnAcPower));
-                Accumulate(minute, c, ambient, snap.OnAcPower, chassisFan, mode);
+
+                // The neighbour's watts: everything the other paste components drew. Null
+                // unless a second paste component actually reported power this tick, so a
+                // desktop CPU with no readable GPU power (and a single-component machine)
+                // records nothing rather than a misleading zero.
+                double own = c.Kind.HasPaste() && c.PowerW is { } p && p > 0 ? p : 0;
+                double? coPower = c.Kind.HasPaste() && pasteWithPower > (own > 0 ? 1 : 0)
+                    ? pasteWatts - own
+                    : null;
+                Accumulate(minute, c, ambient, snap.OnAcPower, chassisFan, mode, coPower);
             }
 
             // Minute rolled over → everything accumulated for earlier minutes is final.
@@ -112,7 +138,7 @@ public sealed class TelemetryPipeline : IDisposable
         }
     }
 
-    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan, int mode)
+    private void Accumulate(long minute, ComponentReading c, double? ambient, bool onAc, double? chassisFan, int mode, double? coPower = null)
     {
         if (c.TemperatureC is not { } temp)
             return;
@@ -163,6 +189,11 @@ public sealed class TelemetryPipeline : IDisposable
         {
             acc.PowerSum += power;
             acc.PowerN++;
+        }
+        if (coPower is { } co && co > 0)
+        {
+            acc.CoPowerSum += co;
+            acc.CoPowerN++;
         }
         if (c.IsThrottling)
             acc.ThrottleN++;

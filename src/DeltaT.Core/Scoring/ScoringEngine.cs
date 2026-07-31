@@ -54,10 +54,41 @@ public static class ScoringEngine
     /// not metering noise, and is corrected in full.</summary>
     public const double PowerRatioDeadband = 0.08;
 
+    /// <summary>How far outside the power range a baseline was learned over a reading may sit
+    /// before its cell stops counting at all, as a multiple of that learned range
+    /// (<see cref="ThermalResponse.Extrapolation"/>). Inside the range the machine has actually
+    /// been observed at that operating point, so the response is interpolation and carries full
+    /// weight; beyond it the fit is being asked to predict behaviour it never saw, and the
+    /// cell's weight tapers to nothing rather than dropping off a cliff.
+    ///
+    /// <para>This replaces the old "power ratio outside 0.5–2.0" exclusion, which asked the
+    /// wrong question. The dev laptop's full-load cell sat at a ratio of 1.951 against a 2.0
+    /// cliff: fully corrected at 1.95, wholly excluded at 2.01, with nothing in between. Its
+    /// 13.4 W reading was meanwhile squarely inside the 7.7–26.2 W range the baseline was
+    /// learned over, so there was no extrapolation happening at all and the evidence was
+    /// good.</para></summary>
+    public const double MaxExtrapolation = 1.0;
+
+    /// <summary>Cell weight below which a comparison is dropped instead of counted faintly.</summary>
+    public const double MinResponseConfidence = 0.2;
+
+    /// <summary>A fitted response whose residuals are worse than this is not describing the
+    /// machine, so scoring falls back to refusing power-mismatched cells rather than trusting
+    /// it. Sized against the fits measured on real hardware (RMSE 4.4 °C on raw per-minute
+    /// data, well under 1 °C on the cell means scoring actually consumes).</summary>
+    public const double MaxResponseRmseC = 6.0;
+
+    /// <summary>Power deviation beyond which two cells cannot be compared at all when no
+    /// response could be fitted. Matches <see cref="PowerRatioDeadband"/>: inside it no
+    /// correction was ever needed, outside it a correction is needed and unavailable, so the
+    /// honest move is to sit the comparison out.</summary>
+    public const double UnfittableRatioTolerance = PowerRatioDeadband;
+
     /// <summary>A power ratio outside this band implies &gt;2× or &lt;0.5× dissipation — real
     /// hardware rarely swings that far, so treat it as a sensor glitch and clamp before it
-    /// can move the score. Within the band, a genuine undervolt/overclock is fully corrected
-    /// (no half-applied fix that would leave a false penalty).</summary>
+    /// can move the score. Still used by the hotspot-gap and rate comparisons, which are
+    /// genuinely proportional to power (a gap is a difference across one die, so the ambient
+    /// offset cancels; dT/dt ≈ P/C). The die-to-ambient RISE is not, and no longer uses it.</summary>
     public const double PowerRatioClampLo = 0.5;
     public const double PowerRatioClampHi = 2.0;
 
@@ -109,6 +140,13 @@ public static class ScoringEngine
         double pr = Math.Clamp(powerRatio, PowerRatioClampLo, PowerRatioClampHi);
         return 1 + FanPowerCoupling * (pr - 1);
     }
+
+    /// <summary>Total heat the shared cooling module is moving: this component's package watts
+    /// plus the neighbour's. Null unless BOTH sides of a comparison carry the neighbour's
+    /// figure, so a cell recorded before schema v9 falls back to this component's watts alone
+    /// rather than being compared against a half-populated total.</summary>
+    public static double? TotalHeat(double? selfW, double? coW) =>
+        selfW is { } s && coW is { } c ? s + c : null;
 
     /// <summary>Fan speed within ±10% of baseline is normal EC wobble — no correction.</summary>
     public const double FanRatioDeadband = 0.10;
@@ -439,8 +477,61 @@ public static class ScoringEngine
     /// <summary>Weighted wattage context behind a power-normalized comparison, for the reason line.</summary>
     public sealed record PowerNormalization(double RecentW, double BaselineW, double CorrectionC);
 
+    /// <summary>This machine's own rise-vs-power response, fitted from the cells it learned.
+    /// Kept per ambient band, because the constant offset differs between a cold week and a
+    /// warm one, with a pooled fit as the fallback for a band too thin to fit on its own (the
+    /// slope is a property of the cooler, so pooling it across bands is sound even where the
+    /// offsets differ). Power sub-cells are excluded: they are extra views of a bucket their
+    /// blended cell already contributes, and counting both would weight that bucket twice.</summary>
+    private sealed class ResponseSet
+    {
+        private readonly Dictionary<int, ThermalResponse> _perBand = new();
+        private readonly ThermalResponse? _pooled;
+
+        private ResponseSet(Dictionary<int, ThermalResponse> perBand, ThermalResponse? pooled)
+        {
+            _perBand = perBand;
+            _pooled = pooled;
+        }
+
+        public ThermalResponse? For(int band) =>
+            _perBand.TryGetValue(band, out ThermalResponse? r) ? r : _pooled;
+
+        public static ResponseSet Build(IReadOnlyList<BaselineBucket> baseline)
+        {
+            var cells = baseline
+                .Where(b => !b.IsPowerSubcell && b.PowerAvg is { } p && p >= MinMeaningfulPowerW)
+                .ToList();
+
+            var perBand = new Dictionary<int, ThermalResponse>();
+            foreach (IGrouping<int, BaselineBucket> band in cells.GroupBy(b => b.Band))
+                if (Usable(ThermalResponse.Fit(band.Select(ToPoint).ToList())) is { } fit)
+                    perBand[band.Key] = fit;
+
+            return new ResponseSet(perBand, Usable(ThermalResponse.Fit(cells.Select(ToPoint).ToList())));
+        }
+
+        // Evidence mass, not raw minutes: a cell mean's error falls with the square root of its
+        // sample count, and weighting by minutes outright would let two long idle cells (517 and
+        // 784 minutes on the dev laptop) outvote the loaded cells that carry all the leverage.
+        private static ThermalResponse.Point ToPoint(BaselineBucket b) =>
+            new(b.DeltaAvg, b.PowerAvg!.Value, b.CoPowerAvg, Math.Sqrt(Math.Max(1, b.Minutes)));
+
+        private static ThermalResponse? Usable(ThermalResponse? r) =>
+            r is not null && r.ResidualRmseC <= MaxResponseRmseC ? r : null;
+    }
+
+    /// <summary>How much a cell's comparison counts, given how far its operating point sits
+    /// outside the range the response was learned over. Full weight inside that range, tapering
+    /// to nothing at <see cref="MaxExtrapolation"/>. The correction itself is never scaled down:
+    /// a half-applied power correction charges its own remainder to the paste, which is the very
+    /// failure this replaces. An extrapolated cell counts for less; it is not corrected less.</summary>
+    private static double ResponseConfidence(ThermalResponse fit, double recentW) =>
+        Math.Clamp(1 - fit.Extrapolation(recentW) / MaxExtrapolation, 0, 1);
+
     private static ExcessResult ComputeExcess(ScoreInput input)
     {
+        ResponseSet responses = ResponseSet.Build(input.Baseline);
         double sumWeighted = 0, sumWeights = 0;
         double? heavyExcess = null, idleExcess = null;
         int bucketsInExcess = 0, bucketsCompared = 0, loadedCompared = 0, powerExcludedCells = 0;
@@ -515,43 +606,58 @@ public static class ScoringEngine
                     fanWeights += w;
                 }
 
-                // A power gap beyond the clamp band (watts more than halved or doubled: a
-                // hard frequency cap, a deep power limit) is not normalizable. Scaling a
-                // rise that far amplifies sensor noise and the leakage nonlinearity into
-                // fake signal, and a saturated half-correction charges the remainder to the
-                // paste. The honest move is that this cell does not judge at all; the
-                // power-mismatch reason and the POWER state readout say why.
-                if (recentPower is { } xpw && basePower is { } xbw)
+                // Source side: restate the BASELINE's learned rise at the operating point this
+                // reading was actually taken at, using the response this machine's own cells
+                // fit. Additive, which is the whole point: an offset present at both operating
+                // points (the room sitting above the outdoor temperature, board and VRM heat,
+                // a loaded neighbour on a shared heatpipe) cancels instead of being multiplied.
+                //
+                // The measurement is never touched, only the reference is moved, and the
+                // learned cell stays the anchor rather than being replaced by the fitted line,
+                // so per-bucket idiosyncrasy the line can't express survives. At equal power
+                // the transport is exactly zero and this reduces to the plain rise difference.
+                double powerCorrection = 0;
+                double cellConfidence = 1.0;
+                ThermalResponse? fit = responses.For(baseline.Band);
+                if (recentPower is { } npw && basePower is { } nbw)
                 {
-                    double rawRatio = xbw / xpw;
-                    if (rawRatio < PowerRatioClampLo || rawRatio > PowerRatioClampHi)
+                    if (fit is not null)
                     {
+                        if (delta > 0)
+                            powerCorrection = Math.Clamp(
+                                -fit.Transport(nbw, npw, baseline.CoPowerAvg, r.CoPowerAvg),
+                                -MaxPowerCorrectionC, MaxPowerCorrectionC);
+
+                        // Confidence falls with how far outside the learned power range this
+                        // reading sits, so an extrapolated cell counts for less instead of
+                        // being trusted in full and then dropped off a cliff. The correction
+                        // itself is never scaled down: a half-applied power correction charges
+                        // its own remainder to the paste, which is the failure being replaced.
+                        cellConfidence = ResponseConfidence(fit, npw);
+                        if (cellConfidence < MinResponseConfidence)
+                        {
+                            powerExcludedCells++;
+                            continue;
+                        }
+                    }
+                    else if (Math.Abs(nbw / npw - 1) > UnfittableRatioTolerance)
+                    {
+                        // No response could be fitted (too few cells, or all at one operating
+                        // point) and the watts differ by more than metering noise. There is a
+                        // correction to make and no honest way to make it, so this cell sits
+                        // the comparison out and the power-mismatch reason says why.
                         powerExcludedCells++;
                         continue;
                     }
                 }
 
-                // Source-side normalization: express the recent rise at BASELINE power.
-                // ΔT ≈ P × thermal-resistance, so scaling by (baseline W / recent W)
-                // recovers the resistance — the paste-only quantity. A power-limit,
-                // undervolt, overclock, or heavier real workload at the same load% moves
-                // the die temperature for reasons that aren't the paste; this removes it.
-                double powerCorrection = 0;
-                if (delta > 0 && recentPower is { } npw && basePower is { } nbw)
-                {
-                    double pratio = Math.Clamp(nbw / npw, PowerRatioClampLo, PowerRatioClampHi);
-                    double strength = PowerCorrectionStrength(pratio);
-                    if (strength > 0)
-                        powerCorrection = Math.Clamp((delta * pratio - delta) * strength, -MaxPowerCorrectionC, MaxPowerCorrectionC);
-                }
-
-                // Sink-side normalization: fan/airflow, applied on the power-normalized rise.
+                // Sink-side normalization: fan/airflow, applied on the power-corrected rise.
                 // The rpm the watts already explain is NOT flattery: a fan answering an
                 // overclock's extra heat (or easing off under a power limit) is the fan
-                // curve doing its job, and the power correction above already judges the
-                // reading at equal wattage. Correcting for that rpm a second time
+                // curve doing its job, and the source-side correction above already judges the
+                // reading at the same operating point. Correcting for that rpm a second time
                 // double-counts the power change (+3-4 °C of fake excess on a big
-                // overclock), so only the fan speed BEYOND the power-plausible response
+                // overclock), so only the fan speed BEYOND the plausible response
                 // (a user fan profile, a dusty intake making the curve strain) is treated
                 // as airflow to normalize away.
                 double fanBase = delta + powerCorrection;
@@ -559,14 +665,28 @@ public static class ScoringEngine
                 if (delta > 0 && recentFan is { } nfr && baseFan is { } nfb)
                 {
                     double ratio = nfr / nfb;
-                    if (recentPower is { } fpw && basePower is { } fbw)
+                    // Judge the fan against TOTAL module heat, not this component's share of
+                    // it. One heatpipe stack means one fan curve serving both dies, and it
+                    // tracks whichever is hotter. Measured on the dev laptop, rpm against
+                    // total heat fits R² = 0.57 versus 0.35 against CPU watts alone: a
+                    // boost-off CPU beside a gaming GPU otherwise reads as "fans working
+                    // harder than the watts explain" and is charged for the flattery.
+                    if (TotalHeat(recentPower, r.CoPowerAvg) is { } fpw
+                        && TotalHeat(basePower, baseline.CoPowerAvg) is { } fbw)
                         ratio /= PlausibleFanFactor(fpw / fbw);
+                    else if (recentPower is { } spw && basePower is { } sbw)
+                        ratio /= PlausibleFanFactor(spw / sbw);
                     if (Math.Abs(ratio - 1) >= FanRatioDeadband)
                     {
                         double normalized = fanBase * Math.Pow(ratio, FanNormalizationExponent);
                         fanCorrection = Math.Clamp(normalized - fanBase, -MaxFanCorrectionC, MaxFanCorrectionC);
                     }
                 }
+
+                // An extrapolated cell contributes proportionally less evidence. Applied after
+                // the context means above, which deliberately reflect every cell that carried
+                // a reading so the POWER and rpm readouts stay complete.
+                w *= cellConfidence;
 
                 double correction = powerCorrection + fanCorrection;
 

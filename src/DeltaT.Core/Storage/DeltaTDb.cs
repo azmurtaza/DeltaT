@@ -448,5 +448,34 @@ public sealed class DeltaTDb
             cmd.ExecuteNonQuery();
             tx.Commit();
         }
+
+        if (version < 9)
+        {
+            // Cells now also carry the OTHER paste component's package power over the same
+            // minutes (the discrete GPU's watts on a CPU cell, the CPU's on a GPU cell).
+            //
+            // A laptop shares one heatpipe stack between CPU and GPU, so the neighbour's heat
+            // lands in this component's rise and has nothing to do with its paste. Measured on
+            // the dev laptop over 18,948 minutes: holding CPU power at 13.5 W, the CPU's rise
+            // still moves 22.1 to 30.6 °C as the GPU goes 5 to 35 W, and the same +9 °C appears
+            // at 17 W and at 31 W of CPU power. Without this column the response fit blames
+            // that heat on the CPU's own watts, which inflates its slope and then both invents
+            // excess when watts fall and hides real degradation when they rise.
+            //
+            // Additive and fail-safe: legacy rows read null, the response is fitted on this
+            // component's watts alone exactly as before, and a machine with one paste component
+            // never populates it at all.
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE agg_minute ADD COLUMN co_power_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_minute ADD COLUMN co_power_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN co_power_sum REAL NOT NULL DEFAULT 0;
+                ALTER TABLE agg_hour ADD COLUMN co_power_n INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE baseline ADD COLUMN co_power_avg REAL;
+                ALTER TABLE baseline_power ADD COLUMN co_power_avg REAL;
+                PRAGMA user_version = 9;
+                """;
+            cmd.ExecuteNonQuery();
+        }
     }
 }
