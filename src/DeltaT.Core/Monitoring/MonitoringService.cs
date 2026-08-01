@@ -53,6 +53,11 @@ public sealed class MonitoringService : IAsyncDisposable
     private static readonly TimeSpan ThrottleEventCooldown = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan WindowSpan = TimeSpan.FromHours(1);
 
+    private readonly object _syntheticGate = new();
+    private int _syntheticDepth;
+    private DateTimeOffset _syntheticUntil = DateTimeOffset.MinValue;
+    private DateTimeOffset? _lastSampleTs;
+
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
@@ -71,6 +76,71 @@ public sealed class MonitoringService : IAsyncDisposable
     public TimeSpan Interval => _interval;
 
     public bool IsPaused { get; set; }
+
+    /// <summary>How long after DeltaT's own load stops the machine is still considered to be
+    /// under it. The die is at synthetic temperature for a while after the burner exits, and
+    /// those falling minutes are no more representative than the load that caused them.</summary>
+    public static readonly TimeSpan SyntheticTail = TimeSpan.FromMinutes(3);
+
+    /// <summary>True when this instant sits inside a stretch of DeltaT's OWN load (the
+    /// fingerprint's burners), or its thermal tail. Such minutes must never be learned as
+    /// baseline or compared as recent evidence: a diagnostic load is not a workload the
+    /// machine actually does, and measured on a 140 W RTX 3060 the GPU burner reaches only
+    /// ~120 W, so its minutes land in the full-load bucket at an operating point no real
+    /// game produces. Left in, they became the recent window's only full-load evidence and
+    /// the POWER readout reported the machine drawing 11% under its own baseline.</summary>
+    public bool IsSyntheticLoad(DateTimeOffset ts)
+    {
+        lock (_syntheticGate)
+            return _syntheticDepth > 0 || ts < _syntheticUntil;
+    }
+
+    /// <summary>Marks everything from now until the returned handle is disposed (plus
+    /// <see cref="SyntheticTail"/>) as DeltaT's own load. Machine-wide by design rather than
+    /// per component: CPU and GPU share one heatpipe stack, so burning one distorts the
+    /// other's rise and its recorded neighbour watts too. Reentrant, and safe to dispose from
+    /// any thread.</summary>
+    public IDisposable BeginSyntheticLoad(TimeSpan? tail = null)
+    {
+        lock (_syntheticGate)
+            _syntheticDepth++;
+        return new SyntheticScope(this, tail ?? SyntheticTail);
+    }
+
+    private void EndSyntheticLoad(TimeSpan tail)
+    {
+        lock (_syntheticGate)
+        {
+            if (_syntheticDepth > 0)
+                _syntheticDepth--;
+            // Measure the tail on the SAMPLE clock, not the wall clock: it exists to cover the
+            // die cooling back down, which is a property of the samples being taken, and it
+            // keeps the rule the same whether the snapshots are live or replayed.
+            DateTimeOffset from = _lastSampleTs ?? DateTimeOffset.UtcNow;
+            DateTimeOffset until = from + tail;
+            if (until > _syntheticUntil)
+                _syntheticUntil = until;
+        }
+    }
+
+    private sealed class SyntheticScope : IDisposable
+    {
+        private readonly MonitoringService _owner;
+        private readonly TimeSpan _tail;
+        private int _disposed;
+
+        public SyntheticScope(MonitoringService owner, TimeSpan tail)
+        {
+            _owner = owner;
+            _tail = tail;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                _owner.EndSyntheticLoad(_tail);
+        }
+    }
 
     public SensorSnapshot? Latest
     {
@@ -136,8 +206,25 @@ public sealed class MonitoringService : IAsyncDisposable
                 _window.RemoveAt(0);
         }
 
+        // DeltaT's own load manufactures every edge these detectors look for: a hard load
+        // step, a heat soak to plateau, a fall when the burner exits. Measuring them would be
+        // the app scoring its own stress test, so the trackers sit the stretch out and are
+        // reset, discarding any half-measured edge that spans the boundary.
+        bool synthetic;
+        lock (_syntheticGate)
+        {
+            _lastSampleTs = snap.TimestampUtc;
+            synthetic = _syntheticDepth > 0 || snap.TimestampUtc < _syntheticUntil;
+        }
+
         foreach (ComponentReading c in snap.Components)
         {
+            if (synthetic && c.Kind.HasPaste())
+            {
+                _soakTrackers.Remove(c.Id);
+                _cooldownTrackers.Remove(c.Id);
+                continue;
+            }
             DetectThrottle(snap.TimestampUtc, c);
             DetectSoak(snap.TimestampUtc, c, snap.OnAcPower);
             DetectCooldown(snap.TimestampUtc, c, snap.OnAcPower);

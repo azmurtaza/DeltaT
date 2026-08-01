@@ -131,6 +131,7 @@ public partial class SettingsViewModel : ObservableObject
         _gpuConcernC = settings.GetDouble(SettingsKeys.ConcernOverrideGpuC) ?? _gpuConcernDefault;
         _headroomWarnings = settings.GetBool(SettingsKeys.HeadroomWarnings, true);
 
+        RefreshCoolingProfiles();
         RefreshInfo();
     }
 
@@ -248,6 +249,69 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>Open the project's GitHub page: the latest installer (Releases) and the docs
     /// (readme) both live there. Answers the "where do I download it again / find the docs" ask.</summary>
+    // ------------------------------------------------------------ cooling setups
+
+    /// <summary>One row in the cooling-setup list. <see cref="StateText"/> is the honest
+    /// status: a setup that has never locked a baseline is still learning, and saying so keeps
+    /// a user from expecting a score the moment they add one.</summary>
+    public sealed record CoolingProfileRow(int Id, string Name, string StateText, bool CanSelect, bool CanRemove);
+
+    public ObservableCollection<CoolingProfileRow> CoolingProfiles { get; } = new();
+
+    [ObservableProperty]
+    private string _newCoolingProfileName = "";
+
+    private void RefreshCoolingProfiles()
+    {
+        CoolingProfiles.Clear();
+        int active = _scores.Profiles.ActiveId;
+        foreach (CoolingProfile p in _scores.Profiles.All())
+        {
+            string state = p.Id == active
+                ? _scores.CoolingProfileHasBaseline(p.Id) ? "In use" : "In use, still calibrating"
+                : _scores.CoolingProfileHasBaseline(p.Id) ? "Baseline learned" : "No baseline yet";
+            CoolingProfiles.Add(new CoolingProfileRow(
+                p.Id, p.Name, state, CanSelect: p.Id != active, CanRemove: p.Id != CoolingProfile.DefaultId));
+        }
+    }
+
+    [RelayCommand]
+    private void AddCoolingProfile()
+    {
+        string name = CoolingProfileStore.Sanitize(NewCoolingProfileName, 1);
+        CoolingProfile added = _scores.AddCoolingProfile(name, DateTimeOffset.UtcNow);
+        NewCoolingProfileName = "";
+        RefreshCoolingProfiles();
+        StatusText = $"Now using the \"{added.Name}\" cooling setup. It starts with no history, so it calibrates from scratch. Your other setup's baseline is untouched.";
+    }
+
+    [RelayCommand]
+    private void SelectCoolingProfile(int id)
+    {
+        _scores.SetCoolingProfile(id);
+        RefreshCoolingProfiles();
+        CoolingProfile now = _scores.Profiles.Active;
+        StatusText = _scores.CoolingProfileHasBaseline(id)
+            ? $"Switched to \"{now.Name}\". Scoring against the baseline this setup already learned."
+            : $"Switched to \"{now.Name}\". It has no baseline yet, so DeltaT is calibrating for this setup.";
+    }
+
+    [RelayCommand]
+    private void RemoveCoolingProfile(int id)
+    {
+        CoolingProfile? target = _scores.Profiles.All().FirstOrDefault(p => p.Id == id);
+        if (target is null)
+            return;
+        var confirm = MessageBox.Show(
+            $"Forget the \"{target.Name}\" cooling setup?\n\nWhat it learned about your machine under that arrangement is deleted. Your history, trends and every other setup are kept.",
+            "Forget cooling setup", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.OK)
+            return;
+        _scores.RemoveCoolingProfile(id);
+        RefreshCoolingProfiles();
+        StatusText = $"Forgot the \"{target.Name}\" setup and everything it had learned.";
+    }
+
     [RelayCommand]
     private void OpenProjectPage()
     {

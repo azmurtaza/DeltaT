@@ -441,7 +441,10 @@ public partial class App : Application
         // gaming). The screenshot harness always samples so the demo views fill in.
         if (_uishotDir is null)
             _monitor.IsPaused = !_settings.GetBool(SettingsKeys.CaptureEnabled, true);
-        _pipeline = new TelemetryPipeline(_monitor, _ambient, _repo);
+        // Learned rows are tagged with the cooling setup in use, so a cooler pad turned down
+        // never blends with the baseline learned at full airflow. Read through a lambda because
+        // the coordinator that owns the setups is built on the next line.
+        _pipeline = new TelemetryPipeline(_monitor, _ambient, _repo, () => _scores?.Profiles.ActiveId ?? 0);
         _scores = new ScoreCoordinator(_repo, _settings, profile, () => _monitor.Latest, FormatTemp);
         _remarks = new RemarksCoordinator(_monitor, _ambient, _repo, _scores, _settings);
 
@@ -459,7 +462,7 @@ public partial class App : Application
         { Simulated = simulate, Elevated = simulate || IsElevated(), RequestElevation = RelaunchAsAdmin };
         if (args.Contains("--minimized", StringComparer.OrdinalIgnoreCase))
             _vm.UiVisible = false; // tray start: no window yet, skip card churn
-        _tray = new TrayManager(_monitor, ShowMainWindow, Quit, ShowRemarks);
+        _tray = new TrayManager(_monitor, ShowMainWindow, Quit, ShowRemarks, _scores);
 
         _remarks.RemarkRaised += r =>
         {

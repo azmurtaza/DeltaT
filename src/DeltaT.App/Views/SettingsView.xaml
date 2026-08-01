@@ -212,6 +212,52 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
+                    <!-- Cooling setups: named airflow arrangements (a cooler pad's fan up or down,
+                         a side panel on or off). DeltaT cannot see external airflow, so easing a
+                         cooler off looks exactly like a dusty intake. Each setup learns its own
+                         baseline and switching between them costs nothing. -->
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Cooling setup" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
+                                       Text="Using a cooler pad, or changing your fan setup day to day? DeltaT cannot see airflow it has no sensor for, so turning a cooler down just looks like the machine running hotter. Name each arrangement here and DeltaT learns a separate normal for each one. Switching between them is instant and never relearns anything."/>
+                            <ItemsControl ItemsSource="{Binding CoolingProfiles}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Style="{StaticResource SettingRow}" Margin="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0" VerticalAlignment="Center">
+                                                <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" Text="{Binding Name}"/>
+                                                <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Text="{Binding StateText}"/>
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Style="{StaticResource Button.Ghost}" Content="USE"
+                                                    VerticalAlignment="Center" Visibility="{Binding CanSelect, Converter={StaticResource BoolToVis}}"
+                                                    Command="{Binding DataContext.SelectCoolingProfileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding Id}"/>
+                                            <Button Grid.Column="2" Style="{StaticResource Button.Link}" Content="Forget"
+                                                    Margin="10,0,0,0" VerticalAlignment="Center"
+                                                    Visibility="{Binding CanRemove, Converter={StaticResource BoolToVis}}"
+                                                    Command="{Binding DataContext.RemoveCoolingProfileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding Id}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <TextBox Style="{StaticResource Input}" Width="170"
+                                         Text="{Binding NewCoolingProfileName, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="A name you will recognise, like 'Cooler low' or 'Panel off'"/>
+                                <Button Style="{StaticResource Button.Ghost}" Content="ADD SETUP" Margin="8,0,0,0"
+                                        Command="{Binding AddCoolingProfileCommand}"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"
+                                       Text="A new setup starts with no history, so it calibrates from scratch the first time you use it. After that, switching back and forth is free. You can also switch from the tray icon."/>
+                        </StackPanel>
+                    </HeaderedContentControl>
+
                     <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Warning limits" Margin="0,0,0,14">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"

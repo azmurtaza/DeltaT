@@ -129,7 +129,11 @@ public sealed record DiagnosisInputs(
     // headroom read. It is deliberately left false whenever the deficit is by-design (a power
     // limit / current limiter asserting instead of thermal, e.g. boost off), so a
     // deliberately power-limited machine is never pushed toward a fault by this signal.
-    bool ThermallyPowerConstrained = false);
+    bool ThermallyPowerConstrained = false,
+    // A package power sensor did report over the compared window, even if no LOADED cell
+    // did. Separates "this machine has no power sensor" from "nothing loaded has been
+    // measured yet", which read identically as "--" and told the user nothing.
+    bool PowerSensorPresent = false);
 
 /// <summary>Turns the gathered evidence into a ranked list of causes. Pure and
 /// deterministic: same inputs, same diagnosis, no clocks or I/O.</summary>
@@ -297,6 +301,15 @@ public static class ThermalDiagnostician
             else
                 list.Add(new AspectHealth(HealthAspect.Power, null, "MATCHED",
                     "Package power sits where the baseline learned it, so the comparison needs no wattage correction."));
+        }
+        else if (e.PowerSensorPresent)
+        {
+            // The sensor reads, but nothing under real load has been compared yet. Idle watts
+            // are the same in every power regime, so there is no operating point to report.
+            // DeltaT's own stress test deliberately doesn't count here: its burners are a
+            // diagnostic, not a workload, and their wattage is their own.
+            list.Add(NoSensor(HealthAspect.Power,
+                "No loaded reading to compare yet, so the power state is unknown. It fills in once the machine has spent time under a real load (a game, a render, a build). DeltaT's own stress test doesn't count toward it."));
         }
         else
         {

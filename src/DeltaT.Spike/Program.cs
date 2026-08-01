@@ -115,6 +115,32 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  masked degradation still named:   {shared.MaskedPasteNamed,4}/{shared.Trials}  mean {shared.MaskedMeanScore,5:0.0}");
     Console.WriteLine();
 
+    // Cooling-setup regime separation: an adjustable cooler pad turned down looks exactly like
+    // a dusty intake (broad rise reaching idle, internal fans straining), and external airflow
+    // is not a sensor DeltaT can read. A declared setup learns its own baseline.
+    var cool = DeltaT.Core.Scoring.DetectionBenchmark.RunCoolingRegime();
+    Console.WriteLine("Cooling-setup regime (healthy machine, cooler pad eased off)");
+    Console.WriteLine($"  {"baseline used",-34} {"mean score",11}  {"false faults",12}");
+    Console.WriteLine($"  {"same setup's baseline (shipped)",-34} {cool.SeparatedMeanScore,11:0.0}  {cool.SeparatedFalseFaults,7}/{cool.Trials}");
+    Console.WriteLine($"  {"full-airflow baseline (setup-blind)",-34} {cool.CrossSetupMeanScore,11:0.0}  {cool.CrossSetupFalseFaults,7}/{cool.Trials}");
+    Console.WriteLine($"  {"mirror: full airflow vs reduced base",-34} {cool.MirrorMeanScore,11:0.0}  {cool.MirrorFalseFaults,7}/{cool.Trials}");
+    Console.WriteLine($"  {"same setup both sides (floor)",-34} {cool.ReferenceMeanScore,11:0.0}  {cool.ReferenceFalseFaults,7}/{cool.Trials}");
+    Console.WriteLine($"  degraded paste still named:       {cool.DegradedNamed,4}/{cool.Trials}  mean {cool.DegradedMeanScore,5:0.0}");
+    Console.WriteLine();
+
+    // DeltaT's own stress test recorded as if it were a workload. The in-app GPU burn draws
+    // ~120 W on a 140 W card, so its minutes taught the full-load bucket an operating point no
+    // game produces and became the recent window's only full-load evidence.
+    var syn = DeltaT.Core.Scoring.DetectionBenchmark.RunSyntheticLoad();
+    Console.WriteLine("DeltaT's own stress test as telemetry (healthy 140W GPU, burn reaches ~120W)");
+    Console.WriteLine($"  {"recent window",-30} {"POWER misread",14} {"false faults",13} {"mean",7}");
+    Console.WriteLine($"  {"burn aggregated (pre-fix)",-30} {syn.ContaminatedPowerMisread,10}/{syn.Trials} {syn.ContaminatedFaultFindings,9}/{syn.Trials} {syn.ContaminatedMeanScore,7:0.0}");
+    Console.WriteLine($"  {"burn excluded (shipped)",-30} {syn.ExcludedPowerMisread,10}/{syn.Trials} {syn.ExcludedFaultFindings,9}/{syn.Trials} {syn.ExcludedMeanScore,7:0.0}");
+    Console.WriteLine($"  idle-only week, burn aggregated:  POWER misread {syn.IdleOnlyContaminatedMisread,4}/{syn.Trials}");
+    Console.WriteLine($"  idle-only week, burn excluded:    POWER reads --{syn.IdleOnlyExcludedUnknown,5}/{syn.Trials}");
+    Console.WriteLine($"  degraded paste still named:       {syn.DegradedNamed,4}/{syn.Trials}  mean {syn.DegradedMeanScore,5:0.0}");
+    Console.WriteLine();
+
     // Battery-contaminated rate events: the rise comparison is AC-only end to end, but the
     // soak/cooldown rates come from the events table. A week of battery load edges against a
     // plugged-in baseline drags the cooldown mean down and reads "sheds heat slower" (a paste
@@ -436,19 +462,28 @@ if (args.Contains("--cost", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
-// `--gpuburn`: prove the OpenCL burner (the GPU fingerprint's load engine) works on
-// this machine: pick the compute device, burn ~12 s, and watch the GPU temp/load
-// ramp through LHM. Heat comes purely from math; Dispose ends the load instantly.
+// `--gpuburn`: prove the OpenCL burner (the GPU fingerprint's load engine) works on this
+// machine and measure how much BOARD POWER it actually reaches. That second job is the
+// point: a fingerprint taken at 86% of board power measures a machine the user never runs,
+// which is what a 140 W RTX 3060 Laptop reported (burner ~120 W, FurMark v2 139-140 W). The
+// run holds 45 s so the card's boost settles, then prints the sustained watts to compare
+// against a real load. Heat comes from math and DRAM traffic; Dispose ends it instantly.
 if (args.Contains("--gpuburn", StringComparer.OrdinalIgnoreCase))
 {
     var gpuComputer = new Computer { IsGpuEnabled = true };
     gpuComputer.Open();
     var gpuVisitor = new UpdateVisitor();
+    var watts = new List<double>();
     try
     {
         using var burner = new DeltaT.Core.Diagnostics.GpuBurner(null);
         Line($"burning on: {burner.DeviceName}");
-        for (int i = 1; i <= 12; i++)
+        Line(burner.StreamBytes > 0
+            ? $"streaming buffer: {burner.StreamBytes / (1024 * 1024)} MB (past L2, so the memory pipe draws too)"
+            : "streaming buffer: none - the device refused every size, so this is the register-only load");
+        Line("");
+        const int seconds = 45;
+        for (int i = 1; i <= seconds; i++)
         {
             Thread.Sleep(1000);
             gpuComputer.Accept(gpuVisitor);
@@ -459,14 +494,18 @@ if (args.Contains("--gpuburn", StringComparer.OrdinalIgnoreCase))
                 // Core and hotspot printed separately: DeltaT (and NitroSense) headline
                 // "GPU Core"; the hotspot runs several degrees above it by design, so a
                 // max-of-all-sensors readout would look inflated next to the app.
-                float? core = null, hotspot = null, load = null;
+                float? core = null, hotspot = null, load = null, power = null;
                 foreach (ISensor s in hw.Sensors)
                 {
                     if (s is { SensorType: SensorType.Temperature, Name: "GPU Core", Value: { } t }) core = t;
                     if (s is { SensorType: SensorType.Temperature, Name: "GPU Hot Spot", Value: { } h }) hotspot = h;
                     if (s is { SensorType: SensorType.Load, Name: "GPU Core", Value: { } l }) load = l;
+                    if (s is { SensorType: SensorType.Power, Name: "GPU Package", Value: { } w }) power = w;
                 }
-                Line($"[{i,2}s] {hw.Name}: core {core?.ToString("0.0") ?? "--"} °C   hotspot {hotspot?.ToString("0.0") ?? "--"} °C   {load?.ToString("0") ?? "--"}% load");
+                // The first 15 s are the boost ramp, so only the tail counts as sustained.
+                if (power is { } pw && i > 15)
+                    watts.Add(pw);
+                Line($"[{i,2}s] {hw.Name}: core {core?.ToString("0.0") ?? "--"} °C   hotspot {hotspot?.ToString("0.0") ?? "--"} °C   {load?.ToString("0") ?? "--"}% load   {power?.ToString("0.0") ?? "--"} W");
             }
         }
         Line("stopping burner - load should vanish instantly");
@@ -474,6 +513,20 @@ if (args.Contains("--gpuburn", StringComparer.OrdinalIgnoreCase))
     catch (Exception ex)
     {
         Line($"GPU burner failed: {ex.Message}");
+    }
+    if (watts.Count > 0)
+    {
+        watts.Sort();
+        Line("");
+        Line($"sustained board power (last 30 s): median {watts[watts.Count / 2]:0.0} W, peak {watts[^1]:0.0} W");
+        Line("Compare against a real full load (FurMark v2, or a GPU-bound game) on the same");
+        Line("machine. The burner should land within a few watts of it; a large shortfall means");
+        Line("the fingerprint is measuring an operating point the card never runs at.");
+    }
+    else
+    {
+        Line("");
+        Line("No GPU package power sensor on this machine, so the draw can't be measured here.");
     }
     gpuComputer.Close();
     return;

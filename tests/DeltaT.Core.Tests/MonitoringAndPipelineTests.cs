@@ -217,6 +217,79 @@ public class ThrottleDetectionTests
     }
 }
 
+public class SyntheticLoadSuppressionTests
+{
+    /// <summary>DeltaT's own load manufactures every edge the detectors look for: a hard load
+    /// step, a soak to plateau, a fall when the burner exits. Measuring them would be the app
+    /// scoring its own stress test.</summary>
+    [Fact]
+    public void TheAppsOwnBurn_ProducesNoSoakCooldownOrThrottleEvents()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        var soaks = new List<SoakMeasurement>();
+        var cooldowns = new List<CooldownMeasurement>();
+        var throttles = new List<ThrottleEvent>();
+        monitor.SoakMeasured += soaks.Add;
+        monitor.CooldownMeasured += cooldowns.Add;
+        monitor.ThrottleDetected += throttles.Add;
+
+        DateTimeOffset t = Snap.T0;
+        using (monitor.BeginSyntheticLoad())
+        {
+            // The fingerprint's exact shape: settle at idle, slam to full until it plateaus
+            // and throttles, then let it fall. Every one of these edges would otherwise be
+            // measured, and the plateau is at a wattage no real workload produces.
+            for (int i = 0; i < 45; i++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(Snap.Cpu(t, 50, load: 3));
+            for (int i = 0; i < 90; i++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(Snap.Cpu(t, 60 + Math.Min(39, i), load: 100, throttling: i > 60));
+            for (int i = 0; i < 60; i++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(Snap.Cpu(t, Math.Max(52, 99 - i), load: 3));
+            while (source.Remaining > 0)
+                monitor.Capture();
+        }
+
+        Assert.Empty(soaks);
+        Assert.Empty(cooldowns);
+        Assert.Empty(throttles);
+    }
+
+    /// <summary>Once the tail expires the detectors are live again, so suppressing the app's
+    /// own load never costs a real measurement.</summary>
+    [Fact]
+    public void AfterTheTail_RealEdgesAreMeasuredAgain()
+    {
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        var soaks = new List<SoakMeasurement>();
+        monitor.SoakMeasured += soaks.Add;
+
+        DateTimeOffset t = Snap.T0;
+
+        // A burn, then its one-minute tail measured on the sample clock.
+        using (monitor.BeginSyntheticLoad(tail: TimeSpan.FromMinutes(1)))
+        {
+            for (int i = 0; i < 30; i++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(Snap.Cpu(t, 95, load: 100));
+            while (source.Remaining > 0)
+                monitor.Capture();
+        }
+        for (int i = 0; i < 31; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 55, load: 5));
+
+        // Past the tail now: a genuine calm-then-slam edge must be measured as usual.
+        for (int i = 0; i < 40; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 50, load: 5));
+        for (int i = 0; i < 55; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 60 + Math.Min(30, i), load: 90));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        Assert.Single(soaks);
+    }
+}
+
 public class TelemetryPipelineTests : IDisposable
 {
     private sealed class FixedAmbient : IAmbientProvider
@@ -262,6 +335,64 @@ public class TelemetryPipelineTests : IDisposable
         Assert.Equal(60, heavy.DeltaAvg!.Value, 1.0);
         Assert.Equal(90, heavy.TempAvg, 1.0);
         Assert.True(heavy.Minutes >= 3);
+    }
+
+    [Fact]
+    public void DeltaTsOwnLoad_IsChartedButNeverLearned()
+    {
+        // The fingerprint's burners are a diagnostic, not a workload. Their minutes must not
+        // reach the aggregates (the GPU burner draws ~120 W on a 140 W card, so they teach the
+        // full-load bucket an operating point no game produces), but the raw samples stay so
+        // the charts still show the run.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        DateTimeOffset t = Snap.T0;
+        // 3 minutes of real heavy use, then 3 minutes of DeltaT's own burn, then roll over.
+        for (int i = 0; i < 90; i++, t += TimeSpan.FromSeconds(2))
+            source.Enqueue(Snap.Cpu(t, 90, load: 80));
+        while (source.Remaining > 0)
+            monitor.Capture();
+
+        using (monitor.BeginSyntheticLoad())
+        {
+            for (int i = 0; i < 90; i++, t += TimeSpan.FromSeconds(2))
+                source.Enqueue(Snap.Cpu(t, 99, load: 100));
+            while (source.Remaining > 0)
+                monitor.Capture();
+        }
+        source.Enqueue(Snap.Cpu(t.AddSeconds(2), 50, load: 5));
+        monitor.Capture();
+        pipeline.Flush();
+
+        long from = Snap.T0.AddMinutes(-1).ToUnixTimeSeconds();
+        long to = Snap.T0.AddMinutes(20).ToUnixTimeSeconds();
+
+        // The real heavy minutes are learned; the burn's full-load minutes are not there at all.
+        var stats = _repo.GetBucketStats(ComponentKind.Cpu, "CPU", from, to);
+        BucketStat heavy = Assert.Single(stats, s => s.Bucket == LoadBucket.Heavy);
+        Assert.Equal(90, heavy.TempAvg, 1.0);
+        Assert.DoesNotContain(stats, s => s.Bucket == LoadBucket.Max);
+
+        // But the run is still in the raw history, so the 24 h chart shows the spike.
+        var raw = _repo.GetSeries(ComponentKind.Cpu, "CPU", from, to, "raw");
+        Assert.Contains(raw, p => p.TempAvg is { } v && v >= 98);
+    }
+
+    [Fact]
+    public void TheThermalTail_IsHeldBackToo()
+    {
+        // The die is still at synthetic temperature after the burner exits, so the falling
+        // minutes are no more representative than the load that caused them.
+        var source = new ScriptedSource();
+        var monitor = new MonitoringService(source);
+        using var pipeline = new TelemetryPipeline(monitor, new FixedAmbient(), _repo);
+
+        monitor.BeginSyntheticLoad().Dispose();
+        Assert.True(monitor.IsSyntheticLoad(DateTimeOffset.UtcNow));
+        Assert.True(monitor.IsSyntheticLoad(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(2)));
+        Assert.False(monitor.IsSyntheticLoad(DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5)));
     }
 
     [Fact]

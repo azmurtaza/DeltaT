@@ -75,6 +75,16 @@ public static class SettingsKeys
     public const string IndoorFixedTempC = "ambient.fixedTempC";  // the user-set fixed indoor temperature (°C)
     public const string IndoorFixedSince = "ambient.fixedSince";  // when the current fixed-temp reference began (learning floor for fixed mode)
 
+    // Cooling setups: named airflow arrangements (a cooler pad's fan up or down, a side panel
+    // on or off) that each learn their own baseline. See Scoring/CoolingProfiles.cs for why
+    // this is a reference regime and not a correction. An install that never touches the
+    // feature stores none of these and behaves exactly as before.
+    public const string CoolingProfiles = "cooling.profiles";          // "id:name" records, newline separated; the default setup is implicit
+    public const string ActiveCoolingProfile = "cooling.active";       // id of the setup currently in use
+    public const string CoolingProfileNextId = "cooling.nextId";       // monotonic id allocator; ids are never reused
+    public const string CoolingProfileDefaultName = "cooling.defaultName"; // user's name for the implicit default setup
+    public const string CoolingProfileSince = "cooling.since";         // "…{id}" = when a setup was declared (its learning floor)
+
     public const string BaselineEpoch = "baseline.epoch";          // increments on repaste
     public const string BaselineEpochStart = "baseline.epochStart";
     public const string BaselineEpochReason = "baseline.epochReason"; // initial | repaste | recalibrate

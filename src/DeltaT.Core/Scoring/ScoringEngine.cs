@@ -418,7 +418,11 @@ public static class ScoringEngine
 
         double? soakRatio = soakRecent is { } sr && input.SoakRateBaseline is { } sb && sb > 1 ? sr / sb : null;
         double? coolRatio = cooldownRecent is { } cr && input.CooldownRateBaseline is { } cb && cb > 1 ? cr / cb : null;
-        double? powerRatio = ex.PowerRecentMean is { } pw && ex.PowerBaselineMean is { } pb && pb >= MinMeaningfulPowerW
+        // The POWER state is read from LOADED cells only. Idle watts sit near the floor
+        // whatever the regime, so an idle-only window has not measured an operating point and
+        // must read "--" rather than a number the user will take as a verdict on their card.
+        double? powerRatio = ex.PowerRecentLoadedMean is { } pw && ex.PowerBaselineLoadedMean is { } pb
+                             && pb >= MinMeaningfulPowerW
             ? pw / pb : null;
 
         return new DiagnosisInputs(
@@ -429,7 +433,8 @@ public static class ScoringEngine
             powerRatio,
             LoadedCompared: ex.LoadedCompared > 0,
             PowerLimitedComparisons: ex.PowerExcludedCells > 0,
-            ThermallyPowerConstrained: input.CpuThermallyPowerConstrained);
+            ThermallyPowerConstrained: input.CpuThermallyPowerConstrained,
+            PowerSensorPresent: ex.PowerRecentMean is not null);
     }
 
     /// <summary>Human phrasing for a dormancy gap — "~2 months", "~6 weeks", "45 days".</summary>
@@ -538,6 +543,11 @@ public static class ScoringEngine
         bool usedAdjacent = false;
         double fanCorrWeighted = 0, fanRecentWeighted = 0, fanBaseWeighted = 0, fanWeights = 0;
         double powerCorrWeighted = 0, powerRecentWeighted = 0, powerBaseWeighted = 0, powerWeights = 0;
+        // The same means restricted to the buckets whose heat actually crosses the paste.
+        // The POWER state readout is a statement about the machine's operating point, and
+        // only a loaded reading makes one: idle watts sit near the floor in every regime, so
+        // an idle-only window would report a power state it never measured.
+        double powerRecentLoaded = 0, powerBaseLoaded = 0, powerLoadedWeights = 0;
         // Basis: the raw pair behind the excess (rise measured, rise learned) plus how much
         // data took part. Read-only book-keeping for the UI; nothing here feeds the score.
         double riseRecentWeighted = 0, riseBaseWeighted = 0, topBandWeight = 0;
@@ -598,6 +608,12 @@ public static class ScoringEngine
                     powerRecentWeighted += cpw * w;
                     powerBaseWeighted += anchorPower * w;
                     powerWeights += w;
+                    if (bucket is LoadBucket.Medium or LoadBucket.Heavy or LoadBucket.Max)
+                    {
+                        powerRecentLoaded += cpw * w;
+                        powerBaseLoaded += anchorPower * w;
+                        powerLoadedWeights += w;
+                    }
                 }
                 if (delta > 0 && recentFan is { } cfr && baseFan is { } cfb)
                 {
@@ -737,11 +753,14 @@ public static class ScoringEngine
         double? fanBaseMeanAll = fanWeights > 0 ? fanBaseWeighted / fanWeights : null;
         double? powerRecentMeanAll = powerWeights > 0 ? powerRecentWeighted / powerWeights : null;
         double? powerBaseMeanAll = powerWeights > 0 ? powerBaseWeighted / powerWeights : null;
+        double? powerRecentLoadedMean = powerLoadedWeights > 0 ? powerRecentLoaded / powerLoadedWeights : null;
+        double? powerBaseLoadedMean = powerLoadedWeights > 0 ? powerBaseLoaded / powerLoadedWeights : null;
 
         if (sumWeights <= 0)
             return new ExcessResult(null, heavyExcess, idleExcess, false, usedAdjacent, null, null,
                 fanRecentMeanAll, fanBaseMeanAll, powerRecentMeanAll, powerBaseMeanAll,
-                loadedCompared, powerExcludedCells);
+                loadedCompared, powerExcludedCells,
+                PowerRecentLoadedMean: powerRecentLoadedMean, PowerBaselineLoadedMean: powerBaseLoadedMean);
 
         FanNormalization? fan = null;
         double corr = fanCorrWeighted / sumWeights;
@@ -758,7 +777,8 @@ public static class ScoringEngine
             fanRecentMeanAll, fanBaseMeanAll, powerRecentMeanAll, powerBaseMeanAll,
             loadedCompared, powerExcludedCells,
             riseRecentWeighted / sumWeights, riseBaseWeighted / sumWeights,
-            pcorr, corr, matchedMinutes, loadedMinutes, bucketsCompared, topBucket, topBand);
+            pcorr, corr, matchedMinutes, loadedMinutes, bucketsCompared, topBucket, topBand,
+            powerRecentLoadedMean, powerBaseLoadedMean);
     }
 
     private readonly record struct ExcessResult(
@@ -772,7 +792,10 @@ public static class ScoringEngine
         double MeasuredRise = 0, double BaselineRise = 0,
         double PowerCorrection = 0, double FanCorrection = 0,
         int MatchedMinutes = 0, int LoadedMinutes = 0, int CellsCompared = 0,
-        LoadBucket TopBucket = LoadBucket.Idle, int TopBand = -1)
+        LoadBucket TopBucket = LoadBucket.Idle, int TopBand = -1,
+        // The power means over the loaded buckets alone, behind the POWER state readout.
+        // Null when nothing loaded was compared, which is the honest "--".
+        double? PowerRecentLoadedMean = null, double? PowerBaselineLoadedMean = null)
     {
         /// <summary>The fan is turning well below where this machine used to run it at the
         /// same load — a hint at cause (failing/seizing fan, clogged intake, or a quieter

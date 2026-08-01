@@ -964,6 +964,147 @@ public static class DetectionBenchmark
         return rows;
     }
 
+    // ===================== Cooling-setup regime separation =====================
+    // Reported by a user with an adjustable sealed laptop cooler (Ilano V12): turning its fans
+    // down raises every temperature, and DeltaT read that as the CPU's and GPU's liquid metal
+    // and paste degrading. External airflow is invisible to DeltaT (it is not a sensor the
+    // machine exposes), and a cooler pad turned down looks exactly like a dusty intake: a broad
+    // rise that reaches idle, with the internal fans straining to compensate. That is the
+    // documented "no case airflow awareness" limitation, but hitting someone who changes airflow
+    // daily, so Recalibrate is the wrong tool at that cadence.
+    //
+    // The fix is a declared cooling setup that learns its own baseline, the same regime
+    // separation fixed-indoor ambient mode already has. This suite is the number behind it: how
+    // badly a reduced-airflow week false-alarms against a full-airflow baseline, how clean it is
+    // against its own, and that separating the regimes does not blind the engine to a genuine
+    // fault occurring while the cooler is turned down.
+
+    public sealed record CoolingRegimeResult(
+        int Trials,
+        // The reading judged against the SAME cooling setup's baseline (the shipped behaviour).
+        double SeparatedMeanScore, int SeparatedFalseFaults,
+        // The same reading judged against the FULL-airflow baseline (setup-blind: what the
+        // reporting user saw).
+        double CrossSetupMeanScore, int CrossSetupFalseFaults,
+        // The mirror, so the separation isn't one-directional: a full-airflow week judged
+        // against the reduced-airflow baseline. A machine that got COOLER must not read as a
+        // fault either, and must not be flattered into hiding one.
+        double MirrorMeanScore, int MirrorFalseFaults,
+        // Anti-blinding: paste really degrading while the cooler is turned down, judged against
+        // that setup's own baseline. Must still be named.
+        int DegradedNamed, double DegradedMeanScore,
+        // The floor this suite could ever reach: full airflow on both sides, so the only thing
+        // left is generator noise. The separated arm is only meaningful next to this.
+        //
+        // The separated arm lands a few points UNDER this floor, and that gap is real
+        // information rather than leftover contamination. With the pad eased off the die runs
+        // into the last couple of degrees below its limit, so the near-silicon-wall headroom
+        // read fires. Measured: shrinking the airflow loss to 1-2.5 degrees lifts the separated
+        // arm to 97.3 while the floor stays 99.6, i.e. the gap tracks absolute temperature, not
+        // regime mismatch. It is also not a FAULT finding (Headroom is not a hardware fault), so
+        // the false-fault count stays at the floor either way. A machine genuinely at its
+        // thermal limit should say so whichever cooling setup put it there.
+        double ReferenceMeanScore, int ReferenceFalseFaults);
+
+    /// <summary>A healthy machine running with its cooler pad turned down: less external
+    /// airflow, so every bucket sits hotter and the internal fans answer by spinning up. Scored
+    /// against a baseline learned in the same setup the offset cancels; scored against the
+    /// full-airflow baseline it does not, and it reads as dust or paste.</summary>
+    public static CoolingRegimeResult RunCoolingRegime(int seed = 20260801, int trials = 400)
+    {
+        var rng = new Random(seed);
+        double sepSum = 0, crossSum = 0, mirrorSum = 0, degradedSum = 0, refSum = 0;
+        int sepFalse = 0, crossFalse = 0, mirrorFalse = 0, degradedNamed = 0, refFalse = 0;
+
+        for (int i = 0; i < trials; i++)
+        {
+            // How much hotter the machine runs with the cooler eased off. Chosen to span the
+            // range a real pad moves a laptop: a couple of degrees at idle up to the high single
+            // digits under load, which is squarely inside where DeltaT calls dust or paste.
+            double loss = 2.5 + rng.NextDouble() * 4;
+
+            List<BaselineBucket> fullAirflow = BuildCoolingBaseline(0, rng);
+            List<BaselineBucket> reducedAirflow = BuildCoolingBaseline(loss, rng);
+            List<RecentBucketObs> reducedRecent = BuildCoolingRecent(loss, rng);
+
+            double sep = ScoreHealthy(reducedRecent, reducedAirflow, out ThermalCause cs);
+            double cross = ScoreHealthy(reducedRecent, fullAirflow, out ThermalCause cc);
+            double mirror = ScoreHealthy(BuildCoolingRecent(0, rng), reducedAirflow, out ThermalCause cm);
+
+            // The noise floor: same setup on both sides, no airflow change at all.
+            double reference = ScoreHealthy(BuildCoolingRecent(0, rng), fullAirflow, out ThermalCause cr);
+            refSum += reference;
+            if (CauseClass(cr) != 0 || reference < 85) refFalse++;
+
+            sepSum += sep; crossSum += cross; mirrorSum += mirror;
+            if (CauseClass(cs) != 0 || sep < 85) sepFalse++;
+            if (CauseClass(cc) != 0 || cross < 85) crossFalse++;
+            if (CauseClass(cm) != 0 || mirror < 85) mirrorFalse++;
+
+            // Genuine degradation, in the reduced-airflow setup, against that setup's baseline.
+            double severity = Severity(Condition.PasteDegraded, rng);
+            ComponentScore degraded = ScoreAgainst(
+                BuildCoolingRecent(loss, rng, severity), 0, 0, 0, 0, reducedAirflow, out _);
+            degradedSum += degraded.Value;
+            if (degraded.Diagnosis is { } dd && dd.Findings.Any(f => f.Cause == ThermalCause.Paste))
+                degradedNamed++;
+        }
+
+        return new CoolingRegimeResult(trials,
+            sepSum / trials, sepFalse, crossSum / trials, crossFalse,
+            mirrorSum / trials, mirrorFalse, degradedNamed, degradedSum / trials,
+            refSum / trials, refFalse);
+    }
+
+    /// <summary>Reduced external airflow, as the sensors see it: the die sits <paramref name="loss"/>
+    /// hotter under load and a fraction of that at idle (less heat to carry away when idle), and
+    /// the internal fan curve answers the hotter die by spinning up. Package power is unchanged,
+    /// which is what makes this NOT a power confounder: nothing about the chip's operating point
+    /// moved, only the air around it. <paramref name="pasteSeverity"/> adds genuine load-dependent
+    /// degradation on top, for the anti-blinding arm.</summary>
+    private static List<RecentBucketObs> BuildCoolingRecent(double loss, Random rng, double pasteSeverity = 0)
+    {
+        var recent = new List<RecentBucketObs>();
+        foreach (Cell c in Baseline)
+        {
+            double airflow = loss * (0.4 + 0.6 * LoadFraction(c.Bucket)); // reaches idle, worse under load
+            double delta = c.Delta + airflow + pasteSeverity * LoadFraction(c.Bucket) + Gauss(rng, 0.6);
+            // A temperature-targeting fan curve answers a hotter die, roughly 90 rpm per degree
+            // on this class of laptop blower.
+            double fan = Math.Max(0, c.FanRpm + 90 * airflow + Gauss(rng, 60));
+            double power = Math.Max(1, c.PowerW + Gauss(rng, c.PowerW * 0.03));
+            double temp = AmbientC + delta;
+            recent.Add(new RecentBucketObs(
+                c.Bucket, Warm, 60, delta, temp, temp + 4, fan, 0,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : 10 + Gauss(rng, 0.5), PowerAvg: power));
+        }
+        return recent;
+    }
+
+    /// <summary>The baseline a machine learns while sitting in one cooling setup. Loss 0 is the
+    /// full-airflow setup; a positive loss is the same machine learned with the pad eased off.</summary>
+    private static List<BaselineBucket> BuildCoolingBaseline(double loss, Random rng)
+    {
+        var rows = new List<BaselineBucket>();
+        foreach (Cell c in Baseline)
+        {
+            double airflow = loss * (0.4 + 0.6 * LoadFraction(c.Bucket));
+            double dSum = 0, pSum = 0, fSum = 0, gSum = 0; const int n = 30;
+            for (int i = 0; i < n; i++)
+            {
+                dSum += c.Delta + airflow + Gauss(rng, 0.6);
+                pSum += Math.Max(1, c.PowerW + Gauss(rng, c.PowerW * 0.03));
+                fSum += Math.Max(0, c.FanRpm + 90 * airflow + Gauss(rng, 60));
+                gSum += 10 + Gauss(rng, 0.5);
+            }
+            double dAvg = dSum / n;
+            rows.Add(new BaselineBucket(
+                c.Bucket, Warm, dAvg, dAvg + 3, fSum / n, n * 5, AmbientC + dAvg,
+                GapAvg: c.Bucket == LoadBucket.Idle ? null : gSum / n, PowerAvg: pSum / n));
+        }
+        return rows;
+    }
+
     // ===================== Phase 5: deep power caps & power-coupled faults =====================
     // The headline benchmark judges the PRIMARY cause and a score<70 line. That is too coarse for
     // the promise "a power knob never reads as a fault on ANY aspect": a false FanFault can sit at
@@ -1259,6 +1400,134 @@ public static class DetectionBenchmark
             referenceFault, referenceSum / trials,
             degradedNamed, degradedSum / trials,
             maskedNamed, maskedSum / trials);
+    }
+
+    // ===================== DeltaT's own stress test as telemetry =====================
+    // Reported on a Predator PH315-55 (RTX 3060 Laptop, 140 W): the in-app GPU stress test
+    // draws ~120 W where FurMark v2 draws 139-140 W, and the dashboard then reported the GPU
+    // "11% weaker" on POWER. Ten minutes of FurMark later it read MATCHED, with nothing else
+    // changed. That is the whole failure in one experiment: DeltaT was aggregating its own
+    // burner's minutes as if they were a workload, and because the burner is the only thing
+    // that ever pins the card to 100% utilization outside a game, those minutes became the
+    // recent window's only full-load evidence. The comparison was then DeltaT's burner against
+    // the user's games, reported as the machine's power state.
+    //
+    // The generator models exactly that: a healthy card, a baseline learned from real gaming,
+    // and a recent window whose full-load cell came from the app's own test at a fraction of
+    // the board power. It scores the CONTAMINATED window (what shipped) against the EXCLUDED
+    // one (what the pipeline now records), and checks that excluding the synthetic minutes
+    // costs no detection on a card that really is degrading. Guardrails in SyntheticLoadTests.
+
+    /// <summary>A 140 W laptop RTX 3060's measured shape: rise over ambient against board
+    /// power and the CPU's watts beside it, plus the fan curve that answers the pair.</summary>
+    private static readonly ThermalPhysics GpuPhysics = new(9.5, 0.355, 0.085, 1200, 12.0);
+
+    // Real gaming: the card sweeps its whole power range and pins at its 140 W board limit.
+    private static readonly OpPoint[] GamingGpu =
+    {
+        new(LoadBucket.Idle,    15,  9, 640),
+        new(LoadBucket.Light,   32, 14, 310),
+        new(LoadBucket.Medium,  62, 22, 180),
+        new(LoadBucket.Heavy,  104, 30,  95),
+        new(LoadBucket.Max,    140, 35,  60),
+    };
+
+    /// <summary>What DeltaT's own GPU fingerprint banks: minutes pinned at 100% utilization at
+    /// the ~120 W a pure-ALU OpenCL kernel actually pulls on this card, with the CPU quiet
+    /// because nothing else is running. One run is 90-240 s of load, which on its own falls
+    /// under the 8-minute floor a full-load cell needs to be compared at all. It takes a few
+    /// runs in a window to qualify, which is exactly what a user investigating a GPU reading
+    /// does, and is the reported case: repeated tests, then a week whose only full-load
+    /// evidence was DeltaT's own.</summary>
+    private static readonly OpPoint SyntheticBurn = new(LoadBucket.Max, 120, 12, 12);
+
+    private static ComponentScore ScoreGpu(List<RecentBucketObs> recent, List<BaselineBucket> baseRows)
+    {
+        var input = new ScoreInput(
+            ComponentKind.GpuDiscrete, "Bench GPU", recent, baseRows,
+            RecentWindowHours: 168, ThrottleEvents: 0,
+            SoakRateRecent: null, SoakRateBaseline: null,
+            CooldownRateRecent: null, CooldownRateBaseline: null,
+            LimitC: LimitC, Profile: Profile, BaselineReady: true, CalibrationProgress: 1.0);
+        return ScoringEngine.Score(input, t => $"{t:0} °C");
+    }
+
+    private static string PowerCell(ComponentScore s) =>
+        s.Aspects.FirstOrDefault(a => a.Aspect == HealthAspect.Power)?.Status ?? "--";
+
+    /// <summary>The POWER cell claims a deficit the machine never had: anything other than
+    /// MATCHED or the honest "--" on a card that is drawing exactly what it always did.</summary>
+    private static bool PowerCellMisreads(ComponentScore s) =>
+        PowerCell(s) is not ("MATCHED" or "--");
+
+    public sealed record SyntheticLoadResult(
+        int Trials,
+        // (A) What shipped: the app's own burn aggregated into the recent window as the only
+        // full-load evidence, against a gaming baseline. The reported symptom.
+        int ContaminatedPowerMisread, int ContaminatedFaultFindings, double ContaminatedMeanScore,
+        // (B) What the pipeline now records: the same week with the synthetic minutes never
+        // aggregated. The power state must come from the real loads or read "--".
+        int ExcludedPowerMisread, int ExcludedFaultFindings, double ExcludedMeanScore,
+        // (C) The idle-only week: no real loaded evidence at all, so the only thing that ever
+        // pinned the card was DeltaT itself. Pre-fix this reported a power deficit; the cell
+        // must now read "--" rather than a number nothing measured.
+        int IdleOnlyContaminatedMisread, int IdleOnlyExcludedUnknown,
+        // (D) Anti-blinding: a card whose paste really is degrading, measured on a week with
+        // genuine gaming in it, must still be named with the synthetic minutes gone.
+        int DegradedNamed, double DegradedMeanScore);
+
+    public static SyntheticLoadResult RunSyntheticLoad(int seed = 20260801, int trials = 400)
+    {
+        var rng = new Random(seed);
+        ThermalPhysics phys = GpuPhysics;
+        int contPower = 0, contFault = 0, exclPower = 0, exclFault = 0;
+        int idleContPower = 0, idleExclUnknown = 0, degradedNamed = 0;
+        double contSum = 0, exclSum = 0, degradedSum = 0;
+
+        // The organic part of a week that had no gaming in it: the desktop, a browser, video.
+        OpPoint[] noGaming = GamingGpu.Where(p => p.Bucket <= LoadBucket.Medium).ToArray();
+        OpPoint[] idleOnly = GamingGpu.Where(p => p.Bucket <= LoadBucket.Light).ToArray();
+
+        for (int i = 0; i < trials; i++)
+        {
+            List<BaselineBucket> gamingBase = BuildPhysicsBaseline(GamingGpu, phys, rng);
+
+            // (A) Contaminated: light organic use plus DeltaT's own burn standing in for the
+            // full-load cell. Everything here is a HEALTHY card obeying the same physics.
+            List<RecentBucketObs> contaminated = BuildPhysicsRecent(
+                noGaming.Append(SyntheticBurn).ToArray(), phys, rng);
+            ComponentScore cont = ScoreGpu(contaminated, gamingBase);
+            contSum += cont.Value;
+            if (PowerCellMisreads(cont)) contPower++;
+            if (AnyFaultFinding(cont)) contFault++;
+
+            // (B) The same week with the synthetic minutes never aggregated.
+            ComponentScore excl = ScoreGpu(BuildPhysicsRecent(noGaming, phys, rng), gamingBase);
+            exclSum += excl.Value;
+            if (PowerCellMisreads(excl)) exclPower++;
+            if (AnyFaultFinding(excl)) exclFault++;
+
+            // (C) Idle-only week: the burn is the sole thing that ever loaded the card.
+            ComponentScore idleCont = ScoreGpu(
+                BuildPhysicsRecent(idleOnly.Append(SyntheticBurn).ToArray(), phys, rng), gamingBase);
+            if (PowerCellMisreads(idleCont)) idleContPower++;
+            ComponentScore idleExcl = ScoreGpu(BuildPhysicsRecent(idleOnly, phys, rng), gamingBase);
+            if (PowerCell(idleExcl) == "--") idleExclUnknown++;
+
+            // (D) Genuinely degrading paste on a week that DID include real gaming.
+            double severity = Severity(Condition.PasteDegraded, rng);
+            ComponentScore degraded = ScoreGpu(
+                BuildPhysicsRecent(GamingGpu, phys, rng, severity), gamingBase);
+            degradedSum += degraded.Value;
+            if (degraded.Diagnosis is { } dd && dd.Findings.Any(f => f.Cause == ThermalCause.Paste))
+                degradedNamed++;
+        }
+
+        return new SyntheticLoadResult(trials,
+            contPower, contFault, contSum / trials,
+            exclPower, exclFault, exclSum / trials,
+            idleContPower, idleExclUnknown,
+            degradedNamed, degradedSum / trials);
     }
 
     // ---- sensitivity sweeps: find the smallest severity that trips each threshold ----

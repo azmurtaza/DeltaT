@@ -8,6 +8,7 @@ using System.Windows.Threading;
 using Hardcodet.Wpf.TaskbarNotification;
 using DeltaT.App.Controls;
 using DeltaT.Core.Monitoring;
+using DeltaT.Core.Scoring;
 
 namespace DeltaT.App.Services;
 
@@ -28,6 +29,10 @@ public sealed class TrayManager : IDisposable
     private readonly MonitoringService _monitor;
     private readonly Dispatcher _dispatcher;
     private readonly MenuItem _pauseItem;
+    // Quick-switch between declared cooling setups. Someone who turns a cooler pad up and down
+    // does it daily, so it has to be one click from the tray, not a trip through Settings.
+    private readonly MenuItem _coolingItem;
+    private readonly ScoreCoordinator? _cooling;
     private readonly Action _showWindow;
     private readonly Action _showRemarks;
     // Which surface a balloon click should open. A remark toast routes to the Remarks
@@ -43,9 +48,15 @@ public sealed class TrayManager : IDisposable
     private double _pendingFraction;
     private int _uiHopQueued;
 
-    public TrayManager(MonitoringService monitor, Action showWindow, Action quit, Action showRemarks)
+    /// <param name="cooling">The cooling setups and how to switch between them. Null on a build
+    /// with no coordinator (the screenshot harness), which simply hides the submenu.</param>
+#pragma warning disable CS8618 // _coolingItem and _tray are assigned in the body, in order
+    public TrayManager(MonitoringService monitor, Action showWindow, Action quit, Action showRemarks,
+        ScoreCoordinator? cooling = null)
     {
+#pragma warning restore CS8618
         _monitor = monitor;
+        _cooling = cooling;
         _dispatcher = Application.Current.Dispatcher;
         _showWindow = showWindow;
         _showRemarks = showRemarks;
@@ -63,6 +74,9 @@ public sealed class TrayManager : IDisposable
             }
         };
 
+        _coolingItem = new MenuItem { Header = "Cooling setup" };
+        _coolingItem.SubmenuOpened += (_, _) => RebuildCoolingMenu();
+
         var open = new MenuItem { Header = "Open DeltaT" };
         open.Click += (_, _) => showWindow();
         var quitItem = new MenuItem { Header = "Quit DeltaT" };
@@ -71,6 +85,9 @@ public sealed class TrayManager : IDisposable
         var menu = new ContextMenu();
         menu.Items.Add(open);
         menu.Items.Add(_pauseItem);
+        // Only worth a menu row once the user has actually declared a second setup.
+        if (_cooling is not null)
+            menu.Items.Add(_coolingItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(quitItem);
 
@@ -81,6 +98,7 @@ public sealed class TrayManager : IDisposable
             IconSource = RenderIcon(null),
         };
         _tray.TrayLeftMouseUp += (_, _) => showWindow();
+        RebuildCoolingMenu();
 
         // A clicked toast should take the user somewhere useful, not just sit there. A
         // remark toast opens the Remarks feed (its advice); any other notice opens the
@@ -293,6 +311,33 @@ public sealed class TrayManager : IDisposable
         bmp.Render(visual);
         bmp.Freeze();
         return bmp;
+    }
+
+    /// <summary>Fills the cooling-setup submenu with the declared setups, the one in use
+    /// checked. Rebuilt each time the submenu opens, so a setup added or forgotten in Settings
+    /// shows up without restarting. Switching is instant and relearns nothing: each setup keeps
+    /// its own baseline, so this is a reference switch, not a recalibration.</summary>
+    private void RebuildCoolingMenu()
+    {
+        if (_cooling is null)
+            return;
+        _coolingItem.Items.Clear();
+        int active = _cooling.Profiles.ActiveId;
+        foreach (CoolingProfile p in _cooling.Profiles.All())
+        {
+            var item = new MenuItem { Header = p.Name, IsChecked = p.Id == active, IsCheckable = false };
+            int id = p.Id;
+            item.Click += (_, _) =>
+            {
+                _cooling.SetCoolingProfile(id);
+                RebuildCoolingMenu();
+            };
+            _coolingItem.Items.Add(item);
+        }
+        _coolingItem.Items.Add(new Separator());
+        var manage = new MenuItem { Header = "Manage setups…" };
+        manage.Click += (_, _) => _showWindow();
+        _coolingItem.Items.Add(manage);
     }
 
     public void Dispose()

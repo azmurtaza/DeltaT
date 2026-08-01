@@ -563,6 +563,162 @@ public class ScoreCoordinatorTests : IDisposable
         Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
     }
 
+    // --------------------------------------------------- cooling setups
+
+    [Fact]
+    public void CoolingSetups_LearnSeparateBaselines_ThatNeverMix()
+    {
+        // Full airflow first: learn a baseline at rise 60 with the cooler pad on high.
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2), baseDelta: 60, mode: 0);
+        DateTimeOffset t1 = T0.AddDays(1);
+        UseSnapshot(t1);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(t1);
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}"));
+
+        // Declare a second setup (pad turned down) and switch to it. The reported bug is that
+        // this machine runs 8° hotter and gets told its paste is failing.
+        CoolingProfile quiet = coordinator.AddCoolingProfile("Cooler low", t1);
+        int quietMode = new Regime(0, quiet.Id).Id;
+        Assert.Equal(quietMode, coordinator.ActiveMode);
+
+        // No baseline for the new setup yet, so it must NOT borrow the full-airflow one.
+        UseSnapshot(t1.AddMinutes(1));
+        var early = coordinator.Compute(t1.AddMinutes(1));
+        Assert.False(early[ComponentKind.Cpu].Scored);
+
+        // Interleave both setups' data in the same window and the same ambient band, so only
+        // the regime tag can keep them apart.
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, t1.AddHours(1), baseDelta: 68, mode: quietMode);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, t1.AddHours(2), baseDelta: 60, mode: 0);
+
+        DateTimeOffset t2 = t1.AddDays(1);
+        UseSnapshot(t2);
+        coordinator.Compute(t2);
+
+        Assert.NotNull(_settings.GetTimestamp($"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.c{quiet.Id}"));
+        double quietDelta = _repo.GetBaseline(0, quietMode).Single(r => r.Bucket == LoadBucket.Heavy).DeltaAvg;
+        double fullDelta = _repo.GetBaseline(0, 0).Single(r => r.Bucket == LoadBucket.Heavy).DeltaAvg;
+        Assert.InRange(quietDelta, 67, 69);  // learned its own hotter normal, not pulled toward 60
+        Assert.InRange(fullDelta, 59, 61);   // full-airflow baseline untouched by the quiet data
+    }
+
+    [Fact]
+    public void SwitchingCoolingSetups_SwitchesBaselines_WithoutWiping()
+    {
+        StartEpoch(0, T0);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(2), baseDelta: 60, mode: 0);
+        DateTimeOffset t1 = T0.AddDays(1);
+        UseSnapshot(t1);
+        var coordinator = NewCoordinator();
+        coordinator.Compute(t1);
+
+        CoolingProfile quiet = coordinator.AddCoolingProfile("Cooler low", t1);
+        int quietMode = new Regime(0, quiet.Id).Id;
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, t1.AddHours(1), baseDelta: 68, mode: quietMode);
+        DateTimeOffset t2 = t1.AddDays(1);
+        UseSnapshot(t2);
+        coordinator.Compute(t2);
+
+        string fullLock = $"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}";
+        string quietLock = $"{SettingsKeys.BaselineLockedUtc}.{ComponentKind.Cpu}.c{quiet.Id}";
+        DateTimeOffset? fullAt = _settings.GetTimestamp(fullLock);
+        DateTimeOffset? quietAt = _settings.GetTimestamp(quietLock);
+        Assert.NotNull(fullAt);
+        Assert.NotNull(quietAt);
+
+        // Someone who turns a cooler pad up and down does this daily. Every switch must serve
+        // the other baseline immediately and relearn nothing.
+        for (int i = 0; i < 3; i++)
+        {
+            coordinator.SetCoolingProfile(CoolingProfile.DefaultId);
+            UseSnapshot(t2.AddHours(i * 2 + 1));
+            Assert.True(coordinator.Compute(t2.AddHours(i * 2 + 1))[ComponentKind.Cpu].Scored);
+
+            coordinator.SetCoolingProfile(quiet.Id);
+            UseSnapshot(t2.AddHours(i * 2 + 2));
+            Assert.True(coordinator.Compute(t2.AddHours(i * 2 + 2))[ComponentKind.Cpu].Scored);
+        }
+
+        Assert.Equal(fullAt, _settings.GetTimestamp(fullLock));
+        Assert.Equal(quietAt, _settings.GetTimestamp(quietLock));
+    }
+
+    [Fact]
+    public void CoolingSetupsAndFixedIndoorMode_AreIndependentAxes()
+    {
+        // Four regimes exist once both features are used, and none may blend with another.
+        StartEpoch(0, T0);
+        var coordinator = NewCoordinator();
+        CoolingProfile quiet = coordinator.AddCoolingProfile("Cooler low", T0);
+        coordinator.EnsureFixedModeStarted(T0);
+
+        (int Ambient, int Profile)[] axes =
+        {
+            (0, CoolingProfile.DefaultId), (1, CoolingProfile.DefaultId),
+            (0, quiet.Id), (1, quiet.Id),
+        };
+        int[] modes = axes.Select(a => new Regime(a.Ambient, a.Profile).Id).ToArray();
+        Assert.Equal(4, modes.Distinct().Count());
+
+        // Every regime's data lands in the same window and band, so only the tag separates them.
+        for (int i = 0; i < axes.Length; i++)
+            WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(1), baseDelta: 40 + i * 10, mode: modes[i]);
+
+        // Visit each regime in turn so each builds its own baseline from its own rows.
+        for (int i = 0; i < axes.Length; i++)
+        {
+            _settings.SetBool(SettingsKeys.IndoorFixedMode, axes[i].Ambient == 1);
+            coordinator.SetCoolingProfile(axes[i].Profile);
+            DateTimeOffset at = T0.AddDays(1).AddMinutes(i);
+            UseSnapshot(at);
+            coordinator.Compute(at);
+
+            double learned = _repo.GetBaseline(0, modes[i]).Single(r => r.Bucket == LoadBucket.Heavy).DeltaAvg;
+            Assert.InRange(learned, 39 + i * 10, 41 + i * 10);
+        }
+        _settings.SetBool(SettingsKeys.IndoorFixedMode, false);
+
+        // Changing the fixed temperature invalidates every setup's FIXED baseline (all of them
+        // were measured against the old indoor reference) and no weather baseline.
+        coordinator.ResetFixedBaseline(T0.AddHours(9));
+        Assert.Empty(_repo.GetBaseline(0, new Regime(1, CoolingProfile.DefaultId).Id));
+        Assert.Empty(_repo.GetBaseline(0, new Regime(1, quiet.Id).Id));
+        Assert.NotEmpty(_repo.GetBaseline(0, new Regime(0, CoolingProfile.DefaultId).Id));
+        Assert.NotEmpty(_repo.GetBaseline(0, new Regime(0, quiet.Id).Id));
+    }
+
+    [Fact]
+    public void DeletingACoolingSetup_DropsItsRows_AndNeverHandsThemToTheNextSetup()
+    {
+        StartEpoch(0, T0);
+        var coordinator = NewCoordinator();
+        CoolingProfile quiet = coordinator.AddCoolingProfile("Cooler low", T0);
+        int quietMode = new Regime(0, quiet.Id).Id;
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(1), baseDelta: 68, mode: quietMode);
+        WriteLockworthyLoad(ComponentKind.Cpu, CpuName, T0.AddHours(1), baseDelta: 60, mode: 0);
+
+        DateTimeOffset t1 = T0.AddDays(1);
+        UseSnapshot(t1);
+        coordinator.Compute(t1);                       // builds the quiet setup's baseline
+        coordinator.SetCoolingProfile(CoolingProfile.DefaultId);
+        UseSnapshot(t1.AddMinutes(1));
+        coordinator.Compute(t1.AddMinutes(1));         // builds the default setup's baseline
+        coordinator.SetCoolingProfile(quiet.Id);
+        Assert.NotEmpty(_repo.GetBaseline(0, quietMode));
+
+        coordinator.RemoveCoolingProfile(quiet.Id);
+        Assert.Empty(_repo.GetBaseline(0, quietMode));
+        Assert.NotEmpty(_repo.GetBaseline(0, 0));           // the default setup is untouched
+        Assert.Equal(CoolingProfile.DefaultId, coordinator.Profiles.ActiveId); // and is selected again
+
+        // A setup created afterwards must get a fresh id, not inherit the deleted one's rows.
+        CoolingProfile next = coordinator.AddCoolingProfile("Cooler high", t1.AddHours(1));
+        Assert.NotEqual(quiet.Id, next.Id);
+        Assert.Empty(_repo.GetBaseline(0, new Regime(0, next.Id).Id));
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();

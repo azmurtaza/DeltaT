@@ -20,6 +20,7 @@ public sealed class ScoreCoordinator
     private readonly ThermalProfile _profile;
     private readonly Func<SensorSnapshot?> _latestSnapshot;
     private readonly Func<double, string> _fmtTemp;
+    private readonly CoolingProfileStore _profiles;
     private readonly object _gate = new();
 
     private Dictionary<ComponentKind, ComponentScore> _latest = new();
@@ -67,6 +68,7 @@ public sealed class ScoreCoordinator
         _profile = profile;
         _latestSnapshot = latestSnapshot;
         _fmtTemp = fmtTemp ?? (t => $"{t:0} °C");
+        _profiles = new CoolingProfileStore(settings);
 
         if (_settings.GetInt(SettingsKeys.BaselineEpoch) is null)
         {
@@ -159,12 +161,21 @@ public sealed class ScoreCoordinator
     private DateTimeOffset EpochStartFor(ComponentKind kind) =>
         _settings.GetTimestamp($"{SettingsKeys.BaselineEpochStart}.{kind}") ?? EpochStart;
 
-    /// <summary>The ambient-source mode DeltaT is currently scoring against: 0 = outside
-    /// weather (the default), 1 = a user-set fixed indoor temperature. Everything scored,
-    /// learned and locked is keyed by this, so the two regimes keep entirely separate
-    /// baselines and one is never compared against the other. Read live from settings, so a
-    /// toggle takes effect on the next scoring pass.</summary>
-    public int ActiveMode => _settings.GetBool(SettingsKeys.IndoorFixedMode, false) ? 1 : 0;
+    /// <summary>The reference regime DeltaT is currently scoring against: the ambient source
+    /// (outside weather or a fixed indoor temperature) paired with the active cooling setup,
+    /// encoded by <see cref="Regime"/>. Everything scored, learned and locked is keyed by it,
+    /// so incomparable regimes keep entirely separate baselines and one is never compared
+    /// against another. Read live from settings, so a toggle or a setup switch takes effect on
+    /// the next scoring pass. With no cooling setups declared this is exactly the 0 or 1 that
+    /// shipped before them.</summary>
+    public int ActiveMode => ActiveRegime.Id;
+
+    public Regime ActiveRegime => new(
+        _settings.GetBool(SettingsKeys.IndoorFixedMode, false) ? 1 : 0,
+        _profiles.ActiveId);
+
+    /// <summary>The cooling setups this machine has declared, and which one is in use.</summary>
+    public CoolingProfileStore Profiles => _profiles;
 
     /// <summary>When the current fixed-indoor reference began. Fixed mode floors its learning and
     /// recent windows here, so aggregate rows tagged before the reference was set (or under a
@@ -179,8 +190,21 @@ public sealed class ScoreCoordinator
     /// repaste/recalibration may have left behind at an earlier epoch), floored as above.</summary>
     public DateTimeOffset EffectiveEpochStart(ComponentKind kind, int mode) => FloorForMode(EpochStartFor(kind), mode);
 
-    private DateTimeOffset FloorForMode(DateTimeOffset epochStart, int mode) =>
-        mode == 1 && FixedSince is { } fs && fs > epochStart ? fs : epochStart;
+    /// <summary>A regime's window floor: the epoch start, raised to the moment the regime's own
+    /// reference began where it has one. Fixed-indoor mode floors at when its current indoor
+    /// temperature was set, and a cooling setup floors at when it was declared, because no
+    /// aggregate row carries either tag before then. Weather + default setup is unaffected,
+    /// which is every install that touches neither feature.</summary>
+    private DateTimeOffset FloorForMode(DateTimeOffset epochStart, int mode)
+    {
+        Regime regime = Regime.FromId(mode);
+        DateTimeOffset floor = epochStart;
+        if (regime.AmbientMode == 1 && FixedSince is { } fs && fs > floor)
+            floor = fs;
+        if (_profiles.SinceUtc(regime.Profile) is { } ps && ps > floor)
+            floor = ps;
+        return floor;
+    }
 
     /// <summary>Whether a mode has any locked baseline yet (any component). Used by Settings to
     /// decide when the first-time "this mode needs to calibrate" warning is warranted.</summary>
@@ -219,27 +243,87 @@ public sealed class ScoreCoordinator
     public void ResetFixedBaseline(DateTimeOffset nowUtc)
     {
         _settings.SetTimestamp(SettingsKeys.IndoorFixedSince, nowUtc);
-        foreach (ComponentKind kind in PastedKinds)
-        {
-            ClearLock(kind, 1);
-            _settings.Set($"{SettingsKeys.BaselineMeterPeak}.{kind}{ModeSuffix(1)}", "");
-            _settings.Set($"{SettingsKeys.BaselineScoreShown}.{kind}{ModeSuffix(1)}", "");
-        }
-        _repo.DeleteBaselineForMode(Epoch, 1);
+        // Every cooling setup's fixed-mode baseline was measured against the old indoor
+        // reference, not just the one the user happens to be in, so all of them go.
+        foreach (int mode in AllModes.Where(m => Regime.FromId(m).AmbientMode == 1).ToList())
+            DropRegime(mode);
         _wasReady = false;
         _scopeWasReady = false;
     }
+
+    /// <summary>Forget one regime entirely: its learned rows, its lock and its display markers.
+    /// The other regimes, and all history, are untouched.</summary>
+    private void DropRegime(int mode)
+    {
+        foreach (ComponentKind kind in PastedKinds)
+        {
+            ClearLock(kind, mode);
+            _settings.Set($"{SettingsKeys.BaselineMeterPeak}.{kind}{ModeSuffix(mode)}", "");
+            _settings.Set($"{SettingsKeys.BaselineScoreShown}.{kind}{ModeSuffix(mode)}", "");
+        }
+        _repo.DeleteBaselineForMode(Epoch, mode);
+    }
+
+    // ------------------------------------------------------- cooling setups
+
+    /// <summary>Declare a cooling setup and switch to it. Nothing is wiped and nothing
+    /// recalibrates: the setup DeltaT was just in keeps its baseline exactly as it was, and the
+    /// new one starts learning its own from this moment. Switching back and forth costs
+    /// nothing, which is the whole point for someone who turns a cooler pad up and down.</summary>
+    public CoolingProfile AddCoolingProfile(string name, DateTimeOffset nowUtc)
+    {
+        CoolingProfile profile = _profiles.Add(name, nowUtc);
+        _profiles.SetActive(profile.Id);
+        _wasReady = false;
+        _scopeWasReady = false;
+        return profile;
+    }
+
+    /// <summary>Switch which cooling setup is in use. On-data only ever compares to that
+    /// setup's baseline, so no reading crosses from one airflow arrangement to another.</summary>
+    public void SetCoolingProfile(int id)
+    {
+        if (id == _profiles.ActiveId)
+            return;
+        _profiles.SetActive(id);
+        _wasReady = false;
+        _scopeWasReady = false;
+    }
+
+    /// <summary>Forget a cooling setup and everything it learned. Its rows measured a machine
+    /// under an airflow arrangement the user says no longer exists, so keeping them would only
+    /// let a future setup inherit them. History and every other setup are untouched.</summary>
+    public void RemoveCoolingProfile(int id)
+    {
+        if (id == CoolingProfile.DefaultId)
+            return;
+        DropRegime(new Regime(0, id).Id);
+        DropRegime(new Regime(1, id).Id);
+        _profiles.Remove(id);
+        _wasReady = false;
+        _scopeWasReady = false;
+    }
+
+    /// <summary>Whether a cooling setup has ever locked a baseline (in either ambient mode).
+    /// Settings uses it to tell a setup that is still learning from one that is scoring.</summary>
+    public bool CoolingProfileHasBaseline(int id) =>
+        PastedKinds.Any(k => LockFor(k, new Regime(0, id).Id) is not null
+                             || LockFor(k, new Regime(1, id).Id) is not null);
 
     // ------------------------------------------------------------- lock plumbing
 
     private static ComponentKind[] PastedKinds { get; } = { ComponentKind.Cpu, ComponentKind.GpuDiscrete };
 
-    private static readonly int[] AllModes = { 0, 1 };
+    /// <summary>Every regime this install could have rows for: both ambient sources across
+    /// every declared cooling setup. Used where a change is physical and must invalidate all of
+    /// them (a repaste), so a setup the user isn't currently in can't keep a stale reference.</summary>
+    private IEnumerable<int> AllModes =>
+        _profiles.All().SelectMany(p => new[] { new Regime(0, p.Id).Id, new Regime(1, p.Id).Id });
 
-    /// <summary>Settings-key suffix for a mode. Mode 0 (weather) uses the original, unsuffixed
-    /// keys so an existing install's locks/markers keep working byte-for-byte; the fixed-indoor
-    /// mode's keys live beside them under ".fixed".</summary>
-    private static string ModeSuffix(int mode) => mode == 0 ? "" : ".fixed";
+    /// <summary>Settings-key suffix for a regime. The weather + default-setup regime uses the
+    /// original, unsuffixed keys so an existing install's locks/markers keep working byte for
+    /// byte, and the fixed-indoor regime keeps the ".fixed" it already had.</summary>
+    private static string ModeSuffix(int mode) => Regime.FromId(mode).KeySuffix;
 
     private static string LockKey(ComponentKind kind, int mode) => $"{SettingsKeys.BaselineLockedUtc}.{kind}{ModeSuffix(mode)}";
 

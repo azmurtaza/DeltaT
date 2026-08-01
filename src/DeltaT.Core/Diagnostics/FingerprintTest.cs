@@ -285,6 +285,13 @@ public sealed class FingerprintTest
         }
 
         _monitor.SnapshotCaptured += Collect;
+        // Everything from here until the run ends (plus its thermal tail) is DeltaT's own
+        // load. The result below is still recorded in fingerprint history and compared
+        // same-protocol against earlier runs; what this suppresses is the run leaking into
+        // the LEARNED telemetry, where a burner's operating point would stand in for a real
+        // workload's. Held across the whole run, settle and cooldown included, so the
+        // boundaries are clean.
+        using IDisposable synthetic = _monitor.BeginSyntheticLoad();
         try
         {
             await TickPhase("Settling. Hands off the machine", FingerprintStage.Settle, Settle, progress, ct).ConfigureAwait(false);
