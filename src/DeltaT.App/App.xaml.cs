@@ -451,6 +451,10 @@ public partial class App : Application
         var trends = new TrendsViewModel(_repo);
         var remarksFeed = new RemarksViewModel(_repo);
         _updates = new UpdateService(_settings);
+        // Settle the previous self-update before anything reads its state: if the version we
+        // handed to the installer is the one now running, the record is cleared and the next
+        // update starts from a clean slate.
+        _updates.ReconcileLastAttempt();
         _feedback = new FeedbackService(machine, IsElevated());
         var settingsVm = new SettingsViewModel(_settings, _ambient, _scores, machine, profile, _db,
             _updates, _monitor, () => _monitor.Latest, simulate, showUpdatesPanel: _uishotDir is not null);
@@ -514,6 +518,25 @@ public partial class App : Application
         };
         _scoreTimer.Start();
 
+        // A cooling setup switch changes which baseline every reading is judged against, so the
+        // dials, aspect cells and diagnosis on screen belong to the setup the user just left.
+        // Rescore the moment they switch (and restart the timer from that pass) instead of
+        // leaving the previous setup's verdict up for the rest of the cadence.
+        _scores.RegimeChanged += () =>
+        {
+            Task.Run(() =>
+            {
+                try { _scores!.Compute(DateTimeOffset.UtcNow); }
+                catch (Exception ex) { Log("score", ex); }
+            });
+            Dispatcher.BeginInvoke(() =>
+            {
+                _scoreTimer!.Stop();
+                _scoreTimer.Interval = TimeSpan.FromSeconds(30);
+                _scoreTimer.Start();
+            });
+        };
+
         // Second-instance "show me" signal.
         _showWait = ThreadPool.RegisterWaitForSingleObject(_showSignal!,
             (_, _) => Dispatcher.BeginInvoke(ShowMainWindow), null, -1, executeOnlyOnce: false);
@@ -551,6 +574,25 @@ public partial class App : Application
             if (release is null)
                 return;
 
+            // Did the last handoff actually take? If not, this is the launch that would
+            // otherwise start the cycle over. Stop after a couple of tries and say why:
+            // an install blocked by antivirus or a declined administrator prompt is never
+            // going to succeed on the next restart either, and retrying it forever leaves
+            // the app up for seconds at a time.
+            if (_updates.Gate(release, DateTimeOffset.UtcNow) == UpdateAttempt.Failing)
+            {
+                Version failed = release.Version;
+                Log("update", new InvalidOperationException(_updates.DescribeFailure(failed)));
+                if (_updates.ShouldAnnounceFailure(failed))
+                    Dispatcher.Invoke(() => _tray?.ShowInfo("DeltaT could not update itself",
+                        $"Installing {release.Tag} keeps failing, so DeltaT stopped trying. "
+                        + "Install it by hand from the project page (Settings has the link)."));
+                return;
+            }
+
+            if (!UpdateService.IsElevated)
+                return; // the silent setup needs admin; Settings offers a manual update instead
+
             string? installer = await _updates.DownloadAsync(release);
             if (installer is null)
                 return;
@@ -558,7 +600,7 @@ public partial class App : Application
             Dispatcher.Invoke(() => _tray?.ShowInfo("DeltaT is updating",
                 $"Installing {release.Tag}. DeltaT will restart in a moment."));
             await Task.Delay(TimeSpan.FromSeconds(2)); // give the toast a beat to show
-            _updates.ApplyAndRelaunch(installer);
+            _updates.ApplyAndRelaunch(installer, release.Version);
         }
         catch (Exception ex)
         {
@@ -759,6 +801,7 @@ public partial class App : Application
         _remarks?.Dispose();
         _tray?.Dispose();
         _pipeline?.Dispose(); // flushes buffered telemetry
+        try { _settings?.Flush(); } catch { } // land any settings write that was handed off the UI thread
         try { _monitor?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3)); } catch { }
         try { _ambient?.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(1)); } catch { }
         _showWait?.Unregister(null);

@@ -721,6 +721,7 @@ public class ScoreCoordinatorTests : IDisposable
 
     public void Dispose()
     {
+        _settings.Flush(); // a deferred settings write (cooling-setup switch) may still be in flight
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }

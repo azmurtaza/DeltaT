@@ -133,7 +133,8 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Behavior">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Behavior"
+                                            Margin="0,0,0,14">
                         <StackPanel>
                             <Grid Style="{StaticResource SettingRow}">
                                 <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
@@ -191,6 +192,35 @@
                                 </StackPanel>
                             </Grid>
                         </StackPanel>
+                    </HeaderedContentControl>
+
+                    <!-- Support lives in its own card, not buried in Feedback: not everyone
+                         files a report, and a tip jar shouldn't hide behind one. A thin ember
+                         edge and heart glyph catch the eye without a loud filled button. It
+                         sits at the foot of the left column because that column runs shorter
+                         than the right one, so the page ends level instead of on dead space. -->
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Support DeltaT">
+                        <Border BorderBrush="{StaticResource Brush.Accent}" BorderThickness="1,0,0,0" Padding="12,2,0,2">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,14,0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Foreground="{StaticResource Brush.Accent}" FontSize="13"
+                                                   VerticalAlignment="Center" Margin="0,0,7,0" Text="&#x2665;"/>
+                                        <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
+                                                   Text="Free, no ads, no account."/>
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap"
+                                               Text="Built in spare time. If it earned its keep, a small tip keeps it improving. No pressure."/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource Button.Ghost}" Content="LEAVE A TIP"
+                                        VerticalAlignment="Center" Click="OnSupportDeltaT"
+                                        ToolTip="Binance Pay or USDT. Takes a few seconds, means a lot."/>
+                            </Grid>
+                        </Border>
                     </HeaderedContentControl>
 
                 </StackPanel>
@@ -258,7 +288,7 @@
                         </StackPanel>
                     </HeaderedContentControl>
 
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Warning limits" Margin="0,0,0,14">
+                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Warning limits">
                         <StackPanel>
                             <TextBlock Style="{StaticResource Text.Dim}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
                                        Text="Running hot on purpose? Set the sustained temperature DeltaT treats as too hot, so an overclock doesn't trip stock warnings. Drift against your own baseline is tracked regardless."/>
@@ -303,33 +333,6 @@
                                           IsChecked="{Binding HeadroomWarnings}"/>
                             </Grid>
                         </StackPanel>
-                    </HeaderedContentControl>
-
-                    <!-- Support lives in its own card, not buried in Feedback: not everyone
-                         files a report, and a tip jar shouldn't hide behind one. A thin ember
-                         edge and heart glyph catch the eye without a loud filled button. -->
-                    <HeaderedContentControl Style="{StaticResource Module.Quiet}" Header="Support DeltaT">
-                        <Border BorderBrush="{StaticResource Brush.Accent}" BorderThickness="1,0,0,0" Padding="12,2,0,2">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,14,0" VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Foreground="{StaticResource Brush.Accent}" FontSize="13"
-                                                   VerticalAlignment="Center" Margin="0,0,7,0" Text="&#x2665;"/>
-                                        <TextBlock Style="{StaticResource Text.Body}" FontSize="12.5" VerticalAlignment="Center"
-                                                   Text="Free, no ads, no account."/>
-                                    </StackPanel>
-                                    <TextBlock Style="{StaticResource Text.Dim}" FontSize="11" Margin="0,3,0,0" TextWrapping="Wrap"
-                                               Text="Built in spare time. If it earned its keep, a small tip keeps it improving. No pressure."/>
-                                </StackPanel>
-                                <Button Grid.Column="1" Style="{StaticResource Button.Ghost}" Content="LEAVE A TIP"
-                                        VerticalAlignment="Center" Click="OnSupportDeltaT"
-                                        ToolTip="Binance Pay or USDT. Takes a few seconds, means a lot."/>
-                            </Grid>
-                        </Border>
                     </HeaderedContentControl>
 
                 </StackPanel>

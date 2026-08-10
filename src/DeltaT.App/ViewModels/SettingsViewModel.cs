@@ -406,9 +406,18 @@ public partial class SettingsViewModel : ObservableObject
                 return;
             }
 
+            // A previous automatic attempt that kept failing is not a reason to refuse a
+            // manual one: the user is here, can answer the administrator prompt and can see
+            // what happens. Note what went wrong before, then start the count over.
+            string history = _updates.Gate(release, DateTimeOffset.UtcNow) == UpdateAttempt.Failing
+                ? "\n\nDeltaT already tried this update automatically and it did not take. "
+                  + "If it fails again, install it from the project page instead."
+                : "";
+
             MessageBoxResult answer = MessageBox.Show(
                 $"DeltaT {release.Tag} is available. You have {CurrentVersionText}.\n\n"
-                + "Download and install it now? DeltaT will close and reopen once it's done.",
+                + "Download and install it now? DeltaT will close and reopen once it's done."
+                + history,
                 "Update available", MessageBoxButton.YesNo, MessageBoxImage.Information);
             if (answer != MessageBoxResult.Yes)
             {
@@ -424,8 +433,9 @@ public partial class SettingsViewModel : ObservableObject
                 return;
             }
 
+            _updates.ClearAttempt();
             StatusText = "Installing… DeltaT will restart in a moment.";
-            _updates.ApplyAndRelaunch(installer); // shuts the app down; the helper relaunches it
+            _updates.ApplyAndRelaunch(installer, release.Version); // shuts the app down; the helper relaunches it
         }
         catch (Exception ex)
         {

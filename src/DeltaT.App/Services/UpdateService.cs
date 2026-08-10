@@ -47,6 +47,124 @@ public sealed class UpdateService
     public Task<ReleaseInfo?> CheckAsync(CancellationToken ct = default) =>
         _checker.CheckAsync(CurrentVersion, ct);
 
+    /// <summary>The setup needs administrator rights (it writes Program Files and registers
+    /// the logon task). A helper spawned from a non-elevated DeltaT inherits that token, so
+    /// the silent install would sit behind a UAC prompt nobody is there to answer. Checked
+    /// before the unattended startup handoff; the manual button in Settings is allowed to
+    /// prompt, since the user is standing right there.</summary>
+    public static bool IsElevated =>
+        new System.Security.Principal.WindowsPrincipal(
+            System.Security.Principal.WindowsIdentity.GetCurrent())
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+
+    /// <summary>Where the update helper leaves the setup's exit code, so the relaunched app
+    /// can tell "installed" from "the installer never ran".</summary>
+    private static string ResultPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DeltaT", "update-result.txt");
+
+    // ---- Loop breaker -----------------------------------------------------------------
+    // An install that cannot succeed used to repeat on every launch: check, download 57 MB,
+    // hand off, get relaunched by the helper, repeat. The app stayed up for seconds at a
+    // time. DeltaT now remembers which version it handed to the installer and stops after
+    // UpdateAttemptGate.MaxAttempts if the running version never catches up.
+
+    private Version? AttemptedVersion =>
+        _settings.Get(SettingsKeys.UpdateAttemptVersion) is { } s && Version.TryParse(s, out Version? v) ? v : null;
+
+    private int AttemptCount =>
+        int.TryParse(_settings.Get(SettingsKeys.UpdateAttemptCount), out int n) ? n : 0;
+
+    /// <summary>Call once at startup: if the version we last handed to the installer is the
+    /// one now running, the update landed and the record goes away. Returns the version whose
+    /// install FAILED (still recorded, still not running), or null when all is well.</summary>
+    public Version? ReconcileLastAttempt()
+    {
+        Version? attempted = AttemptedVersion;
+        if (attempted is null)
+            return null;
+        if (UpdateAttemptGate.Succeeded(attempted, CurrentVersion))
+        {
+            ClearAttempt();
+            return null;
+        }
+        return attempted;
+    }
+
+    /// <summary>Whether this release may be handed to the installer now, or has already
+    /// failed enough times that retrying would just restart the loop.</summary>
+    public UpdateAttempt Gate(ReleaseInfo release, DateTimeOffset now) =>
+        UpdateAttemptGate.Evaluate(
+            AttemptedVersion, AttemptCount, _settings.GetTimestamp(SettingsKeys.UpdateAttemptUtc),
+            release.Version, now);
+
+    /// <summary>The setup's exit code from the last handoff, or null if it never reported
+    /// one. 0 means the installer itself said it succeeded. Used only to explain a failure.</summary>
+    public int? LastInstallerExitCode
+    {
+        get
+        {
+            try
+            {
+                return File.Exists(ResultPath) && int.TryParse(File.ReadAllText(ResultPath).Trim(), out int code)
+                    ? code : null;
+            }
+            catch { return null; }
+        }
+    }
+
+    /// <summary>One line on why the last update did not take, for Settings and the log.</summary>
+    public string DescribeFailure(Version attempted) => LastInstallerExitCode switch
+    {
+        HelperNotStarted or HelperThrew =>
+            $"DeltaT {Label(attempted)} could not be installed: the setup never started, "
+            + "which usually means it was blocked by antivirus or the administrator prompt was declined.",
+        0 =>
+            $"DeltaT {Label(attempted)} reported a successful install but the old version is still running. "
+            + "Something is putting the files back, most likely antivirus.",
+        { } code =>
+            $"DeltaT {Label(attempted)} could not be installed (setup exit code {code}).",
+        null =>
+            $"DeltaT {Label(attempted)} could not be installed.",
+    };
+
+    private const int HelperNotStarted = -1;
+    private const int HelperThrew = -2;
+
+    private static string Label(Version v) => $"v{v.Major}.{v.Minor}.{v.Build}";
+
+    /// <summary>Records that this version is about to be handed to the installer. Written
+    /// BEFORE the handoff, because the handoff shuts this process down.</summary>
+    private void RecordAttempt(Version version)
+    {
+        Version? attempted = AttemptedVersion;
+        int count = attempted == version ? AttemptCount + 1 : 1;
+        _settings.Set(SettingsKeys.UpdateAttemptVersion, version.ToString());
+        _settings.Set(SettingsKeys.UpdateAttemptCount, count.ToString());
+        _settings.SetTimestamp(SettingsKeys.UpdateAttemptUtc, DateTimeOffset.UtcNow);
+        TryDelete(ResultPath);
+    }
+
+    /// <summary>Forget the attempt history, so the next check starts clean. Used when the
+    /// update landed, and when the user asks for one by hand from Settings.</summary>
+    public void ClearAttempt()
+    {
+        _settings.Set(SettingsKeys.UpdateAttemptVersion, "");
+        _settings.Set(SettingsKeys.UpdateAttemptCount, "");
+        _settings.Set(SettingsKeys.UpdateFailureNoticed, "");
+        TryDelete(ResultPath);
+    }
+
+    /// <summary>True the first time a given failing version is seen, so the user is told
+    /// once rather than on every launch.</summary>
+    public bool ShouldAnnounceFailure(Version attempted)
+    {
+        if (_settings.Get(SettingsKeys.UpdateFailureNoticed) == attempted.ToString())
+            return false;
+        _settings.Set(SettingsKeys.UpdateFailureNoticed, attempted.ToString());
+        return true;
+    }
+
     /// <summary>The certificate subject DeltaT's own setup is signed with. When this is set,
     /// the updater refuses to run any download not signed by it, which is the only check that
     /// proves a setup came from the maintainer rather than merely arriving over HTTPS.
@@ -74,6 +192,14 @@ public sealed class UpdateService
             string dir = Path.Combine(Path.GetTempPath(), "DeltaT-update");
             Directory.CreateDirectory(dir);
             path = Path.Combine(dir, $"DeltaT-Setup-{release.Version}.exe");
+
+            // Already here from a previous attempt and provably the right file? Then don't
+            // pull 57 MB again. Only ever reused when the release published a digest we can
+            // check it against; an unverifiable leftover is re-downloaded.
+            if (release.Sha256 is { } cached && File.Exists(path)
+                && HashMatches(await File.ReadAllBytesAsync(path, ct), cached))
+                return SignedOrNothing(path);
+
             byte[] bytes = await _http.GetByteArrayAsync(release.DownloadUrl, ct);
             if (bytes.Length < 100_000)
                 return null;
@@ -86,15 +212,7 @@ public sealed class UpdateService
                 return null;
 
             await File.WriteAllBytesAsync(path, bytes, ct);
-
-            // Authenticity: who signed it. Skipped only while no cert is pinned.
-            if (!string.IsNullOrEmpty(ExpectedSigner) && !Authenticode.IsSignedBy(path, ExpectedSigner))
-            {
-                TryDelete(path);
-                return null;
-            }
-
-            return path;
+            return SignedOrNothing(path);
         }
         catch
         {
@@ -102,6 +220,17 @@ public sealed class UpdateService
                 TryDelete(path);
             return null;
         }
+    }
+
+    /// <summary>Authenticity: who signed it. Skipped only while no cert is pinned.</summary>
+    private static string? SignedOrNothing(string path)
+    {
+        if (!string.IsNullOrEmpty(ExpectedSigner) && !Authenticode.IsSignedBy(path, ExpectedSigner))
+        {
+            TryDelete(path);
+            return null;
+        }
+        return path;
     }
 
     /// <summary>Constant-time-ish compare of the download against the published digest.</summary>
@@ -118,16 +247,32 @@ public sealed class UpdateService
     }
 
     /// <summary>Run the setup silently through a detached helper, then relaunch DeltaT and
-    /// shut this instance down so the installer can replace the binaries.</summary>
-    public void ApplyAndRelaunch(string installerPath)
+    /// shut this instance down so the installer can replace the binaries.
+    ///
+    /// The attempt is recorded first, because this process is about to end: if the install
+    /// does not take, the relaunched app reads that record and refuses to try the same
+    /// version forever (see <see cref="UpdateAttemptGate"/>).</summary>
+    public void ApplyAndRelaunch(string installerPath, Version version)
     {
+        RecordAttempt(version);
+
         string exe = Process.GetCurrentProcess().MainModule?.FileName
                      ?? Path.Combine(AppContext.BaseDirectory, "DeltaT.App.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(ResultPath)!);
 
-        // Wait out the install, pause a beat for file handles to release, then relaunch
-        // into the tray. Single-quoted paths so spaces (Program Files) are safe.
+        // Wait out the install, record what the setup actually said, pause a beat for file
+        // handles to release, then relaunch into the tray. The relaunch is unconditional on
+        // purpose: DeltaT was force-closed by the installer and the user expects it back
+        // whether or not the update worked. What must NOT be unconditional is trying again,
+        // which is why the exit code is written down for the next launch to read. A declined
+        // administrator prompt or an antivirus block throws instead of returning a code, so
+        // that case is caught and recorded too.
+        // Single-quoted paths so spaces (Program Files) are safe.
         string command =
-            $"Start-Process -Wait -FilePath '{installerPath}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'; " +
+            $"$code = {HelperNotStarted}; " +
+            $"try {{ $p = Start-Process -Wait -PassThru -FilePath '{installerPath}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'; $code = $p.ExitCode }} " +
+            $"catch {{ $code = {HelperThrew} }}; " +
+            $"try {{ Set-Content -LiteralPath '{ResultPath}' -Value $code -Encoding ascii }} catch {{ }}; " +
             $"Start-Sleep -Seconds 1; " +
             $"Start-Process -FilePath '{exe}' -ArgumentList '--minimized'";
 

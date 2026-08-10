@@ -10,6 +10,7 @@ public sealed class SettingsStore
     private readonly DeltaTDb _db;
     private readonly Dictionary<string, string> _cache = new();
     private readonly object _gate = new();
+    private Task _deferredWrites = Task.CompletedTask;
 
     public SettingsStore(DeltaTDb db)
     {
@@ -30,6 +31,44 @@ public sealed class SettingsStore
     public void Set(string key, string value)
     {
         lock (_gate) _cache[key] = value;
+        Persist(key, value);
+    }
+
+    /// <summary>Set a value without waiting for the database. The in-memory cache (which every
+    /// read goes through) is updated synchronously, so the new value is live the instant this
+    /// returns; only the row write is handed to a background writer.
+    ///
+    /// <para>For settings a user flips from the UI thread. A settings write is a SQLite write,
+    /// and SQLite serializes writers: if the telemetry batch or a scoring pass happens to hold
+    /// the write lock, the call blocks on <c>busy_timeout</c> (5 s) and the click visibly hangs.
+    /// Nothing about that wait makes the setting more correct, since the cache already answers
+    /// every read. Writes are chained, so two sets of the same key still land in order, and a
+    /// crash in the millisecond before the row lands simply leaves the previous value.</para></summary>
+    public void SetDeferred(string key, string value)
+    {
+        lock (_gate)
+        {
+            _cache[key] = value;
+            _deferredWrites = _deferredWrites.ContinueWith(
+                _ => Persist(key, value), CancellationToken.None,
+                TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+    }
+
+    public void SetIntDeferred(string key, int value) => SetDeferred(key, value.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>Waits for every <see cref="SetDeferred"/> write to reach the database. For
+    /// shutdown (and tests that tear the file down), so a deferred row is never in flight when
+    /// the connection goes away. Reads never need it: the cache already answers them.</summary>
+    public void Flush()
+    {
+        Task pending;
+        lock (_gate) pending = _deferredWrites;
+        pending.Wait();
+    }
+
+    private void Persist(string key, string value)
+    {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "INSERT INTO settings(key,value) VALUES($k,$v) ON CONFLICT(key) DO UPDATE SET value=$v;";
@@ -106,6 +145,16 @@ public static class SettingsKeys
     public const string AutostartEnabled = "app.autostart";
     public const string AutoUpdate = "app.autoUpdate";             // check GitHub for newer releases and self-update
     public const string FirstRunDone = "app.firstRunDone";
+
+    // Self-update bookkeeping. The updater shuts the app down to hand off to the setup and
+    // the helper brings it back either way, so without a record of what was already tried a
+    // failing install repeats on every launch forever (see UpdateAttemptGate). These are
+    // cleared the moment the running version catches up with what was attempted.
+    public const string UpdateAttemptVersion = "app.updateAttemptVersion"; // version last handed to the installer
+    public const string UpdateAttemptCount = "app.updateAttemptCount";     // how many times, for that version
+    public const string UpdateAttemptUtc = "app.updateAttemptUtc";         // when the last attempt started
+    public const string UpdateFailureNoticed = "app.updateFailNoticed";    // version whose failure was already reported to the user
+
     public const string WhatsNewShownVersion = "app.whatsNewShown"; // "M.m.b" of the last release whose what's-new popup was shown
     public const string FeedbackContact = "feedback.lastContact";   // last contact info typed into a feedback report, remembered for next time
 

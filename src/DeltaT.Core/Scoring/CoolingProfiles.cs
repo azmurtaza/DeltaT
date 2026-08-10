@@ -109,8 +109,11 @@ public sealed class CoolingProfileStore
     /// fixed-indoor toggle already behaves.</summary>
     public void SetActive(int id)
     {
+        // Deferred: switching is a user gesture on the UI thread, and the switch is in force the
+        // moment the cache holds it. Waiting on the settings row would park the click behind
+        // whatever else happens to be writing to the database.
         if (All().Any(p => p.Id == id))
-            _settings.SetInt(SettingsKeys.ActiveCoolingProfile, id);
+            _settings.SetIntDeferred(SettingsKeys.ActiveCoolingProfile, id);
     }
 
     /// <summary>Adds a setup and returns it. Ids are assigned above every id ever used (tracked
