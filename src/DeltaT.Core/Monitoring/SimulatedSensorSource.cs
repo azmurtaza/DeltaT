@@ -123,9 +123,12 @@ public sealed class SimulatedSensorSource : ISensorSource
         };
 
         double ramUsed = Clamp(6.5 + _cpuLoad * 0.05 + Noise(0.2), 2, 15.5);
+        // Modules with an SPD thermal sensor report one; they idle warm and follow the chassis
+        // rather than the CPU die, so this tracks load gently.
+        double ramTemp = Clamp(38 + _cpuLoad * 0.12 + Noise(0.3), 30, 80);
         components.Add(new ComponentReading(
             ComponentKind.Ram, "Simulated 16 GB DDR5",
-            null, null, Math.Round(ramUsed / 16.0 * 100, 1), null, null, null, false, null,
+            Math.Round(ramTemp, 1), null, Math.Round(ramUsed / 16.0 * 100, 1), null, null, null, false, null,
             MemUsedGb: Math.Round(ramUsed, 1), MemTotalGb: 16));
         components.Add(new ComponentReading(ComponentKind.Battery, "Simulated Battery",
             null, null, null, null, null, 7.0, false, null, BatteryCycles: 214));

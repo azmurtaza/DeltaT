@@ -490,15 +490,21 @@ public class TelemetryPipelineTests : IDisposable
     public void PowerNormalizedSessionMeans_TightenGpuWattageScatter_AndUnlockConfidence()
     {
         // A discrete GPU cell (Max, warm) learned across five game sessions at very different
-        // wattages. Raw ΔT scatters with the watts (ΔT ∝ P), so the readiness gate used to read
-        // it as un-lockable noise (the GPU "stuck at 80%" report). Normalizing each session to
-        // the cell's own mean power strips exactly that variance, leaving a tight lockable signal.
+        // wattages. Raw ΔT scatters with the watts, so the readiness gate used to read it as
+        // un-lockable noise (the GPU "stuck at 80%" report). Transporting each session to the
+        // cell's own operating point strips exactly that variance, leaving a tight lockable signal.
+        //
+        // The rise obeys the real fitted physics, ΔT = 15 + 0.35·W, NOT ΔT ∝ W: the correction
+        // has to survive a constant offset, since that offset (rise measured over the OUTDOOR
+        // temperature, plus board and VRM heat) is exactly what a watt ratio scales by mistake.
         const int band = (int)AmbientBand.Warm;
+        const double intercept = 15.0, slope = 0.35;
+        static double Rise(double w) => intercept + slope * w;
         long baseMinute = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
 
         (double Power, double Delta)[] sessions =
         {
-            (40, 40), (60, 60), (50, 50), (45, 45), (55, 55), // identical resistance, watts vary
+            (30, Rise(30)), (110, Rise(110)), (50, Rise(50)), (70, Rise(70)), (90, Rise(90)),
         };
         var rows = new List<MinuteAccum>();
         for (int si = 0; si < sessions.Length; si++)
@@ -519,13 +525,30 @@ public class TelemetryPipelineTests : IDisposable
         long from = baseMinute - 60, to = baseMinute + 6 * 3600;
         IReadOnlyList<double> raw = _repo.GetSessionMeanDeltas(
             ComponentKind.GpuDiscrete, "GPU", LoadBucket.Max, band, true, from, to, BaselineBuilder.SessionGapSeconds);
+        // The response comes from the real path: cells this machine learned, fitted by the same
+        // BaselineBuilder.FitResponse the readiness gate calls.
+        var learned = new List<BucketStat>();
+        foreach ((LoadBucket bucket, double w, int mins) in new[]
+                 {
+                     (LoadBucket.Idle, 10.0, 400), (LoadBucket.Light, 25.0, 200),
+                     (LoadBucket.Medium, 50.0, 90), (LoadBucket.Heavy, 80.0, 60), (LoadBucket.Max, 110.0, 30),
+                 })
+            learned.Add(new BucketStat(bucket, band, true, mins, mins * 30,
+                30 + Rise(w), 40, 95, 90, Rise(w), null, 0, null, w));
+
+        ThermalResponse? fit = BaselineBuilder.FitResponse(learned);
+        Assert.NotNull(fit);
+        Assert.Equal(slope, fit!.SelfSlopeCPerW, 2);
+        Assert.Equal(intercept, fit.InterceptC, 1);
+
         IReadOnlyList<double> norm = _repo.GetSessionMeanDeltasPowerNormalized(
-            ComponentKind.GpuDiscrete, "GPU", LoadBucket.Max, band, true, from, to, BaselineBuilder.SessionGapSeconds);
+            ComponentKind.GpuDiscrete, "GPU", LoadBucket.Max, band, true, from, to, BaselineBuilder.SessionGapSeconds, fit);
 
         Assert.Equal(5, raw.Count);
         Assert.Equal(5, norm.Count);
         Assert.True(raw.Max() - raw.Min() >= 15, "raw deltas should scatter with wattage");
-        Assert.True(norm.Max() - norm.Min() <= 0.5, "power-normalized deltas should collapse to the resistance");
+        Assert.True(norm.Max() - norm.Min() <= 0.5,
+            $"transported deltas should collapse to the cell's operating point, spread {norm.Max() - norm.Min():0.##}");
 
         // Feed both into the real readiness gate: raw scatter stays unlocked, normalized locks.
         var stat = new[] { new BucketStat(LoadBucket.Max, band, true, 50, 1500, 80, 60, 95, 90, 50, null, 0, null, 50) };

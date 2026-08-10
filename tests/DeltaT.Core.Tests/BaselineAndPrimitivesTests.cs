@@ -232,6 +232,40 @@ public class BaselineBuilderTests
     }
 
     [Fact]
+    public void MeterProgress_HasNoDeadZone_OnceCoverageIsComplete()
+    {
+        // The literal "stuck at 80%" symptom. Coverage (loaded minutes + independent sessions)
+        // saturates within a couple of sessions, and it used to own the meter up to a flat 0.8
+        // ceiling while the confidence term only overtook it at 80% of the lock bar. Everything
+        // between those two points displayed exactly 80.0%, and since the meter is ratcheted it
+        // sat there frozen — visually identical to a hung calibration, for as long as the machine
+        // took to get precise. The meter must now answer every step of confidence.
+        var saturated = new[] { Stat(LoadBucket.Heavy, 600) };
+        double[] shown = new[] { 0.0, 0.15, 0.30, 0.45, 0.60 }
+            .Select(c => BaselineBuilder.MeterProgress(saturated, 5, c, cure: 1.0, pasteIsFresh: false))
+            .ToArray();
+
+        for (int i = 1; i < shown.Length; i++)
+            Assert.True(shown[i] - shown[i - 1] > 0.02,
+                $"the meter must visibly move with confidence; step {i} went {shown[i - 1]:0.###} → {shown[i]:0.###}");
+
+        Assert.True(shown[^1] < 1.0, "and still must not read 100% before the lock");
+        Assert.Equal(1.0,
+            BaselineBuilder.MeterProgress(saturated, 5, BaselineBuilder.ReadyConfidence, 1.0, false), 3);
+    }
+
+    [Fact]
+    public void MeterProgress_CoverageAlone_CannotFillTheBar()
+    {
+        // The property the old 0.8 ceiling existed to guarantee, kept: all the load coverage in
+        // the world with no statistical confidence behind it is not a finished calibration.
+        double p = BaselineBuilder.MeterProgress(
+            new[] { Stat(LoadBucket.Heavy, 10000) }, loadedSessions: 50,
+            confidence: 0, cure: 1.0, pasteIsFresh: false);
+        Assert.True(p <= 0.55, $"coverage alone must not look nearly done, got {p}");
+    }
+
+    [Fact]
     public void MeterProgress_IdleOnly_ShowsOnlyTheWarmupNub()
     {
         // Idle history can never calibrate paste, so the meter stays near a small
@@ -380,6 +414,55 @@ public class PrimitivesTests
         Assert.False(ComponentKind.Ram.HasPaste());
     }
 
+    [Fact]
+    public void DimmTemperature_ReadsTheModule_NotItsCriticalLimit()
+    {
+        // The exact sensor set from the reporting machine (Legion 7i Pro 16IRX8H, two Samsung
+        // M425R2GA3BB0 DDR5 modules). Both SPD nodes' Temperature sensors, in LHM's order.
+        var node0 = new (string, double)[]
+        {
+            ("DIMM #0", 51.0),
+            ("Temperature Sensor Resolution", 0.25),
+            ("Thermal Sensor Critical High Limit", 85),
+            ("Thermal Sensor Critical Low Limit", 0),
+            ("Thermal Sensor High Limit", 55),
+            ("Thermal Sensor Low Limit", 0),
+        };
+        var node2 = new (string, double)[]
+        {
+            ("DIMM #2", 49.5),
+            ("Temperature Sensor Resolution", 0.25),
+            ("Thermal Sensor Critical High Limit", 85),
+            ("Thermal Sensor Critical Low Limit", 0),
+            ("Thermal Sensor High Limit", 55),
+            ("Thermal Sensor Low Limit", 0),
+        };
+
+        // Hottest MODULE, not the 85 °C critical limit that shares the node and the sensor type,
+        // and not the 0.25 resolution that would win a "first temperature sensor" rule.
+        Assert.Equal(51.0, HardwareSensorSource.SelectDimmTemperature(node0.Concat(node2).ToList()));
+        Assert.Equal(49.5, HardwareSensorSource.SelectDimmTemperature(node2));
+
+        // A machine whose modules expose no SPD thermal sensor reports nothing, never a 0 and
+        // never a limit scraped off some other node.
+        Assert.Null(HardwareSensorSource.SelectDimmTemperature(
+            node0.Where(s => !s.Item1.StartsWith("DIMM")).ToList()));
+        Assert.Null(HardwareSensorSource.SelectDimmTemperature(Array.Empty<(string, double)>()));
+
+        // A module reading back an implausible SPD word is dropped rather than displayed.
+        Assert.Null(HardwareSensorSource.SelectDimmTemperature(new[] { ("DIMM #0", 0.0) }));
+        Assert.Null(HardwareSensorSource.SelectDimmTemperature(new[] { ("DIMM #0", 255.0) }));
+    }
+
+    [Fact]
+    public void Ram_WithADimmTemperature_IsStillNeverAPasteComponent()
+    {
+        // Giving the RAM card a temperature puts it on exactly the footing Battery and SSD are
+        // already on: its thermal history is recorded and charted, and it is never scored for
+        // paste. HasPaste is the only gate that decides that, so it must stay false.
+        Assert.False(ComponentKind.Ram.HasPaste());
+    }
+
     [Theory]
     // LHM exposes both nodes with identical sensor names, so only the name tells them apart.
     // Measured on the dev machine: "Total Memory" = 9.4/15.7 GB physical, "Virtual Memory" =
@@ -439,7 +522,11 @@ public class PrimitivesTests
 
         Assert.True(ram >= 0 && battery > ram, "the RAM card must come before the battery");
         ComponentReading mem = snap.Components[ram];
-        Assert.Null(mem.TemperatureC);                 // usage only, no thermal
+        // Modules that expose an SPD thermal sensor report one, so the simulated machine has one
+        // too. It is still not a paste component (see Ram_WithADimmTemperature_...), and a real
+        // machine whose modules have no sensor reports null rather than a fabricated number.
+        Assert.NotNull(mem.TemperatureC);
+        Assert.InRange(mem.TemperatureC!.Value, 25, 85);
         Assert.NotNull(mem.LoadPercent);               // usage drives the load bar
         Assert.NotNull(mem.MemUsedGb);
         Assert.NotNull(mem.MemTotalGb);

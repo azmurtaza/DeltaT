@@ -41,6 +41,12 @@ public sealed class ScoreCoordinator
 
     public event Action<IReadOnlyDictionary<ComponentKind, ComponentScore>>? ScoresUpdated;
 
+    /// <summary>The reference regime changed under DeltaT's feet (a cooling setup was switched,
+    /// added or forgotten). Everything on screen is still the previous setup's verdict, so the
+    /// host rescores immediately instead of leaving the old numbers up until the next timed
+    /// pass. Raised on whichever thread made the change; the handler owns getting off it.</summary>
+    public event Action? RegimeChanged;
+
     /// <summary>Set when a Compute() pass sees this epoch's own components turn ready for the
     /// first time. Scoped to <see cref="EpochKinds"/>: after a CPU-only repaste the GPU is still
     /// locked and ready, and that must not read as the new CPU baseline having landed.</summary>
@@ -276,6 +282,7 @@ public sealed class ScoreCoordinator
         _profiles.SetActive(profile.Id);
         _wasReady = false;
         _scopeWasReady = false;
+        RegimeChanged?.Invoke();
         return profile;
     }
 
@@ -288,6 +295,7 @@ public sealed class ScoreCoordinator
         _profiles.SetActive(id);
         _wasReady = false;
         _scopeWasReady = false;
+        RegimeChanged?.Invoke();
     }
 
     /// <summary>Forget a cooling setup and everything it learned. Its rows measured a machine
@@ -302,6 +310,7 @@ public sealed class ScoreCoordinator
         _profiles.Remove(id);
         _wasReady = false;
         _scopeWasReady = false;
+        RegimeChanged?.Invoke();
     }
 
     /// <summary>Whether a cooling setup has ever locked a baseline (in either ambient mode).
@@ -724,12 +733,18 @@ public sealed class ScoreCoordinator
             c.Kind, c.Name, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode);
 
         // The readiness gate judges session means power-NORMALIZED, matching what the locked
-        // scorer actually compares (thermal resistance, not raw ΔT). This stops a GPU's
-        // game-to-game wattage scatter from reading as un-lockable noise. The stored baseline
-        // SE (BaselineBuilder.Build) still uses the raw query — only readiness changes here.
+        // scorer actually compares (like-for-like at one operating point, not raw ΔT). This stops
+        // a machine's session-to-session wattage scatter from reading as un-lockable noise. The
+        // correction is the same fitted response scoring uses, over the same cells the gate is
+        // judging, so the gate and the scorer can never disagree about what "comparable" means.
+        // The stored baseline SE (BaselineBuilder.Build) still uses the raw query — only
+        // readiness changes here.
+        ThermalResponse? response = BaselineBuilder.FitResponse(baselineStats);
+
         return BaselineBuilder.Assess(epochStart, nowUtc, baselineStats,
             (bucket, band) => _repo.GetSessionMeanDeltasPowerNormalized(
-                c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds, mode),
+                c.Kind, c.Name, bucket, band, onAc: true, epochStartTs, end, BaselineBuilder.SessionGapSeconds,
+                response, mode),
             loadedSessions,
             pasteIsFresh: EpochReason == "repaste");
     }

@@ -175,6 +175,11 @@ if (args.Contains("--eval", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"  lone thin cell vetoes a ready base:  {calib.RareCellVetoRate * 100,5:0.0}%  (want ~0)");
     Console.WriteLine($"  scattered GPU locks, raw ΔT:         {calib.GpuRawLockRate * 100,5:0.0}%  (the stuck GPU)");
     Console.WriteLine($"  scattered GPU locks, power-adjusted: {calib.GpuNormLockRate * 100,5:0.0}%  (the fix)");
+    Console.WriteLine("  CPU whose watts swing inside one load bucket:");
+    Console.WriteLine("    correction applied by the gate     locks   mean session SE");
+    Console.WriteLine($"      none (raw ΔT)                  {calib.CpuRawLockRate * 100,5:0.0}%        {calib.CpuRawMeanSeC,5:0.00} °C");
+    Console.WriteLine($"      ΔT × meanW/W  (through v2.3.0) {calib.CpuRatioLockRate * 100,5:0.0}%        {calib.CpuRatioMeanSeC,5:0.00} °C  worse than none");
+    Console.WriteLine($"      fitted transport (the fix)     {calib.CpuFittedLockRate * 100,5:0.0}%        {calib.CpuFittedMeanSeC,5:0.00} °C");
     Console.WriteLine();
 
     // Intel PL2 thermal-constraint disambiguation: an absolute (day-one) signal read from the

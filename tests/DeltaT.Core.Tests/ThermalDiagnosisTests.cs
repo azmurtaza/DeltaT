@@ -391,6 +391,35 @@ public class CalibrationFidelityTests
         Assert.True(R.GpuNormLockRate - R.GpuRawLockRate >= 0.60,
             "power normalization must make a large, measurable difference to GPU calibration");
     }
+
+    [Fact]
+    public void CpuWattageSwing_LocksOnTheFittedResponse_NotTheWattRatio()
+    {
+        // The CPU half of the "stuck at 80%" report, and the reason it hit the CPU while the GPU
+        // beside it locked in days: a GPU under load rides near its power limit, so the watt ratio
+        // was ≈1 and harmless, while a CPU's package watts swing widely inside one load bucket.
+        //
+        // The ratio correction is not merely weaker there, it is WORSE THAN NOT CORRECTING. It
+        // scales the rise's constant offset (measured ~18 °C) by the same ratio as the signal, so
+        // inside one bucket it manufactures session-to-session scatter instead of removing it.
+        // That is the whole finding: a gate meant to see through wattage noise was adding it.
+        Assert.True(R.CpuRatioMeanSeC > R.CpuRawMeanSeC,
+            $"the watt-ratio model must be measurably worse than raw ΔT (ratio SE {R.CpuRatioMeanSeC:0.###} °C "
+            + $"vs raw {R.CpuRawMeanSeC:0.###} °C); if this ever passes, the generator has gone back to "
+            + "assuming rise ∝ watts and this measurement is blind again");
+        Assert.True(R.CpuRatioLockRate < R.CpuRawLockRate,
+            $"the watt-ratio model must lock LESS often than no correction, got {R.CpuRatioLockRate * 100:0.0}% "
+            + $"against {R.CpuRawLockRate * 100:0.0}%");
+
+        // And the additive fitted transport must actually fix it, by a wide margin.
+        Assert.True(R.CpuFittedMeanSeC <= 0.7,
+            $"fitted transport should pin the session mean to about the target SE, got {R.CpuFittedMeanSeC:0.###} °C");
+        Assert.True(R.CpuFittedLockRate >= 0.80,
+            $"a healthy CPU with swinging watts must reach a lock, got {R.CpuFittedLockRate * 100:0.0}% "
+            + $"(was {R.CpuRatioLockRate * 100:0.0}% on the shipped ratio model)");
+        Assert.True(R.CpuFittedLockRate - R.CpuRatioLockRate >= 0.60,
+            "the fix must make a large, measurable difference to CPU calibration");
+    }
 }
 
 /// <summary>Intel PL2 thermal-constraint disambiguation (the absolute, day-one signal). A CPU

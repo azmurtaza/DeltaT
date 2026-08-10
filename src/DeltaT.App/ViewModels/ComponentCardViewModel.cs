@@ -43,6 +43,10 @@ public partial class ComponentCardViewModel : ObservableObject
     {
         ComponentKind.Storage => 90,  // NVMe throttle territory
         ComponentKind.Battery => 60,
+        // DDR4/DDR5 modules report their own critical limit as 85 °C (and their high limit as 55).
+        // Scaling a DIMM against a CPU's 100 would paint a module that is genuinely running hot
+        // as comfortably mid-range.
+        ComponentKind.Ram => 85,
         _ => 100,
     };
 

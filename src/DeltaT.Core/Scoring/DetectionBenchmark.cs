@@ -1579,7 +1579,15 @@ public static class DetectionBenchmark
         double StableMedianSessionsToLock,   // how few sessions a clean machine needs
         double RareCellVetoRate,             // fraction where one thin cell blocks a ready baseline (want ~0)
         double GpuRawLockRate,               // scattered GPU judged on RAW ΔT (pre-A2): want low
-        double GpuNormLockRate);             // same judged power-normalized (A2): want high
+        double GpuNormLockRate,              // same judged power-normalized (A2): want high
+        // A CPU whose package watts swing inside one load bucket, under the three corrections the
+        // readiness gate could apply. The ratio model is the one that shipped through v2.3.0.
+        double CpuRawLockRate,
+        double CpuRatioLockRate,             // ΔT × cellMeanW/minuteW: want LOWER than raw (it adds scatter)
+        double CpuFittedLockRate,            // additive ThermalResponse.Transport: want ~1
+        double CpuRawMeanSeC,                // mean session-mean SE under each model, in °C
+        double CpuRatioMeanSeC,
+        double CpuFittedMeanSeC);
 
     public static CalibrationFidelityResult RunCalibrationFidelity(int seed = 20260724, int trials = 400)
     {
@@ -1595,6 +1603,8 @@ public static class DetectionBenchmark
 
         var rng = new Random(seed);
         int stableLocks = 0, rareVetoes = 0, gpuRawLocks = 0, gpuNormLocks = 0;
+        int cpuRawLocks = 0, cpuRatioLocks = 0, cpuFittedLocks = 0;
+        double cpuRawSe = 0, cpuRatioSe = 0, cpuFittedSe = 0;
         var sessionsToLock = new List<int>();
 
         for (int t = 0; t < trials; t++)
@@ -1635,22 +1645,26 @@ public static class DetectionBenchmark
             if (!poisonReady)
                 rareVetoes++;
 
-            // (3) Scattered GPU: healthy tight resistance, watts vary a lot. Raw ΔT scatters;
-            // power-normalized (to the cell's mean watts) collapses to the resistance.
+            // (3) Scattered GPU: healthy and thermally tight, but watts vary a lot game to game.
+            // Raw ΔT scatters with the wattage; corrected to the cell's own operating point it
+            // collapses to the residual the gate is actually meant to judge.
             const int gs = 6;
-            var powers = new double[gs];
+            var gpuSelf = new double[gs];
+            var gpuCo = new double[gs];
             var raw = new double[gs];
             for (int s = 0; s < gs; s++)
             {
                 double p = Math.Clamp(60 + Gauss(rng, 14), 25, 110);
-                double resistance = 0.9 + Gauss(rng, 0.015); // healthy, tight °C/W
-                powers[s] = p;
-                raw[s] = resistance * p;
+                double co = Math.Clamp(20 + Gauss(rng, 5), 5, 45);
+                gpuSelf[s] = p;
+                gpuCo[s] = co;
+                raw[s] = Rise(GpuIntercept, GpuSelfSlope, GpuCoSlope, p, co) + Gauss(rng, 0.25);
             }
-            double meanP = powers.Average();
+            double meanP = gpuSelf.Average(), meanCo = gpuCo.Average();
+            var gpuFit = new ThermalResponse(GpuIntercept, GpuSelfSlope, GpuCoSlope, 25, 110, 0, gs);
             var norm = new double[gs];
             for (int s = 0; s < gs; s++)
-                norm[s] = raw[s] * Math.Clamp(meanP / powers[s], 0.5, 2.0);
+                norm[s] = raw[s] + gpuFit.Transport(gpuSelf[s], meanP, gpuCo[s], meanCo);
 
             var gpuStat = new[]
             {
@@ -1660,6 +1674,71 @@ public static class DetectionBenchmark
                 gpuRawLocks++;
             if (Ready(gpuStat, (b, bd) => b == LoadBucket.Max && bd == band ? norm : Array.Empty<double>(), gs))
                 gpuNormLocks++;
+
+            // (4) The CPU arm: a healthy laptop CPU whose package watts swing INSIDE one load
+            // bucket (boost stepping in and out, one thread or eight, a background task joining).
+            // This is the case the shipped ratio correction got backwards, and the reason a CPU
+            // could sit short of a lock for weeks while the GPU beside it locked in days: a GPU
+            // under load rides near its power limit, so cellMeanW/minuteW ≈ 1 and the ratio was a
+            // no-op, while a CPU's ratio genuinely swings and drags the offset around with it.
+            const int cs = 6;
+            var cpuSelf = new double[cs];
+            var cpuCo = new double[cs];
+            var cpuRaw = new double[cs];
+            for (int s = 0; s < cs; s++)
+            {
+                double p = Math.Clamp(30 + Gauss(rng, 6), 12, 55);
+                double co = Math.Clamp(15 + Gauss(rng, 6), 2, 40);
+                cpuSelf[s] = p;
+                cpuCo[s] = co;
+                cpuRaw[s] = Rise(CpuIntercept, CpuSelfSlope, CpuCoSlope, p, co) + Gauss(rng, 0.25);
+            }
+            double cpuMeanP = cpuSelf.Average(), cpuMeanCo = cpuCo.Average();
+
+            // The fit comes from the REAL path: cells this machine learned, through the same
+            // BaselineBuilder.FitResponse the readiness gate calls. If the fit can't be recovered
+            // from a plausible spread of learned cells, this arm is measuring nothing.
+            var learnedCells = new List<BucketStat>();
+            foreach ((LoadBucket bucket, double w, double cw, int mins) in new[]
+                     {
+                         (LoadBucket.Idle, 6.0, 4.0, 500),
+                         (LoadBucket.Light, 12.0, 8.0, 240),
+                         (LoadBucket.Medium, 20.0, 12.0, 90),
+                         (LoadBucket.Heavy, 30.0, 15.0, 60),
+                         (LoadBucket.Max, 42.0, 22.0, 25),
+                     })
+            {
+                double rise = Rise(CpuIntercept, CpuSelfSlope, CpuCoSlope, w, cw) + Gauss(rng, 0.4);
+                learnedCells.Add(new BucketStat(bucket, band, true, mins, mins * 30,
+                    40 + rise, 35, 50 + rise, 60, rise, 3000, 0, null, w, cw));
+            }
+            ThermalResponse? cpuFit = BaselineBuilder.FitResponse(learnedCells);
+
+            var cpuRatio = new double[cs];
+            var cpuFitted = new double[cs];
+            for (int s = 0; s < cs; s++)
+            {
+                // The shipped model, reproduced exactly: multiply the rise by the watt ratio.
+                cpuRatio[s] = cpuRaw[s] * Math.Clamp(cpuMeanP / cpuSelf[s], 0.5, 2.0);
+                cpuFitted[s] = cpuFit is null
+                    ? cpuRaw[s]
+                    : cpuRaw[s] + cpuFit.Transport(cpuSelf[s], cpuMeanP, cpuCo[s], cpuMeanCo);
+            }
+
+            var cpuStat = new[]
+            {
+                new BucketStat(LoadBucket.Heavy, band, true, 90, 2700, 80, 60, 95, 80, cpuRaw.Average(), 3000, 0, null, cpuMeanP, cpuMeanCo),
+            };
+            if (Ready(cpuStat, (b, bd) => b == LoadBucket.Heavy && bd == band ? cpuRaw : Array.Empty<double>(), cs))
+                cpuRawLocks++;
+            if (Ready(cpuStat, (b, bd) => b == LoadBucket.Heavy && bd == band ? cpuRatio : Array.Empty<double>(), cs))
+                cpuRatioLocks++;
+            if (Ready(cpuStat, (b, bd) => b == LoadBucket.Heavy && bd == band ? cpuFitted : Array.Empty<double>(), cs))
+                cpuFittedLocks++;
+
+            cpuRawSe += BaselineBuilder.StandardError(cpuRaw) ?? 0;
+            cpuRatioSe += BaselineBuilder.StandardError(cpuRatio) ?? 0;
+            cpuFittedSe += BaselineBuilder.StandardError(cpuFitted) ?? 0;
         }
 
         sessionsToLock.Sort();
@@ -1670,8 +1749,28 @@ public static class DetectionBenchmark
             median,
             rareVetoes / (double)trials,
             gpuRawLocks / (double)trials,
-            gpuNormLocks / (double)trials);
+            gpuNormLocks / (double)trials,
+            cpuRawLocks / (double)trials,
+            cpuRatioLocks / (double)trials,
+            cpuFittedLocks / (double)trials,
+            cpuRawSe / trials,
+            cpuRatioSe / trials,
+            cpuFittedSe / trials);
     }
+
+    // The physics every calibration arm obeys, and the whole reason this measurement was blind
+    // before: rise = a constant offset + a slope on this component's watts + a slope on the
+    // NEIGHBOUR's, exactly as fitted over the dev laptop's own history (R² 0.47 against -1.14 for
+    // the proportional model). The arm that "proved" power normalization helped the readiness
+    // gate used to generate rise = resistance × watts with a ZERO intercept, which is precisely
+    // the assumption the ratio correction encodes, so it agreed with that correction by
+    // construction and could not see it manufacture scatter. Same trap, same fix, as the headline
+    // suite's generator.
+    private const double CpuIntercept = 18.0, CpuSelfSlope = 0.45, CpuCoSlope = 0.18;
+    private const double GpuIntercept = 15.0, GpuSelfSlope = 0.35, GpuCoSlope = 0.10;
+
+    private static double Rise(double intercept, double selfSlope, double coSlope, double selfW, double coW) =>
+        intercept + selfSlope * selfW + coSlope * coW;
 
     // ===================== Intel PL2 thermal-constraint disambiguation =====================
     // The absolute (day-one) signal: an Intel CPU can report, via MSR 0x64F + 0x610, that it is

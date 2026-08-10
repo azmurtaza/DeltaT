@@ -1,4 +1,5 @@
 using DeltaT.Core.Monitoring;
+using DeltaT.Core.Scoring;
 using Microsoft.Data.Sqlite;
 
 namespace DeltaT.Core.Storage;
@@ -605,27 +606,43 @@ public sealed class TelemetryRepository
         return sessionMeans;
     }
 
-    /// <summary>Per-session mean deltas for one cell, each session normalized to the cell's
-    /// own mean package power before being averaged. This is the version the calibration
+    /// <summary>Per-session mean deltas for one cell, each minute transported to the cell's own
+    /// mean operating point before the sessions are averaged. This is the version the calibration
     /// CONFIDENCE gate consumes, and it exists to close a design gap: the locked scoring engine
-    /// compares power-normalized thermal resistance (ΔT × baselineW / recentW), but the readiness
-    /// gate used to demand tight agreement on RAW ΔT. A GPU pulls very different watts across
-    /// games at the same utilization, so its raw session means scatter and the gate read that as
-    /// "I don't know this machine yet" (the GPU "stuck at 80%" report), even though the scorer
-    /// would normalize the wattage away and never see the variance. Expressing every minute's
-    /// delta at the cell's mean power (ΔT × cellMeanW / minuteW, ratio clamped 0.5..2.0 like the
-    /// scorer) strips exactly the cross-session power variance the scorer itself ignores, leaving
-    /// the gate to judge the paste-relevant residual. Units stay °C, so the same target SE applies.
+    /// compares like-for-like at a common operating point, but the readiness gate used to demand
+    /// tight agreement on RAW ΔT. A GPU pulls very different watts across games at the same
+    /// utilization, so its raw session means scatter and the gate read that as "I don't know this
+    /// machine yet" (the original GPU "stuck at 80%" report), even though the scorer would correct
+    /// the wattage away and never see the variance.
     ///
-    /// Fail-safe: a minute with no power reading keeps its raw delta, and a cell with no power at
-    /// all (older GPUs, legacy pre-v6 rows) is byte-identical to <see cref="GetSessionMeanDeltas"/>.</summary>
+    /// <para>The correction is the machine's own fitted <see cref="ThermalResponse"/>, applied
+    /// ADDITIVELY (<see cref="ThermalResponse.Transport"/>), exactly as scoring does. It used to
+    /// be ΔT × cellMeanW / minuteW, and that was wrong here for the same measured reason it was
+    /// wrong in scoring: a rise is not proportional to package watts. It carries a large constant
+    /// offset (rise is over the OUTDOOR temperature, so every reading includes the indoor gap plus
+    /// board and VRM heat) plus the neighbour chip's heat through the shared heatpipe, and a watt
+    /// RATIO scales both of those along with the signal. Inside one load bucket that does not
+    /// remove scatter, it MANUFACTURES it: at a 18 °C offset and a bucket whose watts range
+    /// 24-36 W around a 30 W mean, the ratio invents ~7.6 °C of session-to-session spread where
+    /// the raw readings differed by 5.0 °C. That is why a CPU (whose package watts swing widely
+    /// inside one load bucket) could sit short of a lock indefinitely while a GPU (pinned near its
+    /// power limit, so the ratio was ~1 and the correction a no-op) locked normally.
+    /// <see cref="Scoring.DetectionBenchmark.RunCalibrationFidelity"/> measures both models.</para>
+    ///
+    /// Fail-safe: a minute with no power reading keeps its raw delta, no fit (too few cells, or
+    /// too little power spread to identify a slope) means no correction at all rather than a
+    /// guessed one, and a cell with no power anywhere (older GPUs, legacy pre-v6 rows) is
+    /// byte-identical to <see cref="GetSessionMeanDeltas"/>.</summary>
     public IReadOnlyList<double> GetSessionMeanDeltasPowerNormalized(
-        ComponentKind kind, string name, LoadBucket bucket, int band, bool onAc, long fromTs, long toTs, int gapSeconds, int mode = 0)
+        ComponentKind kind, string name, LoadBucket bucket, int band, bool onAc, long fromTs, long toTs, int gapSeconds,
+        ThermalResponse? response, int mode = 0)
     {
         using var conn = _db.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT minute, delta_sum/delta_n, CASE WHEN power_n > 0 THEN power_sum/power_n ELSE NULL END
+            SELECT minute, delta_sum/delta_n,
+                   CASE WHEN power_n > 0 THEN power_sum/power_n ELSE NULL END,
+                   CASE WHEN co_power_n > 0 THEN co_power_sum/co_power_n ELSE NULL END
             FROM agg_minute
             WHERE kind=$kind AND name=$name AND bucket=$bucket AND band=$band AND on_ac=$onac
               AND mode=$mode
@@ -641,9 +658,9 @@ public sealed class TelemetryRepository
         cmd.Parameters.AddWithValue("$to", toTs);
         cmd.Parameters.AddWithValue("$mode", mode);
 
-        var minutes = new List<(long Minute, double Delta, double? Power)>();
-        double powerSum = 0;
-        int powerN = 0;
+        var minutes = new List<(long Minute, double Delta, double? Power, double? CoPower)>();
+        double powerSum = 0, coPowerSum = 0;
+        int powerN = 0, coPowerN = 0;
         using (var reader = cmd.ExecuteReader())
         {
             while (reader.Read())
@@ -651,29 +668,41 @@ public sealed class TelemetryRepository
                 long minute = reader.GetInt64(0);
                 double delta = reader.GetDouble(1);
                 double? power = reader.IsDBNull(2) ? null : reader.GetDouble(2);
+                double? coPower = reader.IsDBNull(3) ? null : reader.GetDouble(3);
                 if (power is { } p && p > 0)
                 {
                     powerSum += p;
                     powerN++;
                 }
-                minutes.Add((minute, delta, power));
+                if (coPower is { } cp && cp > 0)
+                {
+                    coPowerSum += cp;
+                    coPowerN++;
+                }
+                minutes.Add((minute, delta, power, coPower));
             }
         }
 
-        // The reference the cell's readings are all expressed at: this cell's own mean watts.
+        // The reference the cell's readings are all expressed at: this cell's own mean operating
+        // point. Every minute is transported to it, so what survives is the paste-relevant
+        // residual and not the machine's wattage itinerary through the bucket.
         double? cellMeanPower = powerN > 0 ? powerSum / powerN : null;
+        double? cellMeanCoPower = coPowerN > 0 ? coPowerSum / coPowerN : null;
 
         var sessionMeans = new List<double>();
         long prevMinute = long.MinValue;
         double runSum = 0;
         int runN = 0;
-        foreach ((long minute, double delta, double? power) in minutes)
+        foreach ((long minute, double delta, double? power, double? coPower) in minutes)
         {
             double normalized = delta;
-            if (cellMeanPower is { } mean && power is { } p && p > 0)
+            if (response is not null && cellMeanPower is { } mean && power is { } p && p > 0)
             {
-                double ratio = Math.Clamp(mean / p, PowerRatioClampLow, PowerRatioClampHigh);
-                normalized = delta * ratio;
+                // Clamped like the scorer's own correction: a fit that has gone bad must degrade
+                // toward "barely corrected", never toward a rewritten reading.
+                normalized = delta + Math.Clamp(
+                    response.Transport(p, mean, coPower, cellMeanCoPower),
+                    -MaxTransportC, MaxTransportC);
             }
             if (runN > 0 && minute - prevMinute > gapSeconds)
             {
@@ -690,11 +719,10 @@ public sealed class TelemetryRepository
         return sessionMeans;
     }
 
-    // Power-ratio clamp band, mirroring the scoring engine's own correction limits: beyond a
-    // halving/doubling of watts the physics is no longer a clean linear rescale, so the ratio
-    // is capped rather than trusted (a comparability guard against sensor glitches).
-    private const double PowerRatioClampLow = 0.5;
-    private const double PowerRatioClampHigh = 2.0;
+    // Cap on how far one minute may be transported, mirroring ScoringEngine.MaxPowerCorrectionC.
+    // A within-bucket move is normally a couple of degrees; anything near this cap means the fit
+    // or the wattage reading is untrustworthy, and a bounded correction fails safer than a free one.
+    private const double MaxTransportC = ScoringEngine.MaxPowerCorrectionC;
 
     /// <summary>Distinct loaded (medium/heavy/full) usage bouts in a window, deduplicated
     /// across load buckets and ambient bands. A single gaming session oscillates between

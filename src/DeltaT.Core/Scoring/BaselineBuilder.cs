@@ -88,10 +88,19 @@ public static class BaselineBuilder
     /// of good sessions approach full.</summary>
     private const double LoadedMinuteScale = 20;
 
-    /// <summary>Ceiling for the data-accumulation ramp. The final approach to 100% is
-    /// reserved for genuine confidence, so the meter can't sit "almost done" on a machine
-    /// that has gathered plenty of load but is too noisy to actually lock.</summary>
-    private const double AccumDisplayCap = 0.8;
+    /// <summary>How much of the meter coverage alone can account for. Calibration is two jobs:
+    /// SEE this machine under load (coverage: loaded minutes and independent sessions) and know
+    /// its normal PRECISELY (confidence). Coverage owns the first half of the bar, confidence the
+    /// second, so the meter keeps moving through both instead of finishing one and stalling.
+    ///
+    /// <para>This replaces a flat 0.8 ceiling on the coverage ramp, which was a real dead zone:
+    /// coverage saturated within a couple of sessions and the confidence term only overtook it
+    /// once confidence reached 80% of the lock bar, so every machine between "seen enough load"
+    /// and "nearly locked" displayed exactly 80% — and because the meter is ratcheted, it sat
+    /// there frozen, indistinguishable from a hung calibration. It was the literal number in the
+    /// "stuck at 80%" reports. Coverage still cannot finish the bar on its own, which is the
+    /// property that ceiling existed to guarantee.</para></summary>
+    private const double CoverageShare = 0.5;
 
     /// <summary>Minutes a single (bucket, band) cell needs to earn a baseline row.</summary>
     public const int MinBucketMinutes = 8;
@@ -227,13 +236,20 @@ public static class BaselineBuilder
         // single session instead of stepping only when a session closes.
         double minuteFrac = 1 - Math.Exp(-loadedMinutes / LoadedMinuteScale);
         double sessionFrac = Math.Min(1.0, loadedSessions / (double)MinLoadedSessions);
-        double accum = AccumDisplayCap * (0.6 * minuteFrac + 0.4 * sessionFrac);
+        double coverage = 0.6 * minuteFrac + 0.4 * sessionFrac;
 
         // Real confidence, normalized so the lock threshold reads as a full meter. This is
         // what carries the final stretch to 100% and pins completion to the actual lock.
         double confShown = Math.Min(1.0, confidence / ReadyConfidence);
 
-        double display = Math.Max(warmup, Math.Max(accum, confShown));
+        // Coverage and precision each own a share of the bar, so the meter answers BOTH terms
+        // everywhere: a machine with full coverage and no confidence yet reads half, and every
+        // point of confidence it earns after that shows up immediately. Still floored by
+        // confShown alone so the bar reads exactly full at the lock, and still unable to fill
+        // without a real lock (coverage tops out at CoverageShare).
+        double earned = CoverageShare * coverage + (1 - CoverageShare) * confShown;
+
+        double display = Math.Max(warmup, Math.Max(earned, confShown));
 
         // A fresh repaste genuinely cannot finish calibrating before the paste cures, so
         // never let the data ramp claim more than the (already gradual) cure ramp allows.
@@ -241,6 +257,33 @@ public static class BaselineBuilder
             display = Math.Min(display, Math.Max(cure, warmup));
 
         return Math.Clamp(display, 0, 1);
+    }
+
+    /// <summary>Fit this machine's rise-vs-power response from the cells it has learned so far,
+    /// for the readiness gate to judge session means at a common operating point.
+    ///
+    /// <para>Deliberately the SAME additive model scoring uses (<see cref="ThermalResponse"/>),
+    /// because the readiness gate has exactly the scoring problem: two sessions of one bucket
+    /// drawn at different watts are not directly comparable, and the correction that makes them
+    /// comparable must not scale the rise's constant offset. Multiplying a rise by a watt ratio
+    /// does scale it, and inside one load bucket that manufactures session-to-session scatter
+    /// rather than removing it, which is what left a CPU stuck short of a lock.</para>
+    ///
+    /// <para>Pooled across ambient bands on purpose: only the SLOPE is used here (the transport
+    /// is within a single bucket+band cell, so the band's own offset cancels), and the slope is a
+    /// property of the cooler, so every band's cells are evidence for it. Weighted by evidence
+    /// mass (√minutes) so two long idle cells can't outvote the loaded ones.</para></summary>
+    public static ThermalResponse? FitResponse(IReadOnlyList<BucketStat> statsInWindow)
+    {
+        var points = statsInWindow
+            .Where(s => s.Band >= 0 && s.DeltaAvg is not null
+                        && s.PowerAvg is { } p && p >= ScoringEngine.MinMeaningfulPowerW)
+            .Select(s => new ThermalResponse.Point(
+                s.DeltaAvg!.Value, s.PowerAvg!.Value, s.CoPowerAvg, Math.Sqrt(Math.Max(1, s.Minutes))))
+            .ToList();
+
+        ThermalResponse? fit = ThermalResponse.Fit(points);
+        return fit is not null && fit.ResidualRmseC <= ScoringEngine.MaxResponseRmseC ? fit : null;
     }
 
     private readonly record struct CellConfidence(LoadBucket Bucket, int Band, int Sessions, double? SeC, double Score);
@@ -328,8 +371,18 @@ public static class BaselineBuilder
         string spread = binding.SeC is { } se
             ? $" (±{se:0.#} °C now, aiming for ±{TargetBaselineSeC:0.#} °C)"
             : "";
-        return $"{cell} readings still vary from session to session{spread}; a few more runs of this load will tighten it";
+        return $"{cell} readings still vary from session to session{spread}; a few more runs of this load will tighten it.{WorkoutHint(binding.Bucket)}";
     }
+
+    /// <summary>Name the tool that actually fills the binding cell. Users reach for the
+    /// fingerprint test when they see "still calibrating" (it is the button on the dashboard),
+    /// but the fingerprint pins the machine at FULL load and is excluded from learning besides,
+    /// so running it never moves a Medium or Heavy constraint. Reported by a user who ran it
+    /// twice and watched the meter not budge.</summary>
+    private static string WorkoutHint(LoadBucket bucket) =>
+        bucket is LoadBucket.Medium or LoadBucket.Heavy
+            ? " The calibration workout on the Fingerprint page holds exactly this load, if you'd rather not wait for it to come up on its own."
+            : "";
 
     private static string BandLabel(int band) =>
         band is >= 0 and <= 3 ? ((AmbientBand)band).Label() : "this weather";

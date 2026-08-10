@@ -809,9 +809,41 @@ public sealed class HardwareSensorSource : ISensorSource
         return -1;
     }
 
+    /// <summary>The module temperature reported by a DDR4/DDR5 DIMM's own on-board thermal
+    /// sensor, hottest module wins, or null if this machine has none.
+    ///
+    /// <para>Pure and separately tested because the obvious implementation is wrong in a way that
+    /// would be believed. An SPD node exposes SIX sensors of type Temperature, and only one of
+    /// them is a temperature: alongside "DIMM #0" sit the module's configured limits and its
+    /// sensor resolution. Taking the max Temperature sensor on the node (or the first one) would
+    /// report the CRITICAL LIMIT, so a healthy laptop would read a steady 85 °C forever. So the
+    /// live reading is taken by name (LHM names it "DIMM #n") and then range-checked.</para>
+    ///
+    /// <para>Only modules that expose an SPD hub carry this sensor at all, which is why it was
+    /// thought unavailable: it is absent on the maintainer's own machine and present on the
+    /// Legion that reported it. Absent stays absent, never a fabricated 0.</para></summary>
+    public static double? SelectDimmTemperature(IReadOnlyList<(string Name, double Value)> temperatureSensors)
+    {
+        double? hottest = null;
+        foreach ((string name, double value) in temperatureSensors)
+        {
+            // "DIMM #0", "DIMM #2". Everything else on the node is a limit or a resolution.
+            if (!name.StartsWith("DIMM", StringComparison.OrdinalIgnoreCase))
+                continue;
+            // A powered module sits well above freezing and below its own 85 °C shutdown limit;
+            // outside that it's a misparsed or stale SPD word, not a reading.
+            if (value is not (> 1 and < 110))
+                continue;
+            if (hottest is null || value > hottest)
+                hottest = value;
+        }
+        return hottest is { } h ? Math.Round(h, 1) : null;
+    }
+
     /// <summary>System memory as a display-only usage card (no thermal paste, so it is never
     /// scored: it flows through the same non-paste path Battery/SSD use). The card shows usage
-    /// percent as its load bar and "used / total GB" as its meta line.
+    /// percent as its load bar and "used / total GB" as its meta line, plus the DIMM temperature
+    /// on machines whose modules expose one.
     ///
     /// <para>Two sources, so the card is never simply missing. LHM's memory node is preferred
     /// when one of its nodes measurably IS physical RAM; otherwise the reading comes straight
@@ -823,6 +855,12 @@ public sealed class HardwareSensorSource : ISensorSource
         SystemMemoryReading? os = SystemMemoryReader.TryRead();
 
         var candidates = new List<MemoryNodeCandidate>(nodes.Count);
+        // The usage figures and the module temperature come from DIFFERENT nodes. LHM reports the
+        // OS-level pools ("Total Memory", "Virtual Memory") and each physical module's SPD hub as
+        // separate HardwareType.Memory nodes: the pools carry usage and no temperature, the SPD
+        // nodes carry a temperature and no usage. So the temperature is gathered across all of
+        // them rather than read off whichever node won the usage pick, which would find nothing.
+        var dimmTemps = new List<(string Name, double Value)>();
         foreach (IHardware hw in nodes)
         {
             double? used = Data(Find(hw, SensorType.Data, "Memory Used"));
@@ -831,6 +869,10 @@ public sealed class HardwareSensorSource : ISensorSource
                 hw.Name, used,
                 used is { } u && avail is { } a ? Math.Round(u + a, 1) : null,
                 Percent(Find(hw, SensorType.Load, "Memory"))));
+
+            foreach (ISensor s in hw.Sensors)
+                if (s.SensorType == SensorType.Temperature && s.Value is { } v)
+                    dimmTemps.Add((s.Name, v));
         }
 
         int pick = SelectPhysicalMemoryNode(candidates, os?.TotalGb);
@@ -844,7 +886,7 @@ public sealed class HardwareSensorSource : ISensorSource
 
         return new ComponentReading(
             ComponentKind.Ram, "System Memory",
-            TemperatureC: null, HotspotC: null,
+            TemperatureC: SelectDimmTemperature(dimmTemps), HotspotC: null,
             LoadPercent: load,
             FanRpm: null, PowerW: null, WearPercent: null, IsThrottling: false, ThrottleLimitC: null,
             MemUsedGb: usedGb, MemTotalGb: totalGb);
