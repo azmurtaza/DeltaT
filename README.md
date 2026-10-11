@@ -133,3 +133,13 @@ Two additional terms apply, permitted by section 7 of that license and set out i
 **Only builds from [this repository's releases](https://github.com/azmurtaza/DeltaT/releases) are DeltaT.** The app updates itself from here and nowhere else, and it verifies that what it downloaded is byte for byte the file published here before it runs it. A copy obtained from anywhere else is somebody else's software, whatever it calls itself.
 
 Third-party components and the services DeltaT talks to are listed in [NOTICE](NOTICE).
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=azmurtaza%2Fdeltat&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=azmurtaza/deltat&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=azmurtaza/deltat&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=azmurtaza/deltat&type=date&legend=top-left" />
+ </picture>
+</a>
